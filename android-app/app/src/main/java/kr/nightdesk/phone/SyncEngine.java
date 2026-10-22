@@ -19,11 +19,13 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.HashSet;
+import java.util.ArrayList;
 import java.util.Locale;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
 
 final class SyncEngine {
+    private static final int MAX_SAVED_JOBS = 1000;
     static JSONArray cachedJobs(Context c) {
         try (InputStream input = new AtomicFile(new File(c.getFilesDir(), "jobs.json")).openRead()) {
             byte[] bytes = input.readAllBytes(); if (bytes.length > 2 * 1024 * 1024) return new JSONArray();
@@ -35,6 +37,34 @@ final class SyncEngine {
         AtomicFile file = new AtomicFile(new File(c.getFilesDir(), "jobs.json")); FileOutputStream output = null;
         try { output = file.startWrite(); output.write(jobs.toString().getBytes(StandardCharsets.UTF_8)); file.finishWrite(output); }
         catch (Exception error) { if (output != null) file.failWrite(output); throw error; }
+    }
+    static JSONArray cachedSaved(Context c) {
+        try (InputStream input = new AtomicFile(new File(c.getFilesDir(), "saved-jobs.json")).openRead()) {
+            byte[] bytes = input.readAllBytes(); if (bytes.length > 8 * 1024 * 1024) return new JSONArray();
+            JSONArray saved = new JSONObject(new String(bytes, StandardCharsets.UTF_8)).optJSONArray("jobs");
+            return saved == null ? new JSONArray() : saved;
+        } catch (Exception ignored) { return new JSONArray(); }
+    }
+    private static void cacheSaved(Context c, JSONArray jobs) throws Exception {
+        AtomicFile file = new AtomicFile(new File(c.getFilesDir(), "saved-jobs.json")); FileOutputStream output = null;
+        try { output = file.startWrite(); output.write(new JSONObject().put("jobs", jobs).toString().getBytes(StandardCharsets.UTF_8)); file.finishWrite(output); }
+        catch (Exception error) { if (output != null) file.failWrite(output); throw error; }
+    }
+    private static JSONArray rememberSaved(JSONArray history, JSONObject job, JSONArray artifacts) throws Exception {
+        JSONObject request = job.optJSONObject("request");
+        String title = request == null ? "작업" : request.optString("overnight".equals(job.optString("kind")) ? "subject" : "query", "작업");
+        JSONObject record = new JSONObject().put("id", job.getString("id")).put("title", title)
+            .put("createdAt", job.optString("createdAt")).put("phoneSavedAt", job.optString("phoneSavedAt"))
+            .put("artifacts", new JSONArray(artifacts.toString()));
+        ArrayList<JSONObject> entries = new ArrayList<>(); entries.add(record);
+        for (int i = 0; i < history.length(); i++) {
+            JSONObject previous = history.optJSONObject(i);
+            if (previous != null && !job.getString("id").equals(previous.optString("id"))) entries.add(previous);
+        }
+        entries.sort((a, b) -> b.optString("createdAt").compareTo(a.optString("createdAt")));
+        JSONArray saved = new JSONArray();
+        for (int i = 0; i < Math.min(entries.size(), MAX_SAVED_JOBS); i++) saved.put(entries.get(i));
+        return saved;
     }
     static boolean verified(File file, JSONObject artifact) throws Exception {
         if (!file.isFile() || file.length() != artifact.getLong("bytes")) return false;
@@ -128,6 +158,7 @@ final class SyncEngine {
         JSONObject listing = Api.request(session, "/api/jobs", null); JSONArray jobs = listing.optJSONArray("jobs");
         if (jobs == null) throw new IOException("작업 목록 응답이 올바르지 않습니다.");
         int received = 0; String firstError = null; String exportError = null;
+        JSONArray savedHistory = cachedSaved(c); boolean historyChanged = false;
         for (int index = 0; index < jobs.length(); index++) {
             if (stopped.getAsBoolean()) throw new InterruptedIOException("동기화가 중단되었습니다.");
             JSONObject job = jobs.getJSONObject(index); JSONArray artifacts;
@@ -157,10 +188,12 @@ final class SyncEngine {
                 JSONObject acknowledgement = Api.request(session, "/api/phone/jobs/" + jobId + "/received", new JSONObject().put("artifacts", receipt).put("savedAt", savedAt));
                 job.put("phoneSavedAt", acknowledgement.optString("phoneSavedAt", savedAt));
                 if (!singleFile) job.put("state", acknowledgement.optBoolean("onTime") ? "download_ready" : "deadline_exceeded");
+                savedHistory = rememberSaved(savedHistory, job, artifacts); historyChanged = true;
                 if (newlySaved) received += artifacts.length();
             } catch (Exception error) { if (firstError == null) firstError = error.getMessage(); }
         }
         cache(c, listing);
+        if (historyChanged) cacheSaved(c, savedHistory);
         SharedPreferences.Editor update = c.getSharedPreferences("MainActivity", 0).edit().putString("last_sync", Instant.now().toString()).putString("last_error", firstError == null ? "" : firstError).putString("export_error", exportError == null ? "" : exportError);
         update.apply();
         if (received > 0) Notifications.received(c, received);
