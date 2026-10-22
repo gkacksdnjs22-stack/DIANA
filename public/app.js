@@ -2,7 +2,11 @@ let token = sessionStorage.getItem('remote-assistant-token') || '';
 let refreshing = false;
 const $ = id => document.getElementById(id);
 $('token').value = token;
-const labels = { scheduled:'예약됨', processing:'PC에서 작업 중', awaiting_phone:'갤럭시 저장 대기', waiting_pc:'PC 연결 대기', searching:'문서 검색 중', needs_selection:'파일 선택', ready_to_send:'작업 대기', sending:'수정·전달 처리 중', download_ready:'기한 내 갤럭시 저장 확인', needs_attention:'확인이 필요합니다', deadline_exceeded:'기한 내 저장하지 못했습니다', dry_run:'연습 완료 · 메일 미발송', submitted:'메일 서버 접수', send_unknown:'발송 결과 확인 필요', failed:'작업 실패' };
+const labels = { scheduled:'예약됨', processing:'PC에서 작업 중', awaiting_phone:'갤럭시 저장 대기', waiting_pc:'PC 연결 대기', searching:'문서 검색 중', needs_selection:'파일 선택', ready_to_send:'작업 대기', sending:'수정·전달 처리 중', download_ready:'다운로드 준비 완료', needs_attention:'확인이 필요합니다', deadline_exceeded:'기한 내 저장하지 못했습니다', dry_run:'연습 완료 · 메일 미발송', submitted:'메일 서버 접수', send_unknown:'발송 결과 확인 필요', failed:'작업 실패' };
+function stateLabel(job) {
+  if (job.state === 'download_ready' && job.kind === 'overnight') return job.phoneSavedAt ? '기한 내 갤럭시 저장 확인' : '갤럭시 저장 확인 대기';
+  return labels[job.state] || job.state;
+}
 function node(tag, value, cls) { const el = document.createElement(tag); if (value !== undefined) el.textContent = value; if (cls) el.className = cls; return el; }
 function notice(text, error=false) { $('notice').textContent = text; $('notice').className = error ? 'error' : ''; }
 async function api(path, body) {
@@ -34,8 +38,8 @@ function saveArtifact(job,artifact) {
 }
 function renderJob(job) {
   const card = node('article',undefined,'job'); const top=node('div',undefined,'job-top');
-  top.append(node('span',labels[job.state] || job.state,'badge'),node('span',date(job.createdAt),'time'));
-  card.append(top,node('h3',job.kind==='overnight'?(job.request.subject||'밤사이 보고서 작업'):job.request.query),node('p',job.kind==='overnight'?`원본 · ${job.source?.filename||'확인 불가'} · 완료 기한 ${date(job.request.deadlineAt)}`:(job.request.delivery==='download'?'받는 곳 · 휴대폰 다운로드':`받는 곳 · ${job.request.recipient}`),'recipient'));
+  top.append(node('span',stateLabel(job),'badge'),node('span',date(job.createdAt),'time'));
+  card.append(top,node('h3',job.kind==='overnight'?(job.request.subject||'밤사이 보고서 작업'):job.request.query),node('p',job.kind==='overnight'?`원본 · ${job.source?.filename||'확인 불가'} · 완료 기한 ${date(job.request.deadlineAt)}`:(job.request.delivery==='download'?'받는 방법 · 직접 다운로드':`받는 곳 · ${job.request.recipient}`),'recipient'));
   if(job.kind==='overnight') {
     card.append(node('p',`진행 · ${job.stage||job.state}${job.round?` · 검토 ${job.round}회`:''}`,'mode'));
     if(job.phoneSavedAt)card.append(node('p',`갤럭시에 저장 확인 · ${date(job.phoneSavedAt)}`,'saved'));
@@ -54,7 +58,7 @@ function renderJob(job) {
     select.addEventListener('click',async()=>{ select.disabled=true; try {await api(`/api/jobs/${encodeURIComponent(job.id)}/selection`,{candidateId:file.id,approve:true}); notice('선택한 파일의 발송을 요청했습니다.'); await refresh();}catch(e){notice(e.message,true);select.disabled=false;} });
     c.append(select); card.append(c);
   }
-  if(job.artifact){const download=node('button','파일을 휴대폰에 저장','download');download.addEventListener('click',async()=>{download.disabled=true;try{const response=await fetch(`/api/jobs/${encodeURIComponent(job.id)}/file`,{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(30000)});if(!response.ok){const data=await response.json();throw new Error(data.error);}const url=URL.createObjectURL(await response.blob());const a=node('a');a.href=url;a.download=job.artifact.filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);notice('다운로드를 시작했습니다. 휴대폰의 다운로드 또는 파일 앱에서 확인하세요.');}catch(e){notice(e.message,true);}finally{download.disabled=false;}});card.append(download);}
+  if(job.artifact){const download=node('button','이 기기에 파일 다운로드','download');download.addEventListener('click',async()=>{download.disabled=true;try{const response=await fetch(`/api/jobs/${encodeURIComponent(job.id)}/file`,{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(30000)});if(!response.ok){const data=await response.json();throw new Error(data.error);}const url=URL.createObjectURL(await response.blob());const a=node('a');a.href=url;a.download=job.artifact.filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);notice('다운로드를 시작했습니다. 이 기기의 다운로드 폴더에서 확인하세요.');}catch(e){notice(e.message,true);}finally{download.disabled=false;}});card.append(download);}
   const events=node('ul',undefined,'event-list'); for(const item of job.events.slice(-5)) events.append(node('li',item.text)); card.append(events); return card;
 }
 async function refresh() {
