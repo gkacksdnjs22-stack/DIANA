@@ -29,9 +29,8 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android SDK command-line tools
-        uses: android-actions/setup-android@v3
-
+      # GitHub's Ubuntu runner includes Android SDK command-line tools.
+      # Avoid setup-android@v3, which attempts to install the removed 'tools' SDK package.
       - name: Install Android SDK 35
         run: sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0'
 
