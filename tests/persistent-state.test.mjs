@@ -9,6 +9,35 @@ const PHONE_COLUMNS = ['id','token_hash','name','created_at','last_seen_at','fcm
 
 class FakeSupabasePool {
   jobs = new Map(); settings = new Map(); phones = new Map(); nextSeq = 0; failWrites = false;
+  writeCount = 0; failAtWrite = null;
+  async connect() {
+    let snapshot = null;
+    return {
+      query: async (sql, args = []) => {
+        if (sql === 'BEGIN') {
+          snapshot = {
+            jobs: new Map(this.jobs), settings: new Map(this.settings), phones: new Map(this.phones), nextSeq: this.nextSeq,
+          };
+          return { rows: [] };
+        }
+        if (sql === 'COMMIT') { snapshot = null; return { rows: [] }; }
+        if (sql === 'ROLLBACK') {
+          if (snapshot) {
+            Object.assign(this, snapshot);
+            snapshot = null;
+          }
+          return { rows: [] };
+        }
+        this.writeCount++;
+        if (this.failAtWrite === this.writeCount) {
+          this.failAtWrite = null;
+          throw new Error('Partial transaction failure');
+        }
+        return this.query(sql, args);
+      },
+      release() {},
+    };
+  }
   async query(sql, args = []) {
     const query = sql.replace(/\s+/g,' ').trim();
     if (/^SELECT id,data FROM diana\.jobs/.test(query)) return { rows: [...this.jobs].sort((a,b)=>a[1].seq-b[1].seq).map(([id,j])=>({id,data:j.data})) };
@@ -57,14 +86,80 @@ test('a job, settings, and phone pairing are restored after server restart', asy
   third.close();
 });
 
-test('a failed remote write is never acknowledged by flush or bypassed', async () => {
+test('a failed write blocks access until a later request replays it successfully', async () => {
   const pool = new FakeSupabasePool();
-  const db = await createPersistentState({pool});
+  const db = await createPersistentState({pool, retryDelays: []});
   pool.failWrites = true;
   db.prepare('INSERT INTO jobs(id,data) VALUES(?,?)').run('job-2','{}');
   await assert.rejects(db.flush(),/Supabase temporarily unavailable/);
   assert.throws(()=>db.prepare('SELECT data FROM jobs').all(),/Supabase 저장이 실패/);
+  pool.failWrites = false;
+  await db.recover();
+  assert.equal(db.prepare('SELECT data FROM jobs WHERE id=?').get('job-2').data,'{}');
+  assert.equal(pool.jobs.get('job-2').data,'{}');
   db.close();
+});
+
+test('pairing insert and one-time code removal commit atomically after a mid-batch failure', async () => {
+  const pool = new FakeSupabasePool();
+  const db = await createPersistentState({pool, retryDelays: []});
+  db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run('phonePairCode','{"hash":"code"}');
+  await db.flush();
+
+  db.prepare('INSERT INTO phone_devices(id,token_hash,name,created_at,last_seen_at,fcm_token) VALUES(?,?,?,?,?,?)')
+    .run('phone-2','new-hash','Galaxy','2026-10-22',null,null);
+  db.prepare('DELETE FROM settings WHERE key=?').run('phonePairCode');
+  pool.failAtWrite = pool.writeCount + 2;
+
+  await assert.rejects(db.flush(),/Partial transaction failure/);
+  assert.equal(pool.phones.has('phone-2'),false,'a failed transaction must not partially pair a phone');
+  assert.equal(pool.settings.has('phonePairCode'),true,'the code must remain if the pairing insert is rolled back');
+
+  await db.recover();
+  assert.equal(pool.phones.has('phone-2'),true);
+  assert.equal(pool.settings.has('phonePairCode'),false);
+  db.close();
+});
+
+test('transient database failures are retried before acknowledging success', async () => {
+  const pool = new FakeSupabasePool();
+  const db = await createPersistentState({pool, retryDelays: [0]});
+  db.prepare('INSERT INTO jobs(id,data) VALUES(?,?)').run('job-3','{"ok":true}');
+  pool.failAtWrite = pool.writeCount + 1;
+  await db.flush();
+  assert.equal(pool.jobs.get('job-3').data,'{"ok":true}');
+  db.close();
+});
+
+test('HTTP 503 after an outage is followed by automatic recovery on the next API request', async () => {
+  const pool = new FakeSupabasePool();
+  const db = await createPersistentState({pool, retryDelays: []});
+  const tokens = {userToken:'u'.repeat(40),agentToken:'a'.repeat(40),gatewayToken:'g'.repeat(40)};
+  const server = createControlServer({...tokens,db});
+  server.listen(0,'127.0.0.1');
+  await once(server,'listening');
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const headers = { Authorization: `Bearer ${tokens.userToken}` };
+  const jobId = randomUUID();
+  try {
+    pool.failWrites = true;
+    const createResponse = await fetch(base+'/api/jobs', {
+      method:'POST', headers:{...headers,'Content-Type':'application/json'},
+      body:JSON.stringify({requestId:jobId,query:'test document',delivery:'download'}),
+    });
+    assert.equal(createResponse.status,503);
+    assert.equal(pool.jobs.has(jobId),false,'failed writes must not be acknowledged as durable');
+
+    pool.failWrites = false;
+    const listResponse = await fetch(base+'/api/jobs',{headers});
+    assert.equal(listResponse.status,200);
+    const {jobs} = await listResponse.json();
+    assert.equal(jobs.some(job=>job.id===jobId),true);
+    assert.equal(pool.jobs.has(jobId),true,'a subsequent request must replay the failed batch');
+  } finally {
+    server.closeAllConnections();
+    await new Promise(resolve=>server.close(resolve));
+  }
 });
 
 test('phone pairing and a verified document remain usable after server restart', async () => {
