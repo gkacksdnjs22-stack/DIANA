@@ -19,10 +19,13 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.HashSet;
+import java.util.ArrayList;
+import java.util.Locale;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
 
 final class SyncEngine {
+    private static final int MAX_SAVED_JOBS = 1000;
     static JSONArray cachedJobs(Context c) {
         try (InputStream input = new AtomicFile(new File(c.getFilesDir(), "jobs.json")).openRead()) {
             byte[] bytes = input.readAllBytes(); if (bytes.length > 2 * 1024 * 1024) return new JSONArray();
@@ -35,6 +38,34 @@ final class SyncEngine {
         try { output = file.startWrite(); output.write(jobs.toString().getBytes(StandardCharsets.UTF_8)); file.finishWrite(output); }
         catch (Exception error) { if (output != null) file.failWrite(output); throw error; }
     }
+    static JSONArray cachedSaved(Context c) {
+        try (InputStream input = new AtomicFile(new File(c.getFilesDir(), "saved-jobs.json")).openRead()) {
+            byte[] bytes = input.readAllBytes(); if (bytes.length > 8 * 1024 * 1024) return new JSONArray();
+            JSONArray saved = new JSONObject(new String(bytes, StandardCharsets.UTF_8)).optJSONArray("jobs");
+            return saved == null ? new JSONArray() : saved;
+        } catch (Exception ignored) { return new JSONArray(); }
+    }
+    private static void cacheSaved(Context c, JSONArray jobs) throws Exception {
+        AtomicFile file = new AtomicFile(new File(c.getFilesDir(), "saved-jobs.json")); FileOutputStream output = null;
+        try { output = file.startWrite(); output.write(new JSONObject().put("jobs", jobs).toString().getBytes(StandardCharsets.UTF_8)); file.finishWrite(output); }
+        catch (Exception error) { if (output != null) file.failWrite(output); throw error; }
+    }
+    private static JSONArray rememberSaved(JSONArray history, JSONObject job, JSONArray artifacts) throws Exception {
+        JSONObject request = job.optJSONObject("request");
+        String title = request == null ? "작업" : request.optString("overnight".equals(job.optString("kind")) ? "subject" : "query", "작업");
+        JSONObject record = new JSONObject().put("id", job.getString("id")).put("title", title)
+            .put("createdAt", job.optString("createdAt")).put("phoneSavedAt", job.optString("phoneSavedAt"))
+            .put("artifacts", new JSONArray(artifacts.toString()));
+        ArrayList<JSONObject> entries = new ArrayList<>(); entries.add(record);
+        for (int i = 0; i < history.length(); i++) {
+            JSONObject previous = history.optJSONObject(i);
+            if (previous != null && !job.getString("id").equals(previous.optString("id"))) entries.add(previous);
+        }
+        entries.sort((a, b) -> b.optString("createdAt").compareTo(a.optString("createdAt")));
+        JSONArray saved = new JSONArray();
+        for (int i = 0; i < Math.min(entries.size(), MAX_SAVED_JOBS); i++) saved.put(entries.get(i));
+        return saved;
+    }
     static boolean verified(File file, JSONObject artifact) throws Exception {
         if (!file.isFile() || file.length() != artifact.getLong("bytes")) return false;
         try (InputStream input = new FileInputStream(file)) { return FileSafety.digest(input).equalsIgnoreCase(artifact.getString("sha256")); }
@@ -44,10 +75,39 @@ final class SyncEngine {
             artifact.getLong("bytes") < 0 || artifact.getLong("bytes") > FileSafety.MAX_BYTES) throw new IOException("결과 파일 명세가 올바르지 않습니다.");
         FileSafety.validateName(artifact.getString("filename"));
     }
-    private static void download(JSONObject session, String jobId, JSONObject artifact, File target, BooleanSupplier stopped) throws Exception {
+    private static String mimeOf(String filename) {
+        String lower = filename.toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".pdf")) return "application/pdf";
+        if (lower.endsWith(".txt") || lower.endsWith(".py") || lower.endsWith(".js") || lower.endsWith(".ts") || lower.endsWith(".csv")) return "text/plain";
+        if (lower.endsWith(".md")) return "text/markdown";
+        if (lower.endsWith(".json")) return "application/json";
+        if (lower.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        if (lower.endsWith(".pptx")) return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+        if (lower.endsWith(".hwpx")) return "application/vnd.hancom.hwpx";
+        return "application/octet-stream";
+    }
+    private static JSONArray availableArtifacts(JSONObject job) throws Exception {
+        JSONArray artifacts = job.optJSONArray("artifacts");
+        if (artifacts != null && artifacts.length() > 0) return artifacts;
+        JSONObject single = job.optJSONObject("artifact");
+        JSONObject request = job.optJSONObject("request");
+        String state = job.optString("state");
+        if ("overnight".equals(job.optString("kind")) || single == null || request == null ||
+            !("download".equals(request.optString("delivery")) || "both".equals(request.optString("delivery"))) ||
+            !("download_ready".equals(state) || "dry_run".equals(state) || "submitted".equals(state) || "send_unknown".equals(state))) return null;
+        String filename = single.getString("filename");
+        String digest = single.getString("sha256");
+        JSONObject normalized = new JSONObject().put("id", digest).put("sha256", digest)
+            .put("bytes", single.getLong("bytes")).put("filename", filename).put("mime", mimeOf(filename));
+        artifacts = new JSONArray().put(normalized);
+        job.put("artifacts", artifacts); // The recent-jobs screen can open the verified local file.
+        return artifacts;
+    }
+    private static void download(JSONObject session, String jobId, JSONObject artifact, File target, boolean singleFile, BooleanSupplier stopped) throws Exception {
         if (verified(target, artifact)) return;
         File directory = target.getParentFile(); if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("앱 저장 폴더를 만들지 못했습니다.");
-        HttpURLConnection connection = Api.connect(session.getString("baseUrl"), "/api/jobs/" + jobId + "/artifacts/" + artifact.getString("id"), session.getString("phoneToken"), "GET");
+        String route = "/api/jobs/" + jobId + (singleFile ? "/file" : "/artifacts/" + artifact.getString("id"));
+        HttpURLConnection connection = Api.connect(session.getString("baseUrl"), route, session.getString("phoneToken"), "GET");
         AtomicFile file = new AtomicFile(target); FileOutputStream output = null;
         try {
             int status = connection.getResponseCode(); if (status < 200 || status >= 300) throw new Api.ApiException(status);
@@ -98,10 +158,14 @@ final class SyncEngine {
         JSONObject listing = Api.request(session, "/api/jobs", null); JSONArray jobs = listing.optJSONArray("jobs");
         if (jobs == null) throw new IOException("작업 목록 응답이 올바르지 않습니다.");
         int received = 0; String firstError = null; String exportError = null;
+        JSONArray savedHistory = cachedSaved(c); boolean historyChanged = false;
         for (int index = 0; index < jobs.length(); index++) {
             if (stopped.getAsBoolean()) throw new InterruptedIOException("동기화가 중단되었습니다.");
-            JSONObject job = jobs.getJSONObject(index); JSONArray artifacts = job.optJSONArray("artifacts"); if (artifacts == null || artifacts.length() == 0) continue;
+            JSONObject job = jobs.getJSONObject(index); JSONArray artifacts;
             try {
+                artifacts = availableArtifacts(job);
+                if (artifacts == null || artifacts.length() == 0) continue;
+                boolean singleFile = !"overnight".equals(job.optString("kind"));
                 String jobId = job.getString("id"); if (!FileSafety.UUID.matcher(jobId).matches() || artifacts.length() > 30) throw new IOException("작업 파일 목록을 확인해 주세요.");
                 Set<String> ids = new HashSet<>(); JSONArray receipt = new JSONArray();
                 boolean newlySaved = false;
@@ -110,7 +174,7 @@ final class SyncEngine {
                     if (!ids.add(artifact.getString("id"))) throw new IOException("중복된 결과 파일 ID입니다.");
                     File target = FileSafety.artifact(c.getFilesDir(), jobId, artifact.getString("id"), artifact.getString("filename"));
                     if (!verified(target, artifact)) newlySaved = true;
-                    download(session, jobId, artifact, target, stopped);
+                    download(session, jobId, artifact, target, singleFile, stopped);
                     receipt.put(new JSONObject().put("id", artifact.getString("id")).put("sha256", artifact.getString("sha256")));
                     try { exportCopy(c, jobId, artifact, target); } catch (Exception error) { exportError = error.getMessage(); }
                 }
@@ -123,11 +187,13 @@ final class SyncEngine {
                 String savedAt = Instant.now().toString();
                 JSONObject acknowledgement = Api.request(session, "/api/phone/jobs/" + jobId + "/received", new JSONObject().put("artifacts", receipt).put("savedAt", savedAt));
                 job.put("phoneSavedAt", acknowledgement.optString("phoneSavedAt", savedAt));
-                job.put("state", acknowledgement.optBoolean("onTime") ? "download_ready" : "deadline_exceeded");
+                if (!singleFile) job.put("state", acknowledgement.optBoolean("onTime") ? "download_ready" : "deadline_exceeded");
+                savedHistory = rememberSaved(savedHistory, job, artifacts); historyChanged = true;
                 if (newlySaved) received += artifacts.length();
             } catch (Exception error) { if (firstError == null) firstError = error.getMessage(); }
         }
         cache(c, listing);
+        if (historyChanged) cacheSaved(c, savedHistory);
         SharedPreferences.Editor update = c.getSharedPreferences("MainActivity", 0).edit().putString("last_sync", Instant.now().toString()).putString("last_error", firstError == null ? "" : firstError).putString("export_error", exportError == null ? "" : exportError);
         update.apply();
         if (received > 0) Notifications.received(c, received);

@@ -40,6 +40,7 @@ public final class MainActivity extends Activity {
     private CheckBox autoReceive;
     private SecureStore secureStore;
     private volatile boolean busy;
+    private int visibleSaved = 15;
 
     @Override protected void onCreate(@Nullable Bundle state) {
         super.onCreate(state);
@@ -74,7 +75,7 @@ public final class MainActivity extends Activity {
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(dp(22), dp(20), dp(22), dp(28)); root.setBackgroundColor(Color.rgb(247,248,252));
         ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true); scroll.addView(root); setContentView(scroll);
         root.addView(label("DIANA", 29, Color.rgb(23,38,60), true));
-        root.addView(label("PC에서 완성된 보고서와 발표자료를 갤럭시에 안전하게 받습니다.", 15, Color.rgb(75,87,105), false));
+        root.addView(label("PC에서 찾은 문서, 보고서와 발표자료를 갤럭시에 안전하게 받습니다.", 15, Color.rgb(75,87,105), false));
         status = label("연결 상태를 확인하는 중…", 14, Color.rgb(52,89,230), true); root.addView(status);
 
         try {
@@ -106,25 +107,47 @@ public final class MainActivity extends Activity {
             getPreferences(0).edit().putBoolean("auto_receive", checked).apply(); SyncScheduler.configure(this);
             showStatus(checked ? "자동 확인을 켰습니다. 전원 절약 설정에 따라 늦어질 수 있습니다." : "백그라운드 자동 확인을 껐습니다.", false);
         });
-        root.addView(label("예약 결과는 앱 내부 저장소에 내려받고 해시를 확인합니다. 폴더를 고르면 해당 폴더에도 복사합니다. 완료 표시는 휴대폰 저장 확인 후 갱신됩니다.", 13, Color.rgb(102,112,130), false));
+        root.addView(label("검색 문서와 예약 결과를 앱 내부 저장소에 자동으로 내려받고 해시를 확인합니다. 폴더를 고르면 해당 폴더에도 복사합니다. 완료 표시는 실제 휴대폰 저장 확인 후 갱신됩니다.", 13, Color.rgb(102,112,130), false));
         String copyError=getPreferences(0).getString("export_error","");
         if(!copyError.isEmpty())root.addView(label("선택한 폴더 복사에 실패했습니다. 앱 내부 보관함에는 저장되어 있습니다.  "+copyError,13,Color.rgb(178,53,53),false));
         syncButton = button("지금 결과 확인"); syncButton.setOnClickListener(v -> syncNow());
         button("연결 해제").setOnClickListener(v -> { secureStore.clear(); SyncScheduler.configure(this); draw(); });
         gap(12); root.addView(label("최근 작업", 20, Color.rgb(23,38,60), true));
         JSONArray jobs = SyncEngine.cachedJobs(this);
-        if (jobs.length() == 0) root.addView(label("작업 결과가 아직 없습니다. PC 제어 화면에서 파일과 완료 시각을 정해 예약하세요.", 14, Color.rgb(75,87,105), false));
+        if (jobs.length() == 0) root.addView(label("작업 결과가 아직 없습니다. PC 제어 화면에서 요청해 주세요.", 14, Color.rgb(75,87,105), false));
         for (int index=0; index<Math.min(jobs.length(),15); index++) {
             JSONObject job=jobs.optJSONObject(index); if(job==null) continue;
-            String title=job.optJSONObject("request") == null ? "작업" : job.optJSONObject("request").optString("subject","작업");
+            boolean overnight="overnight".equals(job.optString("kind"));
+            JSONObject request=job.optJSONObject("request");
+            String title=request==null ? "작업" : request.optString(overnight?"subject":"query","작업");
             String state=job.optString("state","대기");String saved=job.optString("phoneSavedAt","");
-            root.addView(label(title+"  ·  "+state+(saved.isEmpty()?"":"  ·  저장 확인됨"),15,Color.rgb(35,47,67),true));
+            String visibleState="download_ready".equals(state) ? (overnight ? (saved.isEmpty()?"갤럭시 저장 확인 대기":"갤럭시 저장 완료") : (saved.isEmpty()?"갤럭시 자동 저장 대기":"갤럭시 저장 완료")) : state;
+            root.addView(label(title+"  ·  "+visibleState+(saved.isEmpty()?"":"  ·  저장 확인됨"),15,Color.rgb(35,47,67),true));
             JSONArray artifacts=job.optJSONArray("artifacts");if(artifacts==null) continue;
             for(int item=0;item<artifacts.length();item++){
                 JSONObject artifact=artifacts.optJSONObject(item);if(artifact==null) continue;
                 String filename=artifact.optString("filename");
                 Button open=button("열기  ·  "+filename);open.setOnClickListener(v->openArtifact(job.optString("id"),artifact));
             }
+        }
+        gap(12); root.addView(label("내 저장 파일", 20, Color.rgb(23,38,60), true));
+        root.addView(label("최근 작업 목록에서 사라져도 갤럭시 앱에 보관된 문서는 이 목록에서 다시 열 수 있습니다.", 13, Color.rgb(102,112,130), false));
+        JSONArray savedJobs = SyncEngine.cachedSaved(this);
+        if (savedJobs.length() == 0) root.addView(label("아직 갤럭시에 저장한 파일이 없습니다.", 14, Color.rgb(75,87,105), false));
+        for (int index=0; index<Math.min(savedJobs.length(),visibleSaved); index++) {
+            JSONObject savedJob=savedJobs.optJSONObject(index);if(savedJob==null)continue;
+            String jobId=savedJob.optString("id");
+            root.addView(label(savedJob.optString("title","작업"),14,Color.rgb(35,47,67),true));
+            JSONArray artifacts=savedJob.optJSONArray("artifacts");if(artifacts==null)continue;
+            for (int item=0;item<artifacts.length();item++) {
+                JSONObject artifact=artifacts.optJSONObject(item);if(artifact==null)continue;
+                Button open=button("저장 파일 열기  ·  "+artifact.optString("filename"));
+                open.setOnClickListener(v->openArtifact(jobId,artifact));
+            }
+        }
+        if (savedJobs.length() > visibleSaved) {
+            Button more=button("저장된 작업 더 보기  ·  "+(savedJobs.length()-visibleSaved)+"개 남음");
+            more.setOnClickListener(v->{visibleSaved+=15;draw();});
         }
         showStatus(autoReceive.isChecked()?"연결됨 · 백그라운드에서 최대 15분 간격으로 확인합니다.":"연결됨 · 백그라운드 자동 확인이 꺼져 있습니다.",false);
         syncButton.setEnabled(!busy);
@@ -148,7 +171,7 @@ public final class MainActivity extends Activity {
         worker.execute(()->{
             try {
                 int count=SyncEngine.sync(this,()->Thread.currentThread().isInterrupted());
-                runOnUiThread(()->{busy=false;draw();showStatus(count>0?count+"개 결과를 갤럭시에 저장하고 검증했습니다.":"새 결과가 없습니다. 저장한 파일은 최근 작업에서 열 수 있습니다.",false);});
+                runOnUiThread(()->{busy=false;draw();showStatus(count>0?count+"개 결과를 갤럭시에 저장하고 검증했습니다.":"새로 저장할 파일이 없습니다. 이미 저장한 파일은 최근 작업에서 열 수 있습니다.",false);});
             }catch(Exception error){runOnUiThread(()->{busy=false;draw();showStatus(error.getMessage()==null?"동기화에 실패했습니다.":error.getMessage(),true);});}
         });
     }
