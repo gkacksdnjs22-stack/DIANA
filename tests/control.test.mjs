@@ -60,12 +60,41 @@ test('real local agent finds document content and prepares authenticated phone d
   const received=await fetch(`${f.base}/api/jobs/${job.id}/file`,{headers:{Authorization:`Bearer ${USER}`}});assert.equal(received.status,200);
   const bytes=Buffer.from(await received.arrayBuffer());assert.equal(createHash('sha256').update(bytes).digest('hex'),selected.sha256);assert.match(bytes.toString('utf8'),/最終本|최종본/);
 });
+test('paired Galaxy can fetch a single search file and acknowledge its verified hash',async t=>{
+  const f=await fixture(t);await f.request('/api/jobs',{method:'POST',body:newJob({delivery:'download',recipient:''})});
+  await runOnce({env:f.env,stateDir:join(f.dir,'agent')});let job=(await f.request('/api/jobs')).data.jobs[0];
+  await f.request(`/api/jobs/${job.id}/selection`,{method:'POST',body:{candidateId:job.candidates[0].id,approve:true}});
+  await runOnce({env:f.env,stateDir:join(f.dir,'agent')});job=(await f.request('/api/jobs')).data.jobs[0];
+  assert.equal(job.state,'download_ready');assert.equal(job.phoneSavedAt,undefined);
+  const code=(await f.request('/api/phone/pair-code',{method:'POST'})).data.code;
+  const pair=await f.request('/api/phone/pair',{method:'POST',token:'',body:{code,deviceName:'테스트 갤럭시'}});
+  assert.equal(pair.status,201);const phoneToken=pair.data.phoneToken;
+  const file=await fetch(`${f.base}/api/jobs/${job.id}/file`,{headers:{Authorization:`Bearer ${phoneToken}`}});
+  assert.equal(file.status,200);
+  const bytes=Buffer.from(await file.arrayBuffer());const digest=createHash('sha256').update(bytes).digest('hex');
+  assert.equal(digest,job.artifact.sha256);assert.equal(bytes.length,job.artifact.bytes);
+  const path=`/api/phone/jobs/${job.id}/received`;
+  const receipt={savedAt:new Date().toISOString(),artifacts:[{id:digest,sha256:digest}]};
+  assert.equal((await f.request(path,{method:'POST',body:receipt})).status,403,'a web token cannot impersonate a paired phone');
+  assert.equal((await f.request(path,{method:'POST',token:phoneToken,body:{...receipt,artifacts:[{id:digest,sha256:'0'.repeat(64)}]}})).status,409);
+  assert.equal((await f.request('/api/jobs')).data.jobs[0].phoneSavedAt,undefined,'bad digest cannot mark the job saved');
+  const saved=await f.request(path,{method:'POST',token:phoneToken,body:receipt});
+  assert.equal(saved.status,200);assert.equal(saved.data.onTime,true);
+  job=(await f.request('/api/jobs')).data.jobs[0];assert(job.phoneSavedAt);assert.equal(job.state,'download_ready');
+});
 test('both delivery retains phone file and creates exactly one dry-run email on the PC',async t=>{
   const f=await fixture(t);const body=newJob({delivery:'both'});await f.request('/api/jobs',{method:'POST',body});
   await runOnce({env:f.env,stateDir:join(f.dir,'agent')});let job=(await f.request('/api/jobs')).data.jobs[0];
   await f.request(`/api/jobs/${job.id}/selection`,{method:'POST',body:{candidateId:job.candidates[0].id,approve:true}});
   const result=await runOnce({env:f.env,stateDir:join(f.dir,'agent')});assert.equal(result.status,'dry_run');
   job=(await f.request('/api/jobs')).data.jobs[0];assert(job.artifact);assert.equal(job.state,'dry_run');
+  const code=(await f.request('/api/phone/pair-code',{method:'POST'})).data.code;
+  const paired=await f.request('/api/phone/pair',{method:'POST',token:'',body:{code,deviceName:'테스트 갤럭시'}});
+  assert.equal(paired.status,201);
+  const digest=job.artifact.sha256;
+  const acknowledged=await f.request(`/api/phone/jobs/${job.id}/received`,{method:'POST',token:paired.data.phoneToken,body:{savedAt:new Date().toISOString(),artifacts:[{id:digest,sha256:digest}]}});
+  assert.equal(acknowledged.status,200);
+  job=(await f.request('/api/jobs')).data.jobs[0];assert(job.phoneSavedAt);assert.equal(job.state,'dry_run','phone receipt must not rewrite the mail result');
   const terminal=await f.request('/api/agent/next',{token:AGENT});assert.equal(terminal.data.job,null);
 });
 
