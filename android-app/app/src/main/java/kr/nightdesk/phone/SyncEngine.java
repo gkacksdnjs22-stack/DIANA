@@ -19,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
 
@@ -44,10 +45,39 @@ final class SyncEngine {
             artifact.getLong("bytes") < 0 || artifact.getLong("bytes") > FileSafety.MAX_BYTES) throw new IOException("결과 파일 명세가 올바르지 않습니다.");
         FileSafety.validateName(artifact.getString("filename"));
     }
-    private static void download(JSONObject session, String jobId, JSONObject artifact, File target, BooleanSupplier stopped) throws Exception {
+    private static String mimeOf(String filename) {
+        String lower = filename.toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".pdf")) return "application/pdf";
+        if (lower.endsWith(".txt") || lower.endsWith(".py") || lower.endsWith(".js") || lower.endsWith(".ts") || lower.endsWith(".csv")) return "text/plain";
+        if (lower.endsWith(".md")) return "text/markdown";
+        if (lower.endsWith(".json")) return "application/json";
+        if (lower.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        if (lower.endsWith(".pptx")) return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+        if (lower.endsWith(".hwpx")) return "application/vnd.hancom.hwpx";
+        return "application/octet-stream";
+    }
+    private static JSONArray availableArtifacts(JSONObject job) throws Exception {
+        JSONArray artifacts = job.optJSONArray("artifacts");
+        if (artifacts != null && artifacts.length() > 0) return artifacts;
+        JSONObject single = job.optJSONObject("artifact");
+        JSONObject request = job.optJSONObject("request");
+        String state = job.optString("state");
+        if ("overnight".equals(job.optString("kind")) || single == null || request == null ||
+            !("download".equals(request.optString("delivery")) || "both".equals(request.optString("delivery"))) ||
+            !("download_ready".equals(state) || "dry_run".equals(state) || "submitted".equals(state) || "send_unknown".equals(state))) return null;
+        String filename = single.getString("filename");
+        String digest = single.getString("sha256");
+        JSONObject normalized = new JSONObject().put("id", digest).put("sha256", digest)
+            .put("bytes", single.getLong("bytes")).put("filename", filename).put("mime", mimeOf(filename));
+        artifacts = new JSONArray().put(normalized);
+        job.put("artifacts", artifacts); // The recent-jobs screen can open the verified local file.
+        return artifacts;
+    }
+    private static void download(JSONObject session, String jobId, JSONObject artifact, File target, boolean singleFile, BooleanSupplier stopped) throws Exception {
         if (verified(target, artifact)) return;
         File directory = target.getParentFile(); if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("앱 저장 폴더를 만들지 못했습니다.");
-        HttpURLConnection connection = Api.connect(session.getString("baseUrl"), "/api/jobs/" + jobId + "/artifacts/" + artifact.getString("id"), session.getString("phoneToken"), "GET");
+        String route = "/api/jobs/" + jobId + (singleFile ? "/file" : "/artifacts/" + artifact.getString("id"));
+        HttpURLConnection connection = Api.connect(session.getString("baseUrl"), route, session.getString("phoneToken"), "GET");
         AtomicFile file = new AtomicFile(target); FileOutputStream output = null;
         try {
             int status = connection.getResponseCode(); if (status < 200 || status >= 300) throw new Api.ApiException(status);
@@ -100,8 +130,11 @@ final class SyncEngine {
         int received = 0; String firstError = null; String exportError = null;
         for (int index = 0; index < jobs.length(); index++) {
             if (stopped.getAsBoolean()) throw new InterruptedIOException("동기화가 중단되었습니다.");
-            JSONObject job = jobs.getJSONObject(index); JSONArray artifacts = job.optJSONArray("artifacts"); if (artifacts == null || artifacts.length() == 0) continue;
+            JSONObject job = jobs.getJSONObject(index); JSONArray artifacts;
             try {
+                artifacts = availableArtifacts(job);
+                if (artifacts == null || artifacts.length() == 0) continue;
+                boolean singleFile = !"overnight".equals(job.optString("kind"));
                 String jobId = job.getString("id"); if (!FileSafety.UUID.matcher(jobId).matches() || artifacts.length() > 30) throw new IOException("작업 파일 목록을 확인해 주세요.");
                 Set<String> ids = new HashSet<>(); JSONArray receipt = new JSONArray();
                 boolean newlySaved = false;
@@ -110,7 +143,7 @@ final class SyncEngine {
                     if (!ids.add(artifact.getString("id"))) throw new IOException("중복된 결과 파일 ID입니다.");
                     File target = FileSafety.artifact(c.getFilesDir(), jobId, artifact.getString("id"), artifact.getString("filename"));
                     if (!verified(target, artifact)) newlySaved = true;
-                    download(session, jobId, artifact, target, stopped);
+                    download(session, jobId, artifact, target, singleFile, stopped);
                     receipt.put(new JSONObject().put("id", artifact.getString("id")).put("sha256", artifact.getString("sha256")));
                     try { exportCopy(c, jobId, artifact, target); } catch (Exception error) { exportError = error.getMessage(); }
                 }
@@ -123,7 +156,7 @@ final class SyncEngine {
                 String savedAt = Instant.now().toString();
                 JSONObject acknowledgement = Api.request(session, "/api/phone/jobs/" + jobId + "/received", new JSONObject().put("artifacts", receipt).put("savedAt", savedAt));
                 job.put("phoneSavedAt", acknowledgement.optString("phoneSavedAt", savedAt));
-                job.put("state", acknowledgement.optBoolean("onTime") ? "download_ready" : "deadline_exceeded");
+                if (!singleFile) job.put("state", acknowledgement.optBoolean("onTime") ? "download_ready" : "deadline_exceeded");
                 if (newlySaved) received += artifacts.length();
             } catch (Exception error) { if (firstError == null) firstError = error.getMessage(); }
         }
