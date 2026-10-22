@@ -113,12 +113,15 @@ public final class MainActivity extends Activity {
         button("연결 해제").setOnClickListener(v -> { secureStore.clear(); SyncScheduler.configure(this); draw(); });
         gap(12); root.addView(label("최근 작업", 20, Color.rgb(23,38,60), true));
         JSONArray jobs = SyncEngine.cachedJobs(this);
-        if (jobs.length() == 0) root.addView(label("작업 결과가 아직 없습니다. PC 제어 화면에서 파일과 완료 시각을 정해 예약하세요.", 14, Color.rgb(75,87,105), false));
+        if (jobs.length() == 0) root.addView(label("작업 결과가 아직 없습니다. PC 제어 화면에서 요청해 주세요.", 14, Color.rgb(75,87,105), false));
         for (int index=0; index<Math.min(jobs.length(),15); index++) {
             JSONObject job=jobs.optJSONObject(index); if(job==null) continue;
-            String title=job.optJSONObject("request") == null ? "작업" : job.optJSONObject("request").optString("subject","작업");
+            boolean overnight="overnight".equals(job.optString("kind"));
+            JSONObject request=job.optJSONObject("request");
+            String title=request==null ? "작업" : request.optString(overnight?"subject":"query","작업");
             String state=job.optString("state","대기");String saved=job.optString("phoneSavedAt","");
-            root.addView(label(title+"  ·  "+state+(saved.isEmpty()?"":"  ·  저장 확인됨"),15,Color.rgb(35,47,67),true));
+            String visibleState="download_ready".equals(state) ? (overnight ? (saved.isEmpty()?"갤럭시 저장 확인 대기":"갤럭시 저장 완료") : "웹 다운로드 준비 완료") : state;
+            root.addView(label(title+"  ·  "+visibleState+(saved.isEmpty()?"":"  ·  저장 확인됨"),15,Color.rgb(35,47,67),true));
             JSONArray artifacts=job.optJSONArray("artifacts");if(artifacts==null) continue;
             for(int item=0;item<artifacts.length();item++){
                 JSONObject artifact=artifacts.optJSONObject(item);if(artifact==null) continue;
@@ -148,7 +151,7 @@ public final class MainActivity extends Activity {
         worker.execute(()->{
             try {
                 int count=SyncEngine.sync(this,()->Thread.currentThread().isInterrupted());
-                runOnUiThread(()->{busy=false;draw();showStatus(count>0?count+"개 결과를 갤럭시에 저장하고 검증했습니다.":"새 결과가 없습니다. 저장한 파일은 최근 작업에서 열 수 있습니다.",false);});
+                runOnUiThread(()->{busy=false;draw();showStatus(count>0?count+"개 결과를 갤럭시에 저장하고 검증했습니다.":"새로 자동 저장할 보고서 결과가 없습니다. 단일 검색 파일은 웹 제어 화면에서 다운로드하세요.",false);});
             }catch(Exception error){runOnUiThread(()->{busy=false;draw();showStatus(error.getMessage()==null?"동기화에 실패했습니다.":error.getMessage(),true);});}
         });
     }
