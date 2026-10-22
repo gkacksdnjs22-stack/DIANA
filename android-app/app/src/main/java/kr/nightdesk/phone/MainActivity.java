@@ -40,6 +40,7 @@ public final class MainActivity extends Activity {
     private CheckBox autoReceive;
     private SecureStore secureStore;
     private volatile boolean busy;
+    private int visibleSaved = 15;
 
     @Override protected void onCreate(@Nullable Bundle state) {
         super.onCreate(state);
@@ -128,6 +129,25 @@ public final class MainActivity extends Activity {
                 String filename=artifact.optString("filename");
                 Button open=button("열기  ·  "+filename);open.setOnClickListener(v->openArtifact(job.optString("id"),artifact));
             }
+        }
+        gap(12); root.addView(label("내 저장 파일", 20, Color.rgb(23,38,60), true));
+        root.addView(label("최근 작업 목록에서 사라져도 갤럭시 앱에 보관된 문서는 이 목록에서 다시 열 수 있습니다.", 13, Color.rgb(102,112,130), false));
+        JSONArray savedJobs = SyncEngine.cachedSaved(this);
+        if (savedJobs.length() == 0) root.addView(label("아직 갤럭시에 저장한 파일이 없습니다.", 14, Color.rgb(75,87,105), false));
+        for (int index=0; index<Math.min(savedJobs.length(),visibleSaved); index++) {
+            JSONObject savedJob=savedJobs.optJSONObject(index);if(savedJob==null)continue;
+            String jobId=savedJob.optString("id");
+            root.addView(label(savedJob.optString("title","작업"),14,Color.rgb(35,47,67),true));
+            JSONArray artifacts=savedJob.optJSONArray("artifacts");if(artifacts==null)continue;
+            for (int item=0;item<artifacts.length();item++) {
+                JSONObject artifact=artifacts.optJSONObject(item);if(artifact==null)continue;
+                Button open=button("저장 파일 열기  ·  "+artifact.optString("filename"));
+                open.setOnClickListener(v->openArtifact(jobId,artifact));
+            }
+        }
+        if (savedJobs.length() > visibleSaved) {
+            Button more=button("저장된 작업 더 보기  ·  "+(savedJobs.length()-visibleSaved)+"개 남음");
+            more.setOnClickListener(v->{visibleSaved+=15;draw();});
         }
         showStatus(autoReceive.isChecked()?"연결됨 · 백그라운드에서 최대 15분 간격으로 확인합니다.":"연결됨 · 백그라운드 자동 확인이 꺼져 있습니다.",false);
         syncButton.setEnabled(!busy);
