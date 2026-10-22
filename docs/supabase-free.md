@@ -21,11 +21,13 @@ Render Dashboard → DIANA Web Service → Environment에서 아래 항목을 �
 | `DATABASE_URL` | Supabase 프로젝트의 **Session pooler** PostgreSQL URI. 비밀번호를 URL 인코딩한 연결 문자열을 사용합니다. Render 무료 IPv4 환경에서는 Direct connection 대신 Session pooler를 선택하세요. |
 | `SUPABASE_URL` | 프로젝트 URL (`https://...supabase.co`) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase 프로젝트 API Keys의 서버 전용 **secret/service_role** 키. 다른 사용자에게 노출하지 않습니다. |
-| `SUPABASE_STORAGE_BUCKET` | `diana-transfers` |
+| `SUPABASE_STORAGE_BUCKET` | 선택 사항. 설정하지 않으면 `diana-transfers`를 사용합니다. |
 
-기존 `USER_TOKEN`, `AGENT_TOKEN`, `GATEWAY_TOKEN`, `DEVICE_ID`, `APP_ORIGIN`은 바꾸지 않습니다. **네 가지 Supabase 설정이 모두 준비되기 전에는 새 버전을 배포하지 마세요.** 특히 `DATABASE_URL` 없이 실행하면 로컬 SQLite 모드이므로 Render 재시작 시 기록이 사라집니다.
+기존 `USER_TOKEN`, `AGENT_TOKEN`, `GATEWAY_TOKEN`, `DEVICE_ID`, `APP_ORIGIN`은 바꾸지 않습니다. **필수 설정 세 가지(`DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`)가 모두 준비되기 전에는 새 버전을 배포하지 마세요.** 특히 `DATABASE_URL` 없이 실행하면 로컬 SQLite 모드이므로 Render 재시작 시 기록이 사라집니다.
 
 서버는 Supabase 연결/스키마 확인에 실패하면 시작을 중단하며 로컬 DB로 조용히 대체하지 않습니다.
+
+Supabase에 쓰는 도중 일시적인 연결 오류가 발생하면 짧게 재시도합니다. 최종 실패 시 해당 응답은 HTTP 503으로 처리하고, 다음 API 요청에서 아직 저장하지 못한 변경을 재시도합니다. **DB 저장이 완료되기 전에는 요청 성공을 알리지 않습니다.** 한 번의 응답에 포함된 DB 변경은 Postgres 트랜잭션으로 함께 커밋되므로 휴대폰 등록과 일회용 페어링 코드 삭제도 중간 실패 시 함께 롤백됩니다. 여러 HTTP 요청에 걸친 변경이나 Storage 파일 업로드까지 하나의 트랜잭션으로 묶지는 않습니다.
 
 ## 3. 기존 데이터와 휴대폰 페어링 주의
 
@@ -39,6 +41,7 @@ Render 무료 인스턴스의 `.local/control.sqlite` 및 `.local/transfers`는 
 2. 갤럭시 앱을 새 코드로 페어링하고, 문서 1개를 `Download/DIANA`에 저장합니다. SHA-256 및 저장 확인을 검사합니다.
 3. Render를 재시작한 뒤에도 웹 작업 기록과 휴대폰 연결 정보가 남는지 확인합니다. 재시작 테스트 전 전송할 파일과 작업 진행 상태를 별도로 보관하세요.
 4. 다운로드 중계 파일은 24시간까지만 보관합니다. 만료 후 서버가 Supabase Storage에서 제거하며, 휴대폰에 복사한 파일은 지우지 않습니다.
+5. 일시적인 DB 장애 복구를 확인하려면 테스트 환경에서 연결 장애를 유발해 오류 응답을 관찰하고, 연결 복구 뒤 재요청 시 기록이 복원되는지 확인합니다. 운영 데이터베이스를 고의로 중단하지 마세요.
 
 ## 제한
 
