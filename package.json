@@ -1,0 +1,25 @@
+{
+  "name": "remote-document-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "setup": "node scripts/setup-local.mjs",
+    "start": "node --env-file-if-exists=.env server.mjs",
+    "agent": "node --env-file-if-exists=.env agent/run.mjs",
+    "gateway": "node --env-file-if-exists=.env gateway/run.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "kordoc": "^4.24.1",
+    "mammoth": "^1.13.0",
+    "nodemailer": "^10.2.0",
+    "pdf-parse": "^2.4.5"
+  },
+  "overrides": {
+    "argparse": "2.0.1"
+  }
+}

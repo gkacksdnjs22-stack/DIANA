@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>이어 — 내 PC에 부탁하기</title><link rel="stylesheet" href="/style.css"><script type="module" src="/app.js"></script></head>
+<body>
+<main>
+  <header><a class="brand" href="/">이어<span>내 PC에 부탁하기</span></a><span class="prototype">PROTOTYPE 0.1</span></header>
+  <section class="intro"><span class="eyebrow">필요한 순간, 내 컴퓨터와 연결</span><h1>두고 온 문서,<br>지금 필요한 곳으로.</h1><p>찾을 자료와 수정할 내용을 설명하면 연결된 PC에서 처리하고, 결과를 휴대폰이나 메일로 받습니다.</p></section>
+  <section id="connection" class="panel">
+    <div class="panel-heading"><h2>내 PC 연결</h2><span id="device-status" class="badge">연결 전</span></div>
+    <form id="connect-form"><label for="token">연결 코드</label><div class="row"><input id="token" type="password" autocomplete="off" placeholder="설정한 사용자 연결 코드를 입력하세요" required><button type="submit">연결</button></div></form>
+    <p class="hint">초기 버전은 PC에 설정한 사용자 연결 코드로 접속합니다.</p>
+  </section>
+  <section class="panel">
+    <div class="panel-heading"><h2>밤사이 맡기기</h2><span class="step">보고서 검토 + 발표자료</span></div>
+    <form id="overnight-form">
+      <div class="catalog-heading"><label for="source">원본 파일</label><button id="catalog-refresh" class="subtle" type="button">목록 새로고침</button></div>
+      <select id="source" required><option value="">PC 연결 후 원본 목록을 불러오세요</option></select>
+      <p id="catalog-state" class="hint">PC 에이전트가 지정된 문서 폴더의 이름과 해시를 동기화합니다. 파일 내용 전체는 서버에 올리지 않습니다.</p>
+      <label for="mission">원하는 결과와 수정 목표</label><textarea id="mission" maxlength="4000" rows="3" required placeholder="예: 지난 분기 보고서를 읽고 이번 달 성과와 개선점을 근거 중심으로 정리해줘"></textarea>
+      <label for="criteria">검토 기준 <span class="hint-inline">한 줄에 하나</span></label><textarea id="criteria" maxlength="2500" rows="3" required placeholder="숫자와 원문 근거가 맞는지 확인&#10;핵심 결론과 개선점이 분명한지 확인&#10;발표 흐름이 자연스러운지 확인"></textarea>
+      <div class="time-grid"><div><label for="start-at">작업 시작</label><input id="start-at" type="datetime-local" required></div><div><label for="deadline-at">완료 기한</label><input id="deadline-at" type="datetime-local" required></div></div>
+      <label for="slide-count">발표 자료</label><select id="slide-count"><option value="6">6장</option><option value="7">7장</option><option value="8">8장</option></select>
+      <button id="overnight-submit" class="primary" type="submit">이대로 맡기기 <span aria-hidden="true">↗</span></button>
+    </form>
+    <p class="hint">갤럭시 동기화 시간을 확보하려면 완료 기한을 작업 시작보다 최소 30분 뒤로 정하세요. API 키가 없거나 근거 검토가 끝나지 않으면 미완성으로 알립니다. Android 절전·네트워크 상태는 저장 시간을 늦출 수 있습니다.</p>
+  </section>
+  <section class="panel">
+    <div class="panel-heading"><h2>갤럭시 자동 저장 연결</h2><button id="pair-code" class="subtle" type="button">6자리 코드 만들기</button></div>
+    <div id="pair-box" hidden><p id="pair-digits" class="pair-code"></p><p id="pair-expiry" class="hint"></p></div>
+    <p class="hint">Android 앱에 서버 HTTPS 주소와 코드를 입력해 한 번 연결합니다. USB 파일전송 모드만으로는 휴대폰 앱이 PC의 127.0.0.1 주소에 접속할 수 없습니다.</p>
+    <div id="paired-devices"></div>
+  </section>
+  <details class="panel">
+    <summary>파일 하나 찾기 또는 메일로 받기</summary>
+    <form id="job-form">
+      <label for="query">찾을 문서 설명</label><textarea id="query" maxlength="1000" rows="3" required placeholder="예: 가람상사의 2026년 9월 매출 보고서 최종본을 찾아줘"></textarea>
+      <label for="edit">수정할 내용 <span class="optional">선택</span></label><textarea id="edit" maxlength="2000" rows="2" placeholder="예: 핵심 내용을 5줄로 요약한 수정본을 만들어줘"></textarea>
+      <p class="hint">UTF-8 텍스트·코드 파일은 원본을 보존하고 수정본을 따로 만듭니다. JSON은 저장 전 문법을 확인합니다. HWP·HWPX·엑셀·PPTX·PDF·DOCX는 읽고 보고서 작성에 사용할 수 있습니다.</p>
+      <label for="delivery">결과 받는 방법</label><select id="delivery"><option value="download">휴대폰에 파일 저장</option><option value="email">메일 발송</option><option value="both">휴대폰 저장 + 메일 발송</option></select>
+      <div id="email-fields" hidden><label for="recipient">받는 메일 주소</label><input id="recipient" type="email" maxlength="254" placeholder="name@example.com" autocomplete="email">
+      <label for="subject">메일 제목</label><input id="subject" type="text" maxlength="160" value="요청하신 문서"></div>
+      <label class="checkbox"><input id="auto-send" type="checkbox"><span>AI 검색 결과가 자동 전달 조건에 맞으면 바로 진행<small>후보가 여러 개이거나 불확실하면 파일을 먼저 선택합니다.</small></span></label>
+      <button id="submit" class="primary" type="submit">내 PC에 요청하기 <span aria-hidden="true">↗</span></button>
+    </form>
+    <p class="hint">처음에는 가상 문서와 연습 메일로 동작합니다. 실제 발송 연결 상태는 PC 설정에 따릅니다.</p>
+  </details>
+  <section class="work"><div class="panel-heading"><h2>진행 중인 요청</h2><button id="refresh" class="subtle" type="button">새로고침</button></div><p id="empty" class="empty">PC를 연결하고 첫 번째 요청을 보내세요.</p><div id="jobs"></div></section>
+  <p id="notice" role="status" aria-live="polite"></p>
+  <footer>이어 · 공모전용 초기 시제품<br>지원하는 전원 상태와 메일 서비스는 연결 환경에 따라 달라집니다.</footer>
+</main>
+</body></html>
