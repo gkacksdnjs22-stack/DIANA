@@ -62,3 +62,85 @@ jobs:
           path: android-app/install-check/build/outputs/apk/debug/install-check-debug.apk
           if-no-files-found: error
           retention-days: 14
+
+  mobile-ui:
+    name: Verify mobile screens on Android 15
+    needs: debug-apk
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Prepare Android SDK tools
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK 35
+        run: sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0'
+
+      - name: Install Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Build the app and instrumented tests
+        working-directory: android-app
+        run: gradle --no-daemon --stacktrace :app:assembleDebug :app:assembleDebugAndroidTest
+
+      - name: Enable KVM access
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Prepare connected UI verification
+        run: |
+          cat > "$RUNNER_TEMP/diana-ui-test.sh" <<'SCRIPT'
+          set -euo pipefail
+          mkdir -p android-app/app/build/ui-verification
+          trap 'adb pull /sdcard/Android/data/kr.nightdesk.phone/files/ui-screenshots android-app/app/build/ui-verification/ >/dev/null 2>&1 || true; adb logcat -d -s AndroidRuntime:E TestRunner:I > android-app/app/build/ui-verification/android-test-log.txt || true' EXIT
+          adb shell svc wifi disable
+          adb shell svc data disable
+          adb install -r android-app/app/build/outputs/apk/debug/app-debug.apk
+          adb install -r android-app/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          adb shell pm grant kr.nightdesk.phone android.permission.POST_NOTIFICATIONS
+          adb shell wm size 1080x2160
+          adb shell wm density 440
+          adb shell settings put system font_scale 1.0
+          adb shell am instrument -w -r -e class kr.nightdesk.phone.MobileUiScreenshotTest -e screenshotPrefix phone-100 kr.nightdesk.phone.test/androidx.test.runner.AndroidJUnitRunner | tee android-app/app/build/ui-verification/phone-100-test.txt
+          grep -Eq 'OK \([1-9][0-9]* tests?\)' android-app/app/build/ui-verification/phone-100-test.txt
+          adb shell wm size 720x1440
+          adb shell wm density 320
+          adb shell settings put system font_scale 1.3
+          adb shell am instrument -w -r -e class kr.nightdesk.phone.MobileUiScreenshotTest -e screenshotPrefix compact-130 kr.nightdesk.phone.test/androidx.test.runner.AndroidJUnitRunner | tee android-app/app/build/ui-verification/compact-130-test.txt
+          grep -Eq 'OK \([1-9][0-9]* tests?\)' android-app/app/build/ui-verification/compact-130-test.txt
+          adb pull /sdcard/Android/data/kr.nightdesk.phone/files/ui-screenshots android-app/app/build/ui-verification/
+          test "$(find android-app/app/build/ui-verification/ui-screenshots -type f -name '*.png' | wc -l)" -eq 14
+          SCRIPT
+
+      - name: Exercise navigation and capture real Android screenshots
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          ram-size: 2048M
+          disable-animations: true
+          emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: bash "$RUNNER_TEMP/diana-ui-test.sh"
+
+      - name: Publish emulator screenshots and test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIANA-mobile-ui-screenshots
+          path: android-app/app/build/ui-verification/
+          if-no-files-found: warn
+          retention-days: 14
