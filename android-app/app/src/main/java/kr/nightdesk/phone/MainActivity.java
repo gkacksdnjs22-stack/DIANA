@@ -147,13 +147,13 @@ public final class MainActivity extends Activity {
             else v.setPadding(insets.getSystemWindowInsetLeft(),insets.getSystemWindowInsetTop(),insets.getSystemWindowInsetRight(),insets.getSystemWindowInsetBottom());
             return insets;
         });
-        LinearLayout header=row();header.setPadding(dp(20),dp(10),dp(20),dp(8));header.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout header=row();header.setPadding(dp(20),dp(10),dp(20),dp(8));header.setGravity(Gravity.CENTER_VERTICAL);header.setBaselineAligned(false);header.setMinimumHeight(dp(64));
         ImageView logo=new ImageView(this);logo.setImageResource(R.mipmap.ic_launcher);logo.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         header.addView(logo,new LinearLayout.LayoutParams(dp(42),dp(42)));
         LinearLayout brand=column();LinearLayout.LayoutParams brandParams=new LinearLayout.LayoutParams(0,-2,1);brandParams.leftMargin=dp(10);header.addView(brand,brandParams);
         brand.addView(label("DIANA",20,TEXT,true));TextView subtitle=label("내 PC와 이어지는 공간",11,MUTED,false);subtitle.setPadding(0,0,0,0);brand.addView(subtitle);
         TextView badge=label(session==null?"연결 전":"●  연결됨",11,session==null?MUTED:CYAN,true);badge.setPadding(dp(10),dp(7),dp(10),dp(7));badge.setBackground(shape(session==null?SURFACE:0xff102e35,20,0));header.addView(badge);
-        shell.addView(header);
+        shell.addView(header,new LinearLayout.LayoutParams(-1,-2));
         scroll=new ScrollView(this);scroll.setFillViewport(true);scroll.setClipToPadding(false);scroll.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
         root=column();root.setPadding(dp(20),dp(10),dp(20),dp(26));scroll.addView(root);shell.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         status=label(statusMessage,13,statusError?ERROR:CYAN,false);status.setVisibility(statusMessage.isEmpty()?View.GONE:View.VISIBLE);
@@ -195,11 +195,13 @@ public final class MainActivity extends Activity {
         title(pageContent,"내 저장파일","받은 파일을 한곳에서 확인하고 열어보세요.");
         JSONArray saved=SyncEngine.cachedSaved(this);int count=0;
         for(int i=0;i<saved.length();i++){JSONObject job=saved.optJSONObject(i);if(job!=null&&job.optJSONArray("artifacts")!=null)count+=job.optJSONArray("artifacts").length();}
-        LinearLayout hero=card(pageContent);hero.setBackground(shape(0xff122536,22,0xff214657));
-        LinearLayout number=row();TextView large=label(String.valueOf(count),38,TEXT,true);number.addView(large);TextView caption=label("개의 파일",14,MUTED,false);LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-2,-2);cp.leftMargin=dp(10);cp.gravity=Gravity.BOTTOM;cp.bottomMargin=dp(12);number.addView(caption,cp);hero.addView(number);
-        hero.addView(label("마지막 동기화  "+time(getPreferences(0).getString("last_sync","")),12,MUTED,false));
-        pushStatus=label("빠른 수신  ·  "+getSharedPreferences("settings",0).getString("push_status","연결 확인 중"),12,CYAN,false);hero.addView(pushStatus);
-        syncButton=button(hero,"지금 결과 확인",true);syncButton.setEnabled(!busy);syncButton.setCompoundDrawablesWithIntrinsicBounds(tinted(R.drawable.ic_ui_refresh,0xff072a2c),null,null,null);syncButton.setCompoundDrawablePadding(dp(8));syncButton.setOnClickListener(v->syncNow());
+        LinearLayout hero=card(pageContent);hero.setPadding(dp(14),dp(12),dp(14),dp(12));hero.setBackground(shape(0xff122536,22,0xff214657));
+        LinearLayout summary=row();summary.setGravity(Gravity.CENTER_VERTICAL);summary.setBaselineAligned(false);
+        LinearLayout totals=column();summary.addView(totals,new LinearLayout.LayoutParams(0,-2,1));
+        TextView total=label(count+"개 파일",26,TEXT,true);total.setPadding(0,0,0,0);totals.addView(total);
+        TextView last=label("동기화  "+time(getPreferences(0).getString("last_sync","")),11,MUTED,false);last.setPadding(0,dp(3),0,0);totals.addView(last);
+        syncButton=button(summary,"결과 확인",true);LinearLayout.LayoutParams syncParams=new LinearLayout.LayoutParams(dp(112),-2);syncParams.leftMargin=dp(10);syncButton.setLayoutParams(syncParams);syncButton.setContentDescription("지금 결과 확인");syncButton.setEnabled(!busy);syncButton.setOnClickListener(v->syncNow());hero.addView(summary);
+        pushStatus=label("빠른 수신  ·  "+getSharedPreferences("settings",0).getString("push_status","연결 확인 중"),11,CYAN,false);pushStatus.setPadding(0,dp(8),0,0);hero.addView(pushStatus);
         drawFolderCard(pageContent,false);
         section(pageContent,"보관 중인 파일",count==0?"":String.valueOf(count));
         if(count==0)empty(pageContent,R.drawable.ic_ui_folder,"아직 받은 파일이 없어요","PC에서 파일을 보내면 이곳에 모아둘게요.");
@@ -211,6 +213,17 @@ public final class MainActivity extends Activity {
     }
     private void drawFolderCard(LinearLayout parent,boolean controls){
         boolean selected=getPreferences(0).getString("export_tree",null)!=null;
+        if(!controls){
+            LinearLayout compact=card(parent);compact.setPadding(dp(14),dp(12),dp(14),dp(12));
+            LinearLayout line=row();line.setGravity(Gravity.CENTER_VERTICAL);line.setBaselineAligned(false);
+            LinearLayout description=column();line.addView(description,new LinearLayout.LayoutParams(0,-2,1));
+            TextView heading=label(selected?"실제 휴대폰 폴더":"실제 폴더 저장 꺼짐",selected?11:14,selected?MUTED:TEXT,!selected);heading.setPadding(0,0,0,0);description.addView(heading);
+            TextView destination=label(selected?SyncEngine.selectedFolderLabel(this):"앱 안에만 보관 중이에요.",selected?14:11,selected?PURPLE:MUTED,selected);destination.setPadding(0,dp(4),0,0);description.addView(destination);
+            folderButton=button(line,selected?"변경":"폴더 선택",false);LinearLayout.LayoutParams actionParams=new LinearLayout.LayoutParams(dp(selected?72:100),-2);actionParams.leftMargin=dp(10);folderButton.setLayoutParams(actionParams);folderButton.setContentDescription(selected?"갤럭시 저장 폴더 변경":"갤럭시 저장 폴더 선택");folderButton.setEnabled(!busy);folderButton.setOnClickListener(v->chooseFolder());compact.addView(line);
+            if(selected){TextView note=label("폴더 복사 표시는 마지막 확인 기준이에요.",11,MUTED,false);note.setPadding(0,dp(6),0,0);compact.addView(note);}
+            String problem=getPreferences(0).getString("export_error","");if(!problem.isEmpty())compact.addView(label("폴더 복사 확인 필요 · 설정에서 확인해 주세요.",11,ERROR,false));
+            return;
+        }
         LinearLayout card=card(parent);LinearLayout heading=row();heading.setGravity(Gravity.CENTER_VERTICAL);heading.addView(icon(R.drawable.ic_ui_folder,PURPLE),new LinearLayout.LayoutParams(dp(22),dp(22)));
         TextView text=label("실제 휴대폰 폴더",15,TEXT,true);LinearLayout.LayoutParams textParams=new LinearLayout.LayoutParams(0,-2,1);textParams.leftMargin=dp(9);heading.addView(text,textParams);card.addView(heading);
         card.addView(label(selected?SyncEngine.selectedFolderLabel(this):"저장 폴더를 아직 선택하지 않았어요.",14,selected?PURPLE:MUTED,false));
@@ -308,7 +321,7 @@ public final class MainActivity extends Activity {
     private void empty(LinearLayout parent,int icon,String heading,String copy){LinearLayout card=card(parent);ImageView image=icon(icon,PURPLE);card.addView(image,new LinearLayout.LayoutParams(dp(30),dp(30)));card.addView(label(heading,17,TEXT,true));card.addView(label(copy,13,MUTED,false));}
     private static String time(String value){if(value==null||value.isEmpty())return "아직 없음";try{return DateTimeFormatter.ofPattern("M. d. HH:mm",Locale.KOREA).withZone(ZoneId.systemDefault()).format(Instant.parse(value));}catch(Exception ignored){return value;}}
     private static String jobTitle(JSONObject job){JSONObject request=job.optJSONObject("request");if(request==null)return job.optString("title","작업");String kind=job.optString("kind");return request.optString("upload".equals(kind)?"filename":"overnight".equals(kind)?"subject":"query",job.optString("title","작업"));}
-    private static String stateLabel(JSONObject job){String state=job.optString("state");if("upload".equals(job.optString("kind")))return uploadState(state);switch(state){case "scheduled":return "예약됨";case "processing":return "작업 중";case "needs_attention":return "확인이 필요합니다";case "awaiting_phone":return "결과 수신 대기";case "download_ready":return job.optString("phoneSavedAt").isEmpty()?"결과 준비 완료":"휴대폰 수신 기록 있음";case "failed":return "작업 실패";case "deadline_exceeded":return "완료 기한 지남";case "submitted":return "전달 요청됨";case "send_unknown":return "전달 상태 확인 필요";case "dry_run":return "준비 완료";default:return state.isEmpty()?"상태 확인 중":state;}}
+    private static String stateLabel(JSONObject job){String state=job.optString("state");if("upload".equals(job.optString("kind")))return uploadState(state);switch(state){case "scheduled":return "예약됨";case "waiting_pc":return "PC 연결 대기";case "searching":return "문서 찾는 중";case "needs_selection":return "문서 선택 필요";case "ready_to_send":return "전달 준비 완료";case "sending":return "파일 전달 중";case "processing":return "작업 중";case "needs_attention":return "확인이 필요합니다";case "awaiting_phone":return "결과 수신 대기";case "download_ready":return job.optString("phoneSavedAt").isEmpty()?"결과 준비 완료":"휴대폰 수신 기록 있음";case "failed":return "작업 실패";case "deadline_exceeded":return "완료 기한 지남";case "submitted":return "전달 요청됨";case "send_unknown":return "전달 상태 확인 필요";case "dry_run":return "준비 완료";default:return "작업 상태 확인 중";}}
     private static String uploadState(String state){switch(state){case "waiting_pc":return "PC 연결·저장 대기";case "receiving_pc":return "PC에 저장 중";case "pc_saved":return "PC 저장 완료";case "failed":return "PC 저장 실패";default:return "PC 전송 상태 확인 중";}}
     private static boolean sameSession(JSONObject left,JSONObject right){return left!=null&&right!=null&&left.optString("baseUrl").equals(right.optString("baseUrl"))&&left.optString("phoneId").equals(right.optString("phoneId"))&&left.optString("phoneToken").equals(right.optString("phoneToken"));}
     private void readUploadStatuses(ForegroundRefresh.Completion completion){

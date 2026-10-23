@@ -1,10 +1,12 @@
 package kr.nightdesk.phone;
 
 import static androidx.test.espresso.Espresso.onView;
+import static androidx.test.espresso.Espresso.pressBack;
 import static androidx.test.espresso.action.ViewActions.click;
 import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
 import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
+import static androidx.test.espresso.matcher.ViewMatchers.isSelected;
 import static androidx.test.espresso.matcher.ViewMatchers.withContentDescription;
 import static androidx.test.espresso.matcher.ViewMatchers.withTagValue;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
@@ -36,6 +38,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /** Real Android views and screenshots, using only inert local demo files and a reserved host. */
 @RunWith(AndroidJUnit4.class)
@@ -126,6 +130,14 @@ public final class MobileUiScreenshotTest {
         });
         onView(withContentDescription("돌아가기")).check(matches(isDisplayed()));
         screenshot("04-details");
+
+        pressBack();
+        assertAllNavigationVisible();
+        onView(withTagValue(equalTo("job_detail"))).check(doesNotExist());
+        onView(withTagValue(equalTo("nav_recent"))).check(matches(isSelected()));
+        onView(withTagValue(equalTo("recent_job_" + JOB_ID))).check(matches(isDisplayed())).perform(click());
+        assertBrandVisible();
+        onView(withTagValue(equalTo("job_detail"))).check(matches(isDisplayed()));
         onView(withContentDescription("돌아가기")).perform(click());
         onView(withTagValue(equalTo("job_detail"))).check(doesNotExist());
         onView(withTagValue(equalTo("recent_job_" + JOB_ID))).check(matches(isDisplayed()));
@@ -133,6 +145,9 @@ public final class MobileUiScreenshotTest {
 
         onView(withTagValue(equalTo("nav_settings"))).perform(click());
         assertAllNavigationVisible();
+        scenario.recreate();
+        assertAllNavigationVisible();
+        onView(withTagValue(equalTo("nav_settings"))).check(matches(isSelected()));
         screenshot("06-settings");
 
         onView(withTagValue(equalTo("nav_files"))).perform(click());
@@ -152,8 +167,13 @@ public final class MobileUiScreenshotTest {
     }
 
     private void assertAllNavigationVisible() {
+        assertBrandVisible();
         for (String tag : new String[]{"nav_files", "nav_send", "nav_recent", "nav_settings"})
             onView(withTagValue(equalTo(tag))).check(matches(isDisplayed()));
+    }
+
+    private void assertBrandVisible() {
+        onView(withText("DIANA")).check(matches(isDisplayed()));
     }
 
     private static boolean containsText(View view, String expected) {
@@ -167,7 +187,17 @@ public final class MobileUiScreenshotTest {
     }
 
     private void screenshot(String name) throws Exception {
+        assertBrandVisible();
+        // Espresso's idle state can precede presentation of a newly replaced view tree.
+        // Wait on the test thread while the decor presents two actual animation frames.
+        CountDownLatch presented = new CountDownLatch(1);
+        scenario.onActivity(activity -> {
+            View decor = activity.getWindow().getDecorView();
+            decor.postOnAnimation(() -> decor.postOnAnimation(presented::countDown));
+        });
+        assertTrue("The activity must present two frames before capture", presented.await(5, TimeUnit.SECONDS));
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+        assertBrandVisible();
         Bitmap bitmap = InstrumentationRegistry.getInstrumentation().getUiAutomation().takeScreenshot();
         assertNotNull("The emulator must provide a real screenshot", bitmap);
         assertTrue("A phone screenshot must have a useful resolution", bitmap.getWidth() >= 600 && bitmap.getHeight() >= 1000);
