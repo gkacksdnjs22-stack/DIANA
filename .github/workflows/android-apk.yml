@@ -43,9 +43,9 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
-      - name: Build installable debug APK
+      - name: Test and build installable debug APK
         working-directory: android-app
-        run: gradle --no-daemon --stacktrace :app:assembleDebug
+        run: gradle --no-daemon --stacktrace :app:testDebugUnitTest :app:assembleDebug
 
       - name: Publish APK to workflow artifacts
         uses: actions/upload-artifact@v4

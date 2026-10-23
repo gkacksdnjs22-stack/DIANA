@@ -16,7 +16,7 @@ final class Notifications {
     static void received(Context c, int count) {
         if (Build.VERSION.SDK_INT >= 33 && c.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return;
         PendingIntent open = PendingIntent.getActivity(c, 0, new Intent(c, MainActivity.class), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        Notification notification = new Notification.Builder(c, CHANNEL).setSmallIcon(R.drawable.ic_moon).setContentTitle("작업 결과가 도착했어요")
+        Notification notification = new Notification.Builder(c, CHANNEL).setSmallIcon(R.drawable.ic_diana_notification).setContentTitle("작업 결과가 도착했어요")
             .setContentText(count + "개 파일을 확인하고 휴대폰에 저장했습니다.").setContentIntent(open).setAutoCancel(true).build();
         c.getSystemService(NotificationManager.class).notify(1001, notification);
     }

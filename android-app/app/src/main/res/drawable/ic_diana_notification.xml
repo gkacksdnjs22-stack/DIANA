@@ -1,0 +1,12 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <!-- Android uses the alpha silhouette of this DIANA D mark in the status bar. -->
+    <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd"
+        android:pathData="M3,3H11.3C17.4,3 21,6.8 21,12C21,17.2 17.4,21 11.3,21H3Z M6,6V18H11.3C15.7,18 18,15.6 18,12C18,8.4 15.7,6 11.3,6Z" />
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="0.9" android:strokeLineCap="round"
+        android:pathData="M14.4,12A2.4,2.4 0,1 1,9.6 12A2.4,2.4 0,1 1,14.4 12 M12,8.5V10 M12,14V15.5 M8.5,12H10 M14,12H15.5" />
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M12.8,12A0.8,0.8 0,1 1,11.2 12A0.8,0.8 0,1 1,12.8 12" />
+</vector>
