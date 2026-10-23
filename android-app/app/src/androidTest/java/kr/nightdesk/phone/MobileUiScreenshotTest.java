@@ -3,10 +3,13 @@ package kr.nightdesk.phone;
 import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.Espresso.pressBack;
 import static androidx.test.espresso.action.ViewActions.click;
+import static androidx.test.espresso.action.ViewActions.closeSoftKeyboard;
+import static androidx.test.espresso.action.ViewActions.replaceText;
+import static androidx.test.espresso.action.ViewActions.scrollTo;
 import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
 import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
-import static androidx.test.espresso.matcher.ViewMatchers.isSelected;
+import static androidx.test.espresso.matcher.ViewMatchers.isAssignableFrom;
 import static androidx.test.espresso.matcher.ViewMatchers.withContentDescription;
 import static androidx.test.espresso.matcher.ViewMatchers.withTagValue;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
@@ -19,9 +22,12 @@ import static org.junit.Assert.assertTrue;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
+import android.graphics.Rect;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
+import android.widget.EditText;
+import android.widget.ScrollView;
 
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
@@ -46,6 +52,11 @@ import java.util.concurrent.TimeUnit;
 public final class MobileUiScreenshotTest {
     private static final String JOB_ID = "11111111-2222-4333-8444-555555555555";
     private static final String UPLOAD_ID = "66666666-7777-4888-8999-aaaaaaaaaaaa";
+    private static final String SEARCH_ID = "cccccccc-dddd-4eee-8fff-111111111111";
+    private static final String RAW_RESULT_ID = "dddddddd-eeee-4fff-8111-222222222222";
+    private static final String RAW_RESULT_NAME = "모바일_요청_결과.txt";
+    private static final String CANDIDATE_ID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    private static final String CANDIDATE_NAME = "거래처_계약서.txt";
     private static final String TITLE = "이번 주 업무 보고서";
     private static final String TEXT_NAME = "주간_업무_정리.txt";
     private static final String APK_NAME = "DIANA-install-check.apk";
@@ -82,7 +93,29 @@ public final class MobileUiScreenshotTest {
             .put("state", "pc_saved").put("request", new JSONObject().put("filename", "현장_메모.txt").put("bytes", 2048))
             .put("createdAt", "2026-10-23T05:40:00Z").put("updatedAt", "2026-10-23T05:42:00Z")
             .put("pcSavedAt", "2026-10-23T05:42:00Z").put("events", new JSONArray());
-        SyncEngine.cache(context, new JSONObject().put("jobs", new JSONArray().put(report).put(upload)));
+        // Normal search jobs from the deployed protocol intentionally have no kind field.
+        JSONObject search = new JSONObject().put("id", SEARCH_ID).put("state", "needs_selection").put("mode", "openai")
+            .put("request", new JSONObject().put("query", "거래처 계약서 원본을 찾아줘")
+                .put("delivery", "download").put("autoSend", false).put("editInstruction", ""))
+            .put("createdAt", "2026-10-23T05:43:00Z").put("updatedAt", "2026-10-23T05:44:00Z")
+            .put("candidates", new JSONArray().put(new JSONObject().put("id", CANDIDATE_ID)
+                .put("filename", CANDIDATE_NAME).put("bytes", 2536).put("score", 0.97)
+                .put("modifiedAt", "2026-10-22T03:00:00Z")
+                .put("excerpt", "거래처와 체결한 계약의 주요 조건과 납품 일정을 정리한 문서입니다.")))
+            .put("events", new JSONArray().put(new JSONObject().put("at", "2026-10-23T05:44:00Z")
+                .put("text", "받을 문서를 선택해 주세요.")));
+        JSONObject localResult = artifact(RAW_RESULT_ID, RAW_RESULT_NAME, "text/plain",
+            "일반 검색 결과의 단일 파일 명세를 앱에서 다시 열 수 있습니다.\n".getBytes(StandardCharsets.UTF_8));
+        // A fresh /api/jobs poll returns only artifact, without normalized artifacts[], id or MIME.
+        // Deliberately omit this job from saved-jobs.json so that a history fallback cannot hide the bug.
+        JSONObject rawResult = new JSONObject().put("id", RAW_RESULT_ID).put("state", "download_ready")
+            .put("request", new JSONObject().put("query", "찾은 문서 결과 확인")
+                .put("delivery", "download").put("autoSend", false).put("editInstruction", ""))
+            .put("artifact", new JSONObject().put("filename", RAW_RESULT_NAME)
+                .put("sha256", localResult.getString("sha256")).put("bytes", localResult.getLong("bytes")))
+            .put("createdAt", "2026-10-23T05:41:00Z").put("updatedAt", "2026-10-23T05:46:00Z")
+            .put("events", new JSONArray());
+        SyncEngine.cache(context, new JSONObject().put("jobs", new JSONArray().put(report).put(upload).put(search).put(rawResult)));
         JSONObject saved = new JSONObject().put("id", JOB_ID).put("title", TITLE)
             .put("createdAt", "2026-10-23T05:45:00Z").put("phoneSavedAt", "2026-10-23T05:50:00Z")
             .put("artifacts", artifacts);
@@ -101,17 +134,28 @@ public final class MobileUiScreenshotTest {
         }
     }
 
-    @Test public void fourPagesAndTitleOnlyRecentRowsOpenDetailsAndReturn() throws Exception {
-        assertAllNavigationVisible();
-        onView(withText("내 저장파일")).check(matches(isDisplayed()));
-        screenshot("01-files");
+    @Test public void homeMenuCommandDraftAndTitleOnlyRecentDetailsSurviveNavigation() throws Exception {
+        assertHomeOnlyControls();
+        screenshot("01-home");
 
-        onView(withTagValue(equalTo("nav_send"))).perform(click());
-        assertAllNavigationVisible();
-        screenshot("02-send");
+        navigate("files");
+        onView(withText(containsString(TEXT_NAME))).check(matches(isDisplayed()));
+        screenshot("02-files");
 
-        onView(withTagValue(equalTo("nav_recent"))).perform(click());
-        assertAllNavigationVisible();
+        navigate("pc_sync");
+        onView(withTagValue(equalTo("pc_query"))).check(matches(isAssignableFrom(EditText.class)))
+            .perform(scrollTo(), replaceText("지난 분기 보고서를 찾아줘"), closeSoftKeyboard());
+        onView(withTagValue(equalTo("pc_edit_instruction"))).check(matches(isAssignableFrom(EditText.class)))
+            .perform(scrollTo(), replaceText("핵심 성과와 개선점을 구분해 정리해줘"), closeSoftKeyboard());
+        onView(withTagValue(equalTo("pc_submit"))).check((view, error) -> {
+            if (error != null) throw error;
+            assertTrue("PC requests need an explicit submit action", view.isClickable());
+        });
+        // Submit is intentionally never tapped: these tests do not create remote PC requests.
+        scrollPageToTop();
+        screenshot("03-pc-request");
+
+        navigate("recent");
         onView(withTagValue(equalTo("recent_job_" + JOB_ID))).check((view, error) -> {
             if (error != null) throw error;
             assertTrue("The recent row must show the job title", containsText(view, TITLE));
@@ -120,7 +164,7 @@ public final class MobileUiScreenshotTest {
         });
         onView(withText(containsString(TEXT_NAME))).check(doesNotExist());
         onView(withText(containsString(APK_NAME))).check(doesNotExist());
-        screenshot("03-recent");
+        screenshot("04-recent");
 
         onView(withTagValue(equalTo("recent_job_" + JOB_ID))).perform(click());
         onView(withTagValue(equalTo("job_detail"))).check((view, error) -> {
@@ -129,47 +173,137 @@ public final class MobileUiScreenshotTest {
             assertTrue("Details must expose the selected job's files", containsText(view, TEXT_NAME));
         });
         onView(withContentDescription("돌아가기")).check(matches(isDisplayed()));
-        screenshot("04-details");
+        screenshot("05-details");
 
         pressBack();
-        assertAllNavigationVisible();
+        assertScreen("recent");
         onView(withTagValue(equalTo("job_detail"))).check(doesNotExist());
-        onView(withTagValue(equalTo("nav_recent"))).check(matches(isSelected()));
         onView(withTagValue(equalTo("recent_job_" + JOB_ID))).check(matches(isDisplayed())).perform(click());
         assertBrandVisible();
         onView(withTagValue(equalTo("job_detail"))).check(matches(isDisplayed()));
         onView(withContentDescription("돌아가기")).perform(click());
+        assertScreen("recent");
         onView(withTagValue(equalTo("job_detail"))).check(doesNotExist());
         onView(withTagValue(equalTo("recent_job_" + JOB_ID))).check(matches(isDisplayed()));
-        screenshot("05-recent-back");
 
-        onView(withTagValue(equalTo("nav_settings"))).perform(click());
-        assertAllNavigationVisible();
+        onView(withText(CANDIDATE_NAME)).check(doesNotExist());
+        onView(withTagValue(equalTo("recent_job_" + SEARCH_ID))).perform(scrollTo(), click());
+        onView(withTagValue(equalTo("job_detail"))).check(matches(isDisplayed()));
+        onView(withTagValue(equalTo("select_candidate_" + CANDIDATE_ID))).perform(scrollTo())
+            .check(matches(isDisplayed())).check((view, error) -> {
+                if (error != null) throw error;
+                assertTrue("A normal search candidate must offer a selectable action", view.isClickable() && view.isEnabled());
+            });
+        onView(withText(CANDIDATE_NAME)).check(matches(isDisplayed()));
+        // Candidate selection would contact the API; this offline test only validates the native action.
+        pressBack();
+        assertScreen("recent");
+        onView(withTagValue(equalTo("job_detail"))).check(doesNotExist());
+        onView(withTagValue(equalTo("recent_job_" + SEARCH_ID))).check(matches(isDisplayed()));
+
+        onView(withText(RAW_RESULT_NAME)).check(doesNotExist());
+        onView(withTagValue(equalTo("recent_job_" + RAW_RESULT_ID))).perform(scrollTo(), click());
+        onView(withTagValue(equalTo("job_detail"))).check((view, error) -> {
+            if (error != null) throw error;
+            assertTrue("A raw single-artifact response must retain its file in details", containsText(view, RAW_RESULT_NAME));
+        });
+        onView(withText("파일 열기")).perform(scrollTo()).check(matches(isDisplayed())).check((view, error) -> {
+            if (error != null) throw error;
+            assertTrue("A verified local single artifact must remain available to open", view.isEnabled() && view.isClickable());
+        });
+        onView(withText(RAW_RESULT_NAME)).check(matches(isDisplayed()));
+        // Do not launch an external viewer; local availability is the regression under test.
+        pressBack();
+        assertScreen("recent");
+        onView(withTagValue(equalTo("job_detail"))).check(doesNotExist());
+        onView(withTagValue(equalTo("recent_job_" + RAW_RESULT_ID))).check(matches(isDisplayed()));
+
+        navigate("settings");
         scenario.recreate();
-        assertAllNavigationVisible();
-        onView(withTagValue(equalTo("nav_settings"))).check(matches(isSelected()));
+        assertScreen("settings");
         screenshot("06-settings");
 
-        onView(withTagValue(equalTo("nav_files"))).perform(click());
-        onView(withText("내 저장파일")).check(matches(isDisplayed()));
-        assertAllNavigationVisible();
-        screenshot("07-files-return");
+        openMenu();
+        screenshot("07-menu", true);
+        pressBack();
+        onView(withTagValue(equalTo("app_drawer"))).check(doesNotExist());
+        assertScreen("settings");
+
+        navigate("pc_sync");
+        assertCommandDraft();
+        scenario.recreate();
+        assertScreen("pc_sync");
+        assertCommandDraft();
+        navigate("home");
+        assertHomeOnlyControls();
     }
 
     private JSONObject artifact(String filename, String mime, byte[] bytes) throws Exception {
+        return artifact(JOB_ID, filename, mime, bytes);
+    }
+
+    private JSONObject artifact(String jobId, String filename, String mime, byte[] bytes) throws Exception {
         String sha = FileSafety.hex(MessageDigest.getInstance("SHA-256").digest(bytes));
         JSONObject artifact = new JSONObject().put("id", sha).put("sha256", sha).put("filename", filename)
             .put("mime", mime).put("bytes", bytes.length);
-        File local = FileSafety.artifact(context.getFilesDir(), JOB_ID, sha, filename);
+        File local = FileSafety.artifact(context.getFilesDir(), jobId, sha, filename);
         assertTrue(local.getParentFile().isDirectory() || local.getParentFile().mkdirs());
         try (FileOutputStream output = new FileOutputStream(local)) { output.write(bytes); }
         return artifact;
     }
 
-    private void assertAllNavigationVisible() {
+    private void assertScreen(String route) {
         assertBrandVisible();
-        for (String tag : new String[]{"nav_files", "nav_send", "nav_recent", "nav_settings"})
-            onView(withTagValue(equalTo(tag))).check(matches(isDisplayed()));
+        onView(withTagValue(equalTo("menu_toggle"))).check(matches(isDisplayed()));
+        onView(withTagValue(equalTo("screen_" + route))).check(matches(isDisplayed()));
+    }
+
+    private void assertHomeOnlyControls() {
+        assertScreen("home");
+        onView(withTagValue(equalTo("home_sync"))).check(matches(isDisplayed()));
+        onView(withTagValue(equalTo("home_folder"))).check(matches(isDisplayed()));
+        onView(withText(containsString(TEXT_NAME))).check(doesNotExist());
+        onView(withText(containsString(APK_NAME))).check(doesNotExist());
+        onView(withTagValue(equalTo("recent_job_" + JOB_ID))).check(doesNotExist());
+    }
+
+    private void openMenu() {
+        onView(withTagValue(equalTo("menu_toggle"))).perform(click());
+        onView(withTagValue(equalTo("app_drawer"))).check(matches(isDisplayed()));
+        for (String route : new String[]{"home", "files", "pc_sync", "recent", "settings"})
+            onView(withTagValue(equalTo("menu_" + route))).check(matches(isDisplayed()));
+    }
+
+    private void navigate(String route) {
+        openMenu();
+        onView(withTagValue(equalTo("menu_" + route))).perform(click());
+        onView(withTagValue(equalTo("app_drawer"))).check(doesNotExist());
+        assertScreen(route);
+    }
+
+    private void assertCommandDraft() {
+        onView(withTagValue(equalTo("pc_query"))).check(matches(withText("지난 분기 보고서를 찾아줘")));
+        onView(withTagValue(equalTo("pc_edit_instruction"))).check(matches(withText("핵심 성과와 개선점을 구분해 정리해줘")));
+    }
+
+    private void scrollPageToTop() {
+        scenario.onActivity(activity -> {
+            ScrollView page = findScroll(activity.getWindow().getDecorView());
+            assertNotNull("A long page must remain scrollable", page);
+            page.scrollTo(0, 0);
+        });
+    }
+
+    private static ScrollView findScroll(View view) {
+        if (view instanceof ScrollView) return (ScrollView) view;
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int index = 0; index < group.getChildCount(); index++) {
+                ScrollView result = findScroll(group.getChildAt(index));
+                if (result != null) return result;
+            }
+        }
+        return null;
     }
 
     private void assertBrandVisible() {
@@ -186,8 +320,10 @@ public final class MobileUiScreenshotTest {
         return false;
     }
 
-    private void screenshot(String name) throws Exception {
-        assertBrandVisible();
+    private void screenshot(String name) throws Exception { screenshot(name, false); }
+
+    private void screenshot(String name, boolean menuOpen) throws Exception {
+        if (menuOpen) assertBrandVisibleBehindMenu(); else assertBrandVisible();
         // Espresso's idle state can precede presentation of a newly replaced view tree.
         // Wait on the test thread while the decor presents two actual animation frames.
         CountDownLatch presented = new CountDownLatch(1);
@@ -197,7 +333,7 @@ public final class MobileUiScreenshotTest {
         });
         assertTrue("The activity must present two frames before capture", presented.await(5, TimeUnit.SECONDS));
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
-        assertBrandVisible();
+        if (menuOpen) assertBrandVisibleBehindMenu(); else assertBrandVisible();
         Bitmap bitmap = InstrumentationRegistry.getInstrumentation().getUiAutomation().takeScreenshot();
         assertNotNull("The emulator must provide a real screenshot", bitmap);
         assertTrue("A phone screenshot must have a useful resolution", bitmap.getWidth() >= 600 && bitmap.getHeight() >= 1000);
@@ -208,5 +344,28 @@ public final class MobileUiScreenshotTest {
         try (FileOutputStream output = new FileOutputStream(new File(directory, prefix + "-" + name + ".png"))) {
             assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output));
         } finally { bitmap.recycle(); }
+    }
+
+    private void assertBrandVisibleBehindMenu() {
+        // Espresso correctly selects the focused popup root while the menu is open.
+        // The fixed Activity header is checked directly on its UI thread instead.
+        scenario.onActivity(activity -> {
+            TextView brand = exactText(activity.getWindow().getDecorView(), "DIANA");
+            assertNotNull("The fixed Activity header must retain DIANA", brand);
+            assertTrue("The brand must remain onscreen behind the anchored menu",
+                brand.isShown() && brand.getGlobalVisibleRect(new Rect()));
+        });
+    }
+
+    private static TextView exactText(View view, String expected) {
+        if (view instanceof TextView && expected.contentEquals(((TextView) view).getText())) return (TextView) view;
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int index = 0; index < group.getChildCount(); index++) {
+                TextView result = exactText(group.getChildAt(index), expected);
+                if (result != null) return result;
+            }
+        }
+        return null;
     }
 }
