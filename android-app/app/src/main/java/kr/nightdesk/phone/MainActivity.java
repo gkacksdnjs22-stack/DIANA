@@ -8,6 +8,8 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Gravity;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
@@ -35,7 +37,14 @@ public final class MainActivity extends Activity {
     private static final int PICK_FOLDER = 2201;
     private static final int PICK_UPLOAD = 2203;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private ForegroundRefresh foregroundRefresh;
     private LinearLayout root;
+    private LinearLayout recentJobs;
+    private ScrollView scroll;
+    private JSONArray displayedJobs = new JSONArray();
+    private JSONObject displayedSession;
+    private boolean resumed;
     private TextView status;
     private EditText urlField, codeField;
     private Button pairButton, syncButton, folderButton, disconnectButton, uploadPickButton, uploadSendButton, uploadCancelButton;
@@ -47,6 +56,10 @@ public final class MainActivity extends Activity {
     @Override protected void onCreate(@Nullable Bundle state) {
         super.onCreate(state);
         secureStore = new SecureStore(this);
+        foregroundRefresh = new ForegroundRefresh(new ForegroundRefresh.Scheduler() {
+            @Override public void post(Runnable task,long delayMs) { main.postDelayed(task,delayMs); }
+            @Override public void remove(Runnable task) { main.removeCallbacks(task); }
+        },()->busy,this::readUploadStatuses);
         Notifications.ensureChannel(this);
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 2202);
@@ -54,7 +67,9 @@ public final class MainActivity extends Activity {
         draw();
     }
 
-    @Override protected void onDestroy() { super.onDestroy(); worker.shutdownNow(); }
+    @Override protected void onResume() { super.onResume(); resumed=true; if(foregroundRefresh!=null)foregroundRefresh.start(); }
+    @Override protected void onPause() { resumed=false; if(foregroundRefresh!=null)foregroundRefresh.stop(); super.onPause(); }
+    @Override protected void onDestroy() { if(foregroundRefresh!=null)foregroundRefresh.stop(); super.onDestroy(); worker.shutdownNow(); }
 
     private int dp(float value) { return Math.round(value * getResources().getDisplayMetrics().density); }
     private TextView label(String value, int size, int color, boolean bold) {
@@ -64,9 +79,12 @@ public final class MainActivity extends Activity {
     }
     private void gap(int height) { View view = new View(this); root.addView(view, new LinearLayout.LayoutParams(1, dp(height))); }
     private Button button(String value) {
+        return button(root,value);
+    }
+    private Button button(LinearLayout parent,String value) {
         Button button = new Button(this); button.setText(value); button.setAllCaps(false); button.setTextColor(Color.WHITE);
         button.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.rgb(52,89,230)));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(52)); params.topMargin = dp(8); root.addView(button, params); return button;
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(52)); params.topMargin = dp(8); parent.addView(button, params); return button;
     }
     private EditText field(String hint, int inputType) {
         EditText field = new EditText(this); field.setSingleLine(true); field.setTextSize(15); field.setHint(hint); field.setInputType(inputType);
@@ -75,7 +93,8 @@ public final class MainActivity extends Activity {
     }
     private void draw() {
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(dp(22), dp(20), dp(22), dp(28)); root.setBackgroundColor(Color.rgb(247,248,252));
-        ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true); scroll.addView(root); setContentView(scroll);
+        recentJobs=null;
+        scroll = new ScrollView(this); scroll.setFillViewport(true); scroll.addView(root); setContentView(scroll);
         root.addView(label("DIANA", 29, Color.rgb(23,38,60), true));
         root.addView(label("PC의 문서와 생성 결과를 갤럭시에서 받고, 휴대폰 파일을 PC로 보냅니다.", 15, Color.rgb(75,87,105), false));
         status = label("연결 상태를 확인하는 중…", 14, Color.rgb(52,89,230), true); root.addView(status);
@@ -115,32 +134,13 @@ public final class MainActivity extends Activity {
         if(!copyError.isEmpty())root.addView(label("선택한 폴더 복사에 실패했습니다. 앱 내부 보관함에는 저장되어 있습니다.  "+copyError,13,Color.rgb(178,53,53),false));
         syncButton = button("지금 결과 확인"); syncButton.setOnClickListener(v -> syncNow());
         disconnectButton = button("연결 해제"); disconnectButton.setEnabled(!busy);
-        disconnectButton.setOnClickListener(v -> { if (busy) return; secureStore.clear(); SyncScheduler.configure(this); draw(); });
+        disconnectButton.setOnClickListener(v -> { if (busy) return; foregroundRefresh.stop(); secureStore.clear(); SyncScheduler.configure(this); draw(); });
         drawUpload(session);
         gap(12); root.addView(label("최근 작업", 20, Color.rgb(23,38,60), true));
-        JSONArray jobs = SyncEngine.cachedJobs(this);
-        if (jobs.length() == 0) root.addView(label("작업 결과가 아직 없습니다. PC 제어 화면에서 요청해 주세요.", 14, Color.rgb(75,87,105), false));
-        for (int index=0; index<Math.min(jobs.length(),15); index++) {
-            JSONObject job=jobs.optJSONObject(index); if(job==null) continue;
-            boolean overnight="overnight".equals(job.optString("kind"));
-            boolean upload="upload".equals(job.optString("kind"));
-            JSONObject request=job.optJSONObject("request");
-            String title=request==null ? "작업" : request.optString(upload?"filename":overnight?"subject":"query","작업");
-            String state=job.optString("state","대기");String saved=job.optString("phoneSavedAt","");
-            String visibleState=upload?uploadState(state):"download_ready".equals(state) ? (overnight ? (saved.isEmpty()?"갤럭시 저장 확인 대기":"갤럭시 저장 완료") : (saved.isEmpty()?"갤럭시 자동 저장 대기":"갤럭시 저장 완료")) : state;
-            root.addView(label((upload?"PC로 보내기 · ":"")+title+"  ·  "+visibleState+(!upload&&!saved.isEmpty()?"  ·  저장 확인됨":""),15,Color.rgb(35,47,67),true));
-            if(upload) {
-                if("pc_saved".equals(state)&&!job.optString("pcSavedAt").isEmpty()) root.addView(label("PC가 파일 저장과 해시 확인을 완료했습니다.",13,Color.rgb(75,87,105),false));
-                if("failed".equals(state))root.addView(label(job.optString("error","PC에 저장하지 못했습니다. 파일을 다시 선택해 보내 주세요."),13,Color.rgb(178,53,53),false));
-                continue;
-            }
-            JSONArray artifacts=job.optJSONArray("artifacts");if(artifacts==null) continue;
-            for(int item=0;item<artifacts.length();item++){
-                JSONObject artifact=artifacts.optJSONObject(item);if(artifact==null) continue;
-                String filename=artifact.optString("filename");
-                Button open=button("열기  ·  "+filename);open.setOnClickListener(v->openArtifact(job.optString("id"),artifact));
-            }
-        }
+        recentJobs=new LinearLayout(this);recentJobs.setOrientation(LinearLayout.VERTICAL);root.addView(recentJobs);
+        JSONArray cached=SyncEngine.cachedJobs(this);
+        displayedJobs=sameSession(displayedSession,session)?mergeUploadStatuses(cached,displayedJobs):cached;
+        displayedSession=session;drawRecentJobs();
         gap(12); root.addView(label("내 저장 파일", 20, Color.rgb(23,38,60), true));
         root.addView(label("최근 작업 목록에서 사라져도 갤럭시 앱에 보관된 문서는 이 목록에서 다시 열 수 있습니다.", 13, Color.rgb(102,112,130), false));
         JSONArray savedJobs = SyncEngine.cachedSaved(this);
@@ -160,8 +160,79 @@ public final class MainActivity extends Activity {
             Button more=button("저장된 작업 더 보기  ·  "+(savedJobs.length()-visibleSaved)+"개 남음");
             more.setOnClickListener(v->{visibleSaved+=15;draw();});
         }
-        showStatus(autoReceive.isChecked()?"연결됨 · 백그라운드에서 최대 15분 간격으로 확인합니다.":"연결됨 · 백그라운드 자동 확인이 꺼져 있습니다.",false);
+        showStatus(autoReceive.isChecked()?"연결됨 · 백그라운드는 기본 15분 주기이며 절전 설정에 따라 늦어질 수 있습니다.":"연결됨 · 백그라운드 자동 확인이 꺼져 있습니다.",false);
         syncButton.setEnabled(!busy);
+    }
+    private void drawRecentJobs() {
+        if(recentJobs==null)return;
+        recentJobs.removeAllViews();
+        if(displayedJobs.length()==0)recentJobs.addView(label("작업 결과가 아직 없습니다. PC 제어 화면에서 요청해 주세요.",14,Color.rgb(75,87,105),false));
+        for(int index=0;index<Math.min(displayedJobs.length(),15);index++) {
+            JSONObject job=displayedJobs.optJSONObject(index);if(job==null)continue;
+            boolean overnight="overnight".equals(job.optString("kind")),upload="upload".equals(job.optString("kind"));
+            JSONObject request=job.optJSONObject("request");
+            String title=request==null?"작업":request.optString(upload?"filename":overnight?"subject":"query","작업");
+            String state=job.optString("state","대기"),saved=job.optString("phoneSavedAt","");
+            String visibleState=upload?uploadState(state):"download_ready".equals(state)?(saved.isEmpty()?"갤럭시 저장 확인 대기":"갤럭시 저장 완료"):state;
+            recentJobs.addView(label((upload?"PC로 보내기 · ":"")+title+"  ·  "+visibleState+(!upload&&!saved.isEmpty()?"  ·  저장 확인됨":""),15,Color.rgb(35,47,67),true));
+            if(upload) {
+                if("pc_saved".equals(state)&&!job.optString("pcSavedAt").isEmpty())recentJobs.addView(label("PC가 파일 저장과 해시 확인을 완료했습니다.",13,Color.rgb(75,87,105),false));
+                if("failed".equals(state))recentJobs.addView(label(job.optString("error","PC에 저장하지 못했습니다. 파일을 다시 선택해 보내 주세요."),13,Color.rgb(178,53,53),false));
+                continue;
+            }
+            JSONArray artifacts=job.optJSONArray("artifacts");if(artifacts==null)continue;
+            for(int item=0;item<artifacts.length();item++) {
+                JSONObject artifact=artifacts.optJSONObject(item);if(artifact==null)continue;
+                Button open=button(recentJobs,"열기  ·  "+artifact.optString("filename"));open.setOnClickListener(v->openArtifact(job.optString("id"),artifact));
+            }
+        }
+    }
+    private static boolean sameSession(JSONObject left,JSONObject right) {
+        return left!=null&&right!=null&&left.optString("baseUrl").equals(right.optString("baseUrl"))&&
+            left.optString("phoneId").equals(right.optString("phoneId"))&&left.optString("phoneToken").equals(right.optString("phoneToken"));
+    }
+    private void readUploadStatuses(ForegroundRefresh.Completion completion) {
+        final JSONObject session;
+        try { session=secureStore.load(); }
+        catch(Exception error){completion.finish(false,false,null);return;}
+        if(session==null){completion.finish(false,false,null);return;}
+        worker.execute(()->{
+            try {
+                JSONArray remote=Api.request(session,"/api/jobs",null).getJSONArray("jobs");
+                boolean pending=false;
+                for(int i=0;i<remote.length();i++) {
+                    JSONObject job=remote.optJSONObject(i);
+                    if(job!=null&&"upload".equals(job.optString("kind"))&&("waiting_pc".equals(job.optString("state"))||"receiving_pc".equals(job.optString("state"))))pending=true;
+                }
+                final boolean waiting=pending;
+                main.post(()->completion.finish(waiting,false,()->applyUploadStatuses(session,remote)));
+            }catch(Exception error){main.post(()->completion.finish(false,true,null));}
+        });
+    }
+    private void applyUploadStatuses(JSONObject session,JSONArray remote) {
+        try {
+            if(!sameSession(session,secureStore.load())||recentJobs==null)return;
+            JSONArray combined=mergeUploadStatuses(displayedJobs,remote);
+            if(combined.toString().equals(displayedJobs.toString()))return;
+            displayedJobs=combined;
+            final ScrollView current=scroll;final int position=current.getScrollY();
+            drawRecentJobs();
+            current.post(()->{if(scroll==current&&!isFinishing()&&!isDestroyed())current.scrollTo(0,position);});
+        }catch(Exception ignored){/* Keep the last visible state during a reconnect. */}
+    }
+    private static JSONArray mergeUploadStatuses(JSONArray base,JSONArray observed) {
+        java.util.Map<String,JSONObject> uploads=new java.util.LinkedHashMap<>();
+        for(int i=0;i<observed.length();i++){JSONObject job=observed.optJSONObject(i);if(job!=null&&"upload".equals(job.optString("kind")))uploads.put(job.optString("id"),job);}
+        JSONArray updated=new JSONArray();java.util.Set<String> seen=new java.util.HashSet<>();
+        for(int i=0;i<base.length();i++) {
+            JSONObject old=base.optJSONObject(i);if(old==null)continue;
+            String id=old.optString("id");seen.add(id);JSONObject fresh=uploads.get(id);
+            updated.put(fresh!=null&&fresh.optString("updatedAt").compareTo(old.optString("updatedAt"))>=0?fresh:old);
+        }
+        JSONArray combined=new JSONArray();
+        for(JSONObject job:uploads.values())if(!seen.contains(job.optString("id")))combined.put(job);
+        for(int i=0;i<updated.length();i++)combined.put(updated.opt(i));
+        return combined;
     }
     private void drawUpload(JSONObject session) {
         gap(12); root.addView(label("휴대폰 파일을 PC로 보내기",20,Color.rgb(23,38,60),true));
@@ -198,7 +269,7 @@ public final class MainActivity extends Activity {
         if(autoReceive!=null) autoReceive.setEnabled(!value);
     }
     private void uploadFinished(String message,boolean error) {
-        runOnUiThread(()->{busy=false;if(isFinishing()||isDestroyed())return;draw();showStatus(message,error);});
+        runOnUiThread(()->{busy=false;if(isFinishing()||isDestroyed())return;draw();showStatus(message,error);foregroundRefresh.refresh();});
     }
     private void chooseUpload() {
         if(busy)return;
@@ -231,7 +302,7 @@ public final class MainActivity extends Activity {
                     SyncEngine.cache(this,new JSONObject().put("jobs",jobs));
                 }catch(Exception ignored){/* The server acknowledgement remains authoritative. */}
                 boolean failed="failed".equals(job.optString("state"));
-                uploadFinished(failed?job.optString("error","PC에 저장하지 못했습니다. 파일을 다시 선택해 보내 주세요."):"pc_saved".equals(job.optString("state"))?"PC가 파일을 저장하고 해시를 확인했습니다.":"서버가 파일을 받았습니다. PC 저장은 아직 확인되지 않았습니다. ‘지금 결과 확인’에서 진행 상태를 확인하세요.",failed);
+                uploadFinished(failed?job.optString("error","PC에 저장하지 못했습니다. 파일을 다시 선택해 보내 주세요."):"pc_saved".equals(job.optString("state"))?"PC가 파일을 저장하고 해시를 확인했습니다.":"서버가 파일을 받았습니다. 이 화면에서 PC 저장 상태를 자동으로 확인합니다.",failed);
             }catch(Exception error){uploadFinished(error instanceof UploadSender.UploadException||error instanceof Api.ApiException?error.getMessage():"파일 전송을 확인하지 못했습니다. 준비된 파일로 재시도해 주세요.",true);}
         });
     }
@@ -253,7 +324,7 @@ public final class MainActivity extends Activity {
                 JSONObject response=Api.request(safeBase,"/api/phone/pair",null,new JSONObject().put("code",code).put("deviceName",Build.MANUFACTURER+" "+Build.MODEL));
                 JSONObject session=new JSONObject().put("baseUrl",safeBase).put("phoneToken",response.getString("phoneToken")).put("phoneId",response.getString("phoneId")).put("firebase",response.optJSONObject("firebase"));
                 secureStore.save(session);PushSupport.initialize(this);SyncScheduler.configure(this);
-                runOnUiThread(()->{busy=false;draw();showStatus("휴대폰을 연결했습니다.",false);});
+                runOnUiThread(()->{busy=false;if(isFinishing()||isDestroyed())return;draw();showStatus("휴대폰을 연결했습니다.",false);if(resumed){foregroundRefresh.start();foregroundRefresh.refresh();}});
             } catch(Exception error){runOnUiThread(()->{busy=false;pairButton.setEnabled(true);showStatus(error.getMessage()==null?"연결에 실패했습니다.":error.getMessage(),true);});}
         });
     }
@@ -262,8 +333,8 @@ public final class MainActivity extends Activity {
         worker.execute(()->{
             try {
                 int count=SyncEngine.sync(this,()->Thread.currentThread().isInterrupted());
-                runOnUiThread(()->{busy=false;draw();showStatus(count>0?count+"개 결과를 갤럭시에 저장하고 검증했습니다.":"최근 작업 상태를 갱신했습니다. 저장한 결과는 아래에서 열 수 있습니다.",false);});
-            }catch(Exception error){runOnUiThread(()->{busy=false;draw();showStatus(error.getMessage()==null?"동기화에 실패했습니다.":error.getMessage(),true);});}
+                runOnUiThread(()->{busy=false;draw();showStatus(count>0?count+"개 결과를 갤럭시에 저장하고 검증했습니다.":"최근 작업 상태를 갱신했습니다. 저장한 결과는 아래에서 열 수 있습니다.",false);foregroundRefresh.refresh();});
+            }catch(Exception error){runOnUiThread(()->{busy=false;draw();showStatus(error.getMessage()==null?"동기화에 실패했습니다.":error.getMessage(),true);foregroundRefresh.refresh();});}
         });
     }
     private void chooseFolder() {
