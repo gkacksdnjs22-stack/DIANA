@@ -5,5 +5,11 @@ node_modules/
 .local/
 **/휴대폰에서_받은파일/
 앱-설치/*.zip
+앱-설치/*.apk
+**/google-services.json
+**/firebase-service-account.json
+*.keystore
+*.jks
+*.p12
 *.log
 앱-설치/이어-debug.apk

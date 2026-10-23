@@ -26,29 +26,46 @@ import java.util.function.BooleanSupplier;
 
 final class SyncEngine {
     private static final int MAX_SAVED_JOBS = 1000;
+    private static final SyncGate SYNC_GATE = new SyncGate();
+    private static final Object CACHE_LOCK = new Object();
+
+    private static byte[] readCache(Context c, String name, int limit) throws Exception {
+        // AtomicFile is not thread-safe. Only local I/O holds this short lock;
+        // UI reads never wait for the network/download gate.
+        synchronized (CACHE_LOCK) {
+            try (InputStream input = new AtomicFile(new File(c.getFilesDir(), name)).openRead()) {
+                byte[] bytes = input.readAllBytes();
+                if (bytes.length > limit) throw new IOException("작업 기록이 너무 큽니다.");
+                return bytes;
+            }
+        }
+    }
+    private static void writeCache(Context c, String name, byte[] bytes) throws Exception {
+        synchronized (CACHE_LOCK) {
+            AtomicFile file = new AtomicFile(new File(c.getFilesDir(), name)); FileOutputStream output = null;
+            try { output = file.startWrite(); output.write(bytes); file.finishWrite(output); }
+            catch (Exception error) { if (output != null) file.failWrite(output); throw error; }
+        }
+    }
     static JSONArray cachedJobs(Context c) {
-        try (InputStream input = new AtomicFile(new File(c.getFilesDir(), "jobs.json")).openRead()) {
-            byte[] bytes = input.readAllBytes(); if (bytes.length > 2 * 1024 * 1024) return new JSONArray();
+        try {
+            byte[] bytes = readCache(c, "jobs.json", 2 * 1024 * 1024);
             JSONArray jobs = new JSONObject(new String(bytes, StandardCharsets.UTF_8)).optJSONArray("jobs");
             return jobs == null ? new JSONArray() : jobs;
         } catch (Exception ignored) { return new JSONArray(); }
     }
     static void cache(Context c, JSONObject jobs) throws Exception {
-        AtomicFile file = new AtomicFile(new File(c.getFilesDir(), "jobs.json")); FileOutputStream output = null;
-        try { output = file.startWrite(); output.write(jobs.toString().getBytes(StandardCharsets.UTF_8)); file.finishWrite(output); }
-        catch (Exception error) { if (output != null) file.failWrite(output); throw error; }
+        writeCache(c, "jobs.json", jobs.toString().getBytes(StandardCharsets.UTF_8));
     }
     static JSONArray cachedSaved(Context c) {
-        try (InputStream input = new AtomicFile(new File(c.getFilesDir(), "saved-jobs.json")).openRead()) {
-            byte[] bytes = input.readAllBytes(); if (bytes.length > 8 * 1024 * 1024) return new JSONArray();
+        try {
+            byte[] bytes = readCache(c, "saved-jobs.json", 8 * 1024 * 1024);
             JSONArray saved = new JSONObject(new String(bytes, StandardCharsets.UTF_8)).optJSONArray("jobs");
             return saved == null ? new JSONArray() : saved;
         } catch (Exception ignored) { return new JSONArray(); }
     }
     private static void cacheSaved(Context c, JSONArray jobs) throws Exception {
-        AtomicFile file = new AtomicFile(new File(c.getFilesDir(), "saved-jobs.json")); FileOutputStream output = null;
-        try { output = file.startWrite(); output.write(new JSONObject().put("jobs", jobs).toString().getBytes(StandardCharsets.UTF_8)); file.finishWrite(output); }
-        catch (Exception error) { if (output != null) file.failWrite(output); throw error; }
+        writeCache(c, "saved-jobs.json", new JSONObject().put("jobs", jobs).toString().getBytes(StandardCharsets.UTF_8));
     }
     private static JSONArray rememberSaved(JSONArray history, JSONObject job, JSONArray artifacts) throws Exception {
         JSONObject request = job.optJSONObject("request");
@@ -155,13 +172,16 @@ final class SyncEngine {
         } catch (Exception error) { document.delete(); throw error; }
     }
     static int sync(Context c, BooleanSupplier stopped) throws Exception {
+        return SYNC_GATE.run(stopped, () -> syncLocked(c, stopped));
+    }
+    private static int syncLocked(Context c, BooleanSupplier stopped) throws Exception {
         JSONObject session = new SecureStore(c).load(); if (session == null) return 0;
         JSONObject listing = Api.request(session, "/api/jobs", null); JSONArray jobs = listing.optJSONArray("jobs");
         if (jobs == null) throw new IOException("작업 목록 응답이 올바르지 않습니다.");
         int received = 0; String firstError = null; String exportError = null;
         JSONArray savedHistory = cachedSaved(c); boolean historyChanged = false;
         for (int index = 0; index < jobs.length(); index++) {
-            if (stopped.getAsBoolean()) throw new InterruptedIOException("동기화가 중단되었습니다.");
+            if (stopped.getAsBoolean() || Thread.currentThread().isInterrupted()) throw new InterruptedIOException("동기화가 중단되었습니다.");
             JSONObject job = jobs.getJSONObject(index); JSONArray artifacts;
             try {
                 artifacts = availableArtifacts(job);
@@ -184,7 +204,7 @@ final class SyncEngine {
                     JSONObject artifact = artifacts.getJSONObject(item);
                     if (!verified(FileSafety.artifact(c.getFilesDir(), jobId, artifact.getString("id"), artifact.getString("filename")), artifact)) throw new IOException("전송 확인 전 파일 검증에 실패했습니다.");
                 }
-                if (stopped.getAsBoolean()) throw new InterruptedIOException("동기화가 중단되었습니다.");
+                if (stopped.getAsBoolean() || Thread.currentThread().isInterrupted()) throw new InterruptedIOException("동기화가 중단되었습니다.");
                 String savedAt = Instant.now().toString();
                 JSONObject acknowledgement = Api.request(session, "/api/phone/jobs/" + jobId + "/received", new JSONObject().put("artifacts", receipt).put("savedAt", savedAt));
                 job.put("phoneSavedAt", acknowledgement.optString("phoneSavedAt", savedAt));

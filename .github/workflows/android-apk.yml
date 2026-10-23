@@ -45,12 +45,20 @@ jobs:
 
       - name: Test and build installable debug APK
         working-directory: android-app
-        run: gradle --no-daemon --stacktrace :app:testDebugUnitTest :app:assembleDebug
+        run: gradle --no-daemon --stacktrace :app:testDebugUnitTest :app:assembleDebug :install-check:assembleDebug
 
       - name: Publish APK to workflow artifacts
         uses: actions/upload-artifact@v4
         with:
           name: DIANA-debug-apk
           path: android-app/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish separate package installer check APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIANA-install-check-apk
+          path: android-app/install-check/build/outputs/apk/debug/install-check-debug.apk
           if-no-files-found: error
           retention-days: 14

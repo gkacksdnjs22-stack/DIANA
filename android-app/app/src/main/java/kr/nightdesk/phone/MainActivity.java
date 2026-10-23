@@ -14,6 +14,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.text.InputType;
@@ -46,6 +47,10 @@ public final class MainActivity extends Activity {
     private JSONObject displayedSession;
     private boolean resumed;
     private TextView status;
+    private TextView pushStatus;
+    private final SharedPreferences.OnSharedPreferenceChangeListener pushStatusChanged=(settings,key)->{
+        if("push_status".equals(key)&&resumed&&pushStatus!=null)pushStatus.setText("빠른 수신 알림: "+settings.getString(key,"연결 확인 중"));
+    };
     private EditText urlField, codeField;
     private Button pairButton, syncButton, folderButton, disconnectButton, uploadPickButton, uploadSendButton, uploadCancelButton;
     private CheckBox autoReceive;
@@ -67,8 +72,16 @@ public final class MainActivity extends Activity {
         draw();
     }
 
-    @Override protected void onResume() { super.onResume(); resumed=true; if(foregroundRefresh!=null)foregroundRefresh.start(); }
-    @Override protected void onPause() { resumed=false; if(foregroundRefresh!=null)foregroundRefresh.stop(); super.onPause(); }
+    @Override protected void onResume() {
+        super.onResume();resumed=true;
+        getSharedPreferences("settings",0).registerOnSharedPreferenceChangeListener(pushStatusChanged);
+        if(pushStatus!=null)pushStatus.setText("빠른 수신 알림: "+getSharedPreferences("settings",0).getString("push_status","연결 확인 중"));
+        PushSupport.initialize(this);
+        try { if(!busy&&recentJobs!=null&&sameSession(displayedSession,secureStore.load())) { displayedJobs=mergeUploadStatuses(SyncEngine.cachedJobs(this),displayedJobs);drawRecentJobs(); } }
+        catch(Exception ignored){/* Keep the visible snapshot until the next authenticated refresh. */}
+        if(foregroundRefresh!=null)foregroundRefresh.start();
+    }
+    @Override protected void onPause() { resumed=false;getSharedPreferences("settings",0).unregisterOnSharedPreferenceChangeListener(pushStatusChanged); if(foregroundRefresh!=null)foregroundRefresh.stop(); super.onPause(); }
     @Override protected void onDestroy() { if(foregroundRefresh!=null)foregroundRefresh.stop(); super.onDestroy(); worker.shutdownNow(); }
 
     private int dp(float value) { return Math.round(value * getResources().getDisplayMetrics().density); }
@@ -94,6 +107,7 @@ public final class MainActivity extends Activity {
     private void draw() {
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(dp(22), dp(20), dp(22), dp(28)); root.setBackgroundColor(Color.rgb(247,248,252));
         recentJobs=null;
+        pushStatus=null;
         scroll = new ScrollView(this); scroll.setFillViewport(true); scroll.addView(root); setContentView(scroll);
         root.addView(label("DIANA", 29, Color.rgb(23,38,60), true));
         root.addView(label("PC의 문서와 생성 결과를 갤럭시에서 받고, 휴대폰 파일을 PC로 보냅니다.", 15, Color.rgb(75,87,105), false));
@@ -119,6 +133,7 @@ public final class MainActivity extends Activity {
         String base = session.optString("baseUrl");
         root.addView(label("PC에 연결됨", 20, Color.rgb(23,38,60), true));
         root.addView(label(base, 13, Color.rgb(80,91,110), false));
+        pushStatus=label("빠른 수신 알림: "+getSharedPreferences("settings",0).getString("push_status","연결 확인 중"),13,Color.rgb(80,91,110),false);root.addView(pushStatus);
         CheckBox folder = new CheckBox(this); folder.setText("선택한 폴더에도 결과 복사"); folder.setChecked(getPreferences(0).getString("export_tree", null) != null); folder.setEnabled(!busy); root.addView(folder);
         folderButton = button(folder.isChecked() ? "저장 폴더 변경" : "갤럭시 저장 폴더 선택");
         folderButton.setEnabled(!busy);
@@ -152,7 +167,7 @@ public final class MainActivity extends Activity {
             JSONArray artifacts=savedJob.optJSONArray("artifacts");if(artifacts==null)continue;
             for (int item=0;item<artifacts.length();item++) {
                 JSONObject artifact=artifacts.optJSONObject(item);if(artifact==null)continue;
-                Button open=button("저장 파일 열기  ·  "+artifact.optString("filename"));
+                Button open=button((ApkInstaller.isApk(artifact.optString("filename"))?"APK 설치  ·  ":"저장 파일 열기  ·  ")+artifact.optString("filename"));
                 open.setOnClickListener(v->openArtifact(jobId,artifact));
             }
         }
@@ -183,7 +198,7 @@ public final class MainActivity extends Activity {
             JSONArray artifacts=job.optJSONArray("artifacts");if(artifacts==null)continue;
             for(int item=0;item<artifacts.length();item++) {
                 JSONObject artifact=artifacts.optJSONObject(item);if(artifact==null)continue;
-                Button open=button(recentJobs,"열기  ·  "+artifact.optString("filename"));open.setOnClickListener(v->openArtifact(job.optString("id"),artifact));
+                Button open=button(recentJobs,(ApkInstaller.isApk(artifact.optString("filename"))?"APK 설치  ·  ":"열기  ·  ")+artifact.optString("filename"));open.setOnClickListener(v->openArtifact(job.optString("id"),artifact));
             }
         }
     }
@@ -349,6 +364,7 @@ public final class MainActivity extends Activity {
         }else if(code==PICK_FOLDER&&result==Activity.RESULT_OK&&data!=null){Uri uri=data.getData();try{getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);getPreferences(0).edit().putString("export_tree",uri.toString()).apply();draw();showStatus("선택한 폴더에 결과를 복사합니다.",false);}catch(Exception error){showStatus("폴더 권한을 저장하지 못했습니다.",true);}}
     }
     private void clearFolder(){String previous=getPreferences(0).getString("export_tree",null);if(previous!=null){try{getContentResolver().releasePersistableUriPermission(Uri.parse(previous),Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);}catch(Exception ignored){}getPreferences(0).edit().remove("export_tree").apply();}draw();}
-    private void openArtifact(String jobId,JSONObject artifact){try{File file=FileSafety.artifact(getFilesDir(),jobId,artifact.getString("id"),artifact.getString("filename"));if(!SyncEngine.verified(file,artifact))throw new Exception("파일 무결성 확인이 필요합니다. 다시 동기화해 주세요.");Uri uri=FileProvider.getUriForFile(this,getPackageName()+".files",file);Intent open=new Intent(Intent.ACTION_VIEW).setDataAndType(uri,artifact.optString("mime","application/octet-stream")).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);startActivity(Intent.createChooser(open,"파일을 열 앱 선택"));}catch(Exception error){showStatus(error.getMessage()==null?"파일을 열 수 없습니다.":error.getMessage(),true);}}
+    private void openArtifact(String jobId,JSONObject artifact){try{File file=FileSafety.artifact(getFilesDir(),jobId,artifact.getString("id"),artifact.getString("filename"));if(!SyncEngine.verified(file,artifact))throw new Exception("파일 무결성 확인이 필요합니다. 다시 동기화해 주세요.");if(ApkInstaller.isApk(artifact.getString("filename"))){ApkInstaller.open(this,file);return;}Uri uri=FileProvider.getUriForFile(this,getPackageName()+".files",file);Intent open=new Intent(Intent.ACTION_VIEW).setDataAndType(uri,artifact.optString("mime","application/octet-stream")).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);startActivity(Intent.createChooser(open,"파일을 열 앱 선택"));}catch(Exception error){showStatus(error.getMessage()==null?"파일을 열 수 없습니다. APK 설치 권한과 Android 설치 프로그램을 확인해 주세요.":error.getMessage(),true);}}
     private void showStatus(String message,boolean error){if(status!=null){status.setText(message);status.setTextColor(error?Color.rgb(178,53,53):Color.rgb(52,89,230));}}
 }
+

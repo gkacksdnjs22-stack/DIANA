@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DIANA 설치 연결 확인</string>
+    <string name="description">설치 연결 확인용 앱입니다.\n\nDIANA와 다른 앱의 APK가 휴대폰의 패키지 설치 프로그램에서 정상적으로 열리는지 확인하기 위해 만들었습니다.\n\n네트워크 연결이나 파일 접근 없이 이 안내문만 표시합니다. 확인 후 이 앱을 삭제해도 됩니다.</string>
+</resources>
