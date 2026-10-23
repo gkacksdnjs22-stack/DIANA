@@ -28,6 +28,54 @@ final class SyncEngine {
     private static final int MAX_SAVED_JOBS = 1000;
     private static final SyncGate SYNC_GATE = new SyncGate();
     private static final Object CACHE_LOCK = new Object();
+    enum ExternalCopyState { NOT_SELECTED, PENDING, COPIED, FAILED }
+
+    // UI-only presence check. Actual opening, receipts and folder copies still hash the file.
+    static boolean hasLocalArtifact(Context c, String jobId, JSONObject artifact) {
+        try {
+            validateManifest(artifact);
+            File target = FileSafety.artifact(c.getFilesDir(), jobId, artifact.getString("id"), artifact.getString("filename"));
+            return target.isFile() && target.length() == artifact.getLong("bytes");
+        } catch (Exception ignored) { return false; }
+    }
+    static String selectedFolderLabel(Context c) {
+        String selected = c.getSharedPreferences("MainActivity", 0).getString("export_tree", null);
+        if (selected == null || selected.isEmpty()) return "";
+        // Decode the tree ID locally. Querying a document provider can block the UI.
+        try {
+            String documentId = Uri.parse(selected).getLastPathSegment();
+            if (documentId == null || documentId.isEmpty()) return "선택한 폴더";
+            int separator = documentId.indexOf(':');
+            String path = separator >= 0 ? documentId.substring(separator + 1) : documentId;
+            if (path.isEmpty()) return "내장 저장공간";
+            path = path.replace("/", " › ").replaceAll("[\\p{Cntrl}]", "");
+            if (path.isEmpty()) return "선택한 폴더";
+            return path.length() > 96 ? "…" + path.substring(path.length() - 95) : path;
+        } catch (Exception ignored) { return "선택한 폴더"; }
+    }
+    private static String externalCopyKey(String selected, String jobId, JSONObject artifact) throws Exception {
+        validateManifest(artifact);
+        if (!FileSafety.UUID.matcher(jobId).matches()) throw new IOException("작업 정보를 확인해 주세요.");
+        return FolderCopyKey.of(selected, jobId, artifact.getString("id"), artifact.getString("sha256"), artifact.getLong("bytes"));
+    }
+    static ExternalCopyState externalCopyState(Context c, String jobId, JSONObject artifact) {
+        SharedPreferences settings = c.getSharedPreferences("MainActivity", 0);
+        String selected = settings.getString("export_tree", null);
+        if (selected == null || selected.isEmpty()) return ExternalCopyState.NOT_SELECTED;
+        try {
+            String key = externalCopyKey(selected, jobId, artifact);
+            if (!settings.getString(key + "_error", "").isEmpty()) return ExternalCopyState.FAILED;
+            // A cached, previously hash-verified copy; no provider I/O or hashing on the UI thread.
+            return settings.getString(key, "").isEmpty() ? ExternalCopyState.PENDING : ExternalCopyState.COPIED;
+        } catch (Exception ignored) { return ExternalCopyState.PENDING; }
+    }
+    static String externalCopyError(Context c, String jobId, JSONObject artifact) {
+        SharedPreferences settings = c.getSharedPreferences("MainActivity", 0);
+        String selected = settings.getString("export_tree", null);
+        if (selected == null || selected.isEmpty()) return "";
+        try { return settings.getString(externalCopyKey(selected, jobId, artifact) + "_error", ""); }
+        catch (Exception ignored) { return ""; }
+    }
 
     private static byte[] readCache(Context c, String name, int limit) throws Exception {
         // AtomicFile is not thread-safe. Only local I/O holds this short lock;
@@ -148,19 +196,44 @@ final class SyncEngine {
         finally { connection.disconnect(); }
     }
     private static void exportCopy(Context c, String jobId, JSONObject artifact, File source) throws Exception {
-        SharedPreferences settings = c.getSharedPreferences("MainActivity", 0); String selected = settings.getString("export_tree", null); if (selected == null) return;
-        String key = "exported_" + jobId + "_" + artifact.getString("id");
-        String previous = settings.getString(key, null);
-        if (previous != null) {
-            try (InputStream input = c.getContentResolver().openInputStream(Uri.parse(previous))) {
-                if (input != null && FileSafety.digest(input).equalsIgnoreCase(artifact.getString("sha256"))) return;
-            } catch (Exception ignored) { /* Recreate a missing copy without overwriting other files. */ }
-        }
-        DocumentFile directory = DocumentFile.fromTreeUri(c, Uri.parse(selected));
-        if (directory == null || !directory.canWrite()) throw new IOException("선택한 저장 폴더 권한을 다시 허용해 주세요.");
-        DocumentFile document = directory.createFile(artifact.optString("mime", "application/octet-stream"), jobId.substring(0, 8) + "_" + artifact.getString("filename"));
-        if (document == null) throw new IOException("선택한 폴더에 복사하지 못했습니다.");
+        SharedPreferences settings = c.getSharedPreferences("MainActivity", 0);
+        String selected = settings.getString("export_tree", null); if (selected == null || selected.isEmpty()) return;
+        String key = externalCopyKey(selected, jobId, artifact);
+        String legacyKey = "exported_" + jobId + "_" + artifact.getString("id");
+        DocumentFile document = null;
         try {
+            String previous = settings.getString(key, null);
+            if (previous != null) {
+                try (InputStream input = c.getContentResolver().openInputStream(Uri.parse(previous))) {
+                    if (input != null && FileSafety.digest(input).equalsIgnoreCase(artifact.getString("sha256"))) {
+                        settings.edit().remove(key + "_error").remove(legacyKey).apply();
+                        return;
+                    }
+                } catch (Exception ignored) { /* Recreate a missing copy without overwriting other files. */ }
+                settings.edit().remove(key).apply();
+            }
+            // Legacy exported_* entries do not identify their destination. Never let one
+            // skip a copy to a newly selected folder; preserve the old file itself.
+            DocumentFile directory = DocumentFile.fromTreeUri(c, Uri.parse(selected));
+            if (directory == null || !directory.canWrite()) throw new IOException("선택한 저장 폴더 권한을 다시 허용해 주세요.");
+            String filename = jobId.substring(0, 8) + "_" + artifact.getString("filename");
+            if (settings.contains(legacyKey)) {
+                // Adopt a legacy copy only by finding and verifying it INSIDE the
+                // current tree, never by trusting the unbound legacy URI.
+                try {
+                    DocumentFile existing = directory.findFile(filename);
+                    if (existing != null && existing.isFile()) {
+                        try (InputStream input = c.getContentResolver().openInputStream(existing.getUri())) {
+                            if (input != null && FileSafety.digest(input).equalsIgnoreCase(artifact.getString("sha256"))) {
+                                settings.edit().putString(key, existing.getUri().toString()).remove(key + "_error").remove(legacyKey).apply();
+                                return;
+                            }
+                        }
+                    }
+                } catch (Exception ignored) { /* Create a fresh copy without replacing another file. */ }
+            }
+            document = directory.createFile(artifact.optString("mime", "application/octet-stream"), filename);
+            if (document == null) throw new IOException("선택한 폴더에 복사하지 못했습니다.");
             try (InputStream input = new FileInputStream(source); OutputStream output = c.getContentResolver().openOutputStream(document.getUri(), "w")) {
                 if (output == null) throw new IOException("복사할 파일을 열지 못했습니다.");
                 byte[] bytes = new byte[16384]; int count; while ((count = input.read(bytes)) != -1) output.write(bytes, 0, count);
@@ -168,8 +241,12 @@ final class SyncEngine {
             try (InputStream input = c.getContentResolver().openInputStream(document.getUri())) {
                 if (input == null || !FileSafety.digest(input).equalsIgnoreCase(artifact.getString("sha256"))) throw new IOException("폴더 복사본을 검증하지 못했습니다.");
             }
-            settings.edit().putString(key, document.getUri().toString()).apply();
-        } catch (Exception error) { document.delete(); throw error; }
+            settings.edit().putString(key, document.getUri().toString()).remove(key + "_error").remove(legacyKey).apply();
+        } catch (Exception error) {
+            settings.edit().remove(key).putString(key + "_error", "폴더 저장에 실패했습니다. 폴더 권한을 확인한 뒤 다시 동기화해 주세요.").apply();
+            if (document != null) { try { document.delete(); } catch (Exception ignored) { } }
+            throw error;
+        }
     }
     static int sync(Context c, BooleanSupplier stopped) throws Exception {
         return SYNC_GATE.run(stopped, () -> syncLocked(c, stopped));
