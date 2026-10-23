@@ -6,6 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { scanDocuments, resolveDocumentRoot, validateAttachment, readVerifiedArtifact } from './documents.mjs';
 import { searchDocuments } from './search.mjs';
 import { runOvernight } from './overnight.mjs';
+import { receiveIncomingOnce } from './incoming.mjs';
 
 const PROJECT_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const JOB_ID = /^[A-Za-z0-9_-]{1,128}$/;
@@ -97,7 +98,7 @@ async function prepareAttachment(stateDir, job, config, { includeBytes = false }
 function publicError(error, env) {
   let message = error instanceof Error ? error.message : 'Agent request failed.';
   if (error?.syscall) message = `Local document or state access failed (${error.code || 'filesystem error'}).`;
-  for (const secret of [env.AGENT_TOKEN, env.OPENAI_API_KEY, env.SMTP_PASSWORD, env.SMTP_ACCESS_TOKEN]) {
+  for (const secret of [env.AGENT_TOKEN, env.OPENAI_API_KEY, env.GROQ_API_KEY, env.GROQ_OPENAI_KEY, env.SMTP_PASSWORD, env.SMTP_ACCESS_TOKEN]) {
     if (secret) message = message.replaceAll(secret, '[redacted]');
   }
   return message.slice(0, 300);
@@ -129,7 +130,11 @@ export async function runOnce({ env = process.env, fetchImpl = fetch, mailSender
       const scan = await scanDocuments({ documentRoot: config.documentRoot });
       const result = await searchDocuments(job.query, scan.documents, { env, fetchImpl, signal });
       await saveSelection(stateDir, job, scan, result);
-      await request(`/api/agent/jobs/${job.id}/candidates`, { method: 'POST', body: result });
+      // The deployed protocol's legacy "openai" value means AI search. Keep
+      // the actual provider in local results while older servers accept Groq.
+      await request(`/api/agent/jobs/${job.id}/candidates`, { method: 'POST', body: {
+        mode: result.mode === 'groq' ? 'openai' : result.mode, candidates: result.candidates,
+      } });
       return { idle: false, jobId: job.id, action: 'search', ...result };
     } catch (error) {
       const message = publicError(error, env);
@@ -189,8 +194,24 @@ export async function runAgent({ env = process.env, fetchImpl = fetch, mailSende
   const config = readAgentConfig(env);
   let failures = 0;
   let catalogAt = 0;
+  let incomingAt = 0;
   do {
     try {
+      if (Date.now() >= incomingAt) {
+        try {
+          const incoming = await receiveIncomingOnce({ config, fetchImpl, signal });
+          incomingAt = Date.now() + (incoming.unsupported ? 60_000 : config.pollMs);
+          if (!incoming.idle) {
+            logger.log(`Agent receive: ${incoming.status}`);
+            if (incoming.status === 'pc_saved') catalogAt = 0;
+            if (once) return incoming;
+          }
+        } catch (error) {
+          if (signal?.aborted) return;
+          incomingAt = Date.now() + Math.max(10_000, config.pollMs);
+          logger.error('Agent receive: 휴대폰 파일 수신을 다시 확인합니다.');
+        }
+      }
       if (Date.now() >= catalogAt) {
         const catalog = await scanDocuments({documentRoot:config.documentRoot});
         await apiRequest(config,'/api/agent/catalog',{fetchImpl,signal,method:'POST',body:{documents:catalog.documents.map(document=>({

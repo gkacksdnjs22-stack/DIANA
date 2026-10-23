@@ -12,7 +12,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen.canvas import Canvas
 
@@ -95,17 +95,18 @@ def render_report(data, output_path, regular, bold):
     story.extend([summary_box, Spacer(1, 5 * mm)])
     for section in report.get('sections', []):
         story.extend([Paragraph(para_text(section['heading']), styles['section']), Paragraph(para_text(section['text']), styles['body'])])
-        for evidence in section.get('evidence', []):
-            story.append(Paragraph('원문 근거<br/>' + para_text(evidence), styles['evidence']))
+        evidence = section.get('evidence', [])
+        if evidence:
+            story.append(Paragraph('원문 근거<br/>' + '<br/>'.join(para_text(item) for item in evidence), styles['evidence']))
     story.append(Paragraph('확인 범위와 한계', styles['section']))
     for limitation in report.get('limitations', []):
         story.append(Paragraph('•  ' + para_text(limitation), styles['limitation']))
-    story.extend([
-        Spacer(1, 5 * mm), Paragraph('원문 및 검증 정보', styles['summary_head']),
+    story.append(KeepTogether([
+        Spacer(1, 3 * mm), Paragraph('원문 및 검증 정보', styles['summary_head']),
         Paragraph('파일: ' + para_text(source['filename']), styles['small']),
         Paragraph('원문 SHA-256: ' + para_text(source['sha256']), styles['small']),
         Paragraph('이 문서는 지정한 원문으로 작성했습니다. 외부 자료를 통한 사실 확인은 수행하지 않았으며 원본은 보존했습니다.', styles['small']),
-    ])
+    ]))
     document.build(story, onFirstPage=page, onLaterPages=page)
 
 

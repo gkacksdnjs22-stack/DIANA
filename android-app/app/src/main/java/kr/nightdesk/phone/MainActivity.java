@@ -2,6 +2,7 @@ package kr.nightdesk.phone;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -32,11 +33,12 @@ import java.util.concurrent.Executors;
 /** Minimal first-party Android companion. Tokens remain in Android Keystore. */
 public final class MainActivity extends Activity {
     private static final int PICK_FOLDER = 2201;
+    private static final int PICK_UPLOAD = 2203;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private LinearLayout root;
     private TextView status;
     private EditText urlField, codeField;
-    private Button pairButton, syncButton, folderButton;
+    private Button pairButton, syncButton, folderButton, disconnectButton, uploadPickButton, uploadSendButton, uploadCancelButton;
     private CheckBox autoReceive;
     private SecureStore secureStore;
     private volatile boolean busy;
@@ -75,7 +77,7 @@ public final class MainActivity extends Activity {
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(dp(22), dp(20), dp(22), dp(28)); root.setBackgroundColor(Color.rgb(247,248,252));
         ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true); scroll.addView(root); setContentView(scroll);
         root.addView(label("DIANA", 29, Color.rgb(23,38,60), true));
-        root.addView(label("PC에서 찾은 문서, 보고서와 발표자료를 갤럭시에 안전하게 받습니다.", 15, Color.rgb(75,87,105), false));
+        root.addView(label("PC의 문서와 생성 결과를 갤럭시에서 받고, 휴대폰 파일을 PC로 보냅니다.", 15, Color.rgb(75,87,105), false));
         status = label("연결 상태를 확인하는 중…", 14, Color.rgb(52,89,230), true); root.addView(status);
 
         try {
@@ -98,11 +100,12 @@ public final class MainActivity extends Activity {
         String base = session.optString("baseUrl");
         root.addView(label("PC에 연결됨", 20, Color.rgb(23,38,60), true));
         root.addView(label(base, 13, Color.rgb(80,91,110), false));
-        CheckBox folder = new CheckBox(this); folder.setText("선택한 폴더에도 결과 복사"); folder.setChecked(getPreferences(0).getString("export_tree", null) != null); root.addView(folder);
+        CheckBox folder = new CheckBox(this); folder.setText("선택한 폴더에도 결과 복사"); folder.setChecked(getPreferences(0).getString("export_tree", null) != null); folder.setEnabled(!busy); root.addView(folder);
         folderButton = button(folder.isChecked() ? "저장 폴더 변경" : "갤럭시 저장 폴더 선택");
+        folderButton.setEnabled(!busy);
         folderButton.setOnClickListener(v -> chooseFolder());
         folder.setOnClickListener(v -> { if (folder.isChecked()) chooseFolder(); else clearFolder(); });
-        autoReceive = new CheckBox(this); autoReceive.setText("백그라운드에서 새 결과 자동 확인"); autoReceive.setChecked(getPreferences(0).getBoolean("auto_receive", true)); root.addView(autoReceive);
+        autoReceive = new CheckBox(this); autoReceive.setText("백그라운드에서 새 결과 자동 확인"); autoReceive.setChecked(getPreferences(0).getBoolean("auto_receive", true)); autoReceive.setEnabled(!busy); root.addView(autoReceive);
         autoReceive.setOnCheckedChangeListener((v, checked) -> {
             getPreferences(0).edit().putBoolean("auto_receive", checked).apply(); SyncScheduler.configure(this);
             showStatus(checked ? "자동 확인을 켰습니다. 전원 절약 설정에 따라 늦어질 수 있습니다." : "백그라운드 자동 확인을 껐습니다.", false);
@@ -111,18 +114,26 @@ public final class MainActivity extends Activity {
         String copyError=getPreferences(0).getString("export_error","");
         if(!copyError.isEmpty())root.addView(label("선택한 폴더 복사에 실패했습니다. 앱 내부 보관함에는 저장되어 있습니다.  "+copyError,13,Color.rgb(178,53,53),false));
         syncButton = button("지금 결과 확인"); syncButton.setOnClickListener(v -> syncNow());
-        button("연결 해제").setOnClickListener(v -> { secureStore.clear(); SyncScheduler.configure(this); draw(); });
+        disconnectButton = button("연결 해제"); disconnectButton.setEnabled(!busy);
+        disconnectButton.setOnClickListener(v -> { if (busy) return; secureStore.clear(); SyncScheduler.configure(this); draw(); });
+        drawUpload(session);
         gap(12); root.addView(label("최근 작업", 20, Color.rgb(23,38,60), true));
         JSONArray jobs = SyncEngine.cachedJobs(this);
         if (jobs.length() == 0) root.addView(label("작업 결과가 아직 없습니다. PC 제어 화면에서 요청해 주세요.", 14, Color.rgb(75,87,105), false));
         for (int index=0; index<Math.min(jobs.length(),15); index++) {
             JSONObject job=jobs.optJSONObject(index); if(job==null) continue;
             boolean overnight="overnight".equals(job.optString("kind"));
+            boolean upload="upload".equals(job.optString("kind"));
             JSONObject request=job.optJSONObject("request");
-            String title=request==null ? "작업" : request.optString(overnight?"subject":"query","작업");
+            String title=request==null ? "작업" : request.optString(upload?"filename":overnight?"subject":"query","작업");
             String state=job.optString("state","대기");String saved=job.optString("phoneSavedAt","");
-            String visibleState="download_ready".equals(state) ? (overnight ? (saved.isEmpty()?"갤럭시 저장 확인 대기":"갤럭시 저장 완료") : (saved.isEmpty()?"갤럭시 자동 저장 대기":"갤럭시 저장 완료")) : state;
-            root.addView(label(title+"  ·  "+visibleState+(saved.isEmpty()?"":"  ·  저장 확인됨"),15,Color.rgb(35,47,67),true));
+            String visibleState=upload?uploadState(state):"download_ready".equals(state) ? (overnight ? (saved.isEmpty()?"갤럭시 저장 확인 대기":"갤럭시 저장 완료") : (saved.isEmpty()?"갤럭시 자동 저장 대기":"갤럭시 저장 완료")) : state;
+            root.addView(label((upload?"PC로 보내기 · ":"")+title+"  ·  "+visibleState+(!upload&&!saved.isEmpty()?"  ·  저장 확인됨":""),15,Color.rgb(35,47,67),true));
+            if(upload) {
+                if("pc_saved".equals(state)&&!job.optString("pcSavedAt").isEmpty()) root.addView(label("PC가 파일 저장과 해시 확인을 완료했습니다.",13,Color.rgb(75,87,105),false));
+                if("failed".equals(state))root.addView(label(job.optString("error","PC에 저장하지 못했습니다. 파일을 다시 선택해 보내 주세요."),13,Color.rgb(178,53,53),false));
+                continue;
+            }
             JSONArray artifacts=job.optJSONArray("artifacts");if(artifacts==null) continue;
             for(int item=0;item<artifacts.length();item++){
                 JSONObject artifact=artifacts.optJSONObject(item);if(artifact==null) continue;
@@ -152,6 +163,86 @@ public final class MainActivity extends Activity {
         showStatus(autoReceive.isChecked()?"연결됨 · 백그라운드에서 최대 15분 간격으로 확인합니다.":"연결됨 · 백그라운드 자동 확인이 꺼져 있습니다.",false);
         syncButton.setEnabled(!busy);
     }
+    private void drawUpload(JSONObject session) {
+        gap(12); root.addView(label("휴대폰 파일을 PC로 보내기",20,Color.rgb(23,38,60),true));
+        root.addView(label("파일을 하나 선택한 뒤 이름과 크기를 확인하고 전송하세요. 최대 10MB이며, 휴대폰 원본은 유지됩니다. PC가 오프라인이면 연결될 때까지 서버에서 기다립니다.",13,Color.rgb(102,112,130),false));
+        uploadPickButton=null;uploadSendButton=null;uploadCancelButton=null;
+        UploadSender.Pending pending=null;boolean invalid=false;
+        try { pending=UploadSender.load(this); }
+        catch(Exception error) { invalid=true;root.addView(label("전송 대기 정보를 읽지 못했습니다. 대기를 취소한 뒤 파일을 다시 선택해 주세요.",13,Color.rgb(178,53,53),false)); }
+        if(pending==null&&!invalid) {
+            uploadPickButton=button("PC로 보낼 파일 선택");uploadPickButton.setEnabled(!busy);uploadPickButton.setOnClickListener(v->chooseUpload());
+        } else {
+            if(pending!=null) {
+                root.addView(label(pending.filename+"  ·  "+UploadSender.describeBytes(pending.bytes),15,Color.rgb(35,47,67),true));
+                boolean matching=pending.belongsTo(session);
+                root.addView(label(matching?"이 파일의 복사본이 앱에 준비되어 있습니다. 전송이 끊겨도 같은 파일로 안전하게 재시도합니다.":"이전 PC 연결에서 준비한 파일입니다. 대기를 취소하고 다시 선택해 주세요.",13,Color.rgb(102,112,130),false));
+                uploadSendButton=button("PC로 보내기 / 재시도");uploadSendButton.setEnabled(!busy&&matching);uploadSendButton.setOnClickListener(v->sendUpload());
+            }
+            uploadCancelButton=button("전송 대기 취소");uploadCancelButton.setEnabled(!busy);uploadCancelButton.setOnClickListener(v->confirmDiscardUpload());
+        }
+    }
+    private static String uploadState(String state) {
+        switch(state) {
+            case "waiting_pc": return "PC 연결·저장 대기";
+            case "receiving_pc": return "PC에 저장 중";
+            case "pc_saved": return "PC 저장 완료";
+            case "failed": return "PC 저장 실패";
+            default: return "PC 전송 상태 확인 중";
+        }
+    }
+    private void uploadBusy(boolean value) {
+        busy=value;
+        for(Button control:new Button[]{syncButton,disconnectButton,folderButton,uploadPickButton,uploadSendButton,uploadCancelButton})
+            if(control!=null) control.setEnabled(!value);
+        if(autoReceive!=null) autoReceive.setEnabled(!value);
+    }
+    private void uploadFinished(String message,boolean error) {
+        runOnUiThread(()->{busy=false;if(isFinishing()||isDestroyed())return;draw();showStatus(message,error);});
+    }
+    private void chooseUpload() {
+        if(busy)return;
+        try {
+            if(UploadSender.load(this)!=null)return;
+            Intent choose=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE);
+            choose.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            uploadBusy(true);startActivityForResult(choose,PICK_UPLOAD);
+        }catch(Exception error){uploadBusy(false);showStatus("파일 선택 화면을 열지 못했습니다.",true);}
+    }
+    private void prepareUpload(Uri uri) {
+        uploadBusy(true);showStatus("파일의 크기와 해시를 확인하고 있습니다…",false);
+        worker.execute(()->{
+            try {
+                JSONObject session=secureStore.load();if(session==null)throw new UploadSender.UploadException("휴대폰을 PC에 다시 연결해 주세요.");
+                UploadSender.prepare(this,uri,session);
+                uploadFinished("파일이 준비됐습니다. 이름과 크기를 확인한 뒤 ‘PC로 보내기 / 재시도’를 눌러 주세요.",false);
+            }catch(Exception error){uploadFinished(error instanceof UploadSender.UploadException?error.getMessage():"선택한 파일을 준비하지 못했습니다. 다시 선택해 주세요.",true);}
+        });
+    }
+    private void sendUpload() {
+        if(busy)return;uploadBusy(true);showStatus("선택한 파일을 서버로 전송하고 있습니다…",false);
+        worker.execute(()->{
+            try {
+                JSONObject session=secureStore.load();if(session==null)throw new UploadSender.UploadException("휴대폰을 PC에 다시 연결해 주세요.");
+                JSONObject job=UploadSender.send(this,session);
+                try {
+                    JSONArray previous=SyncEngine.cachedJobs(this),jobs=new JSONArray().put(job);
+                    for(int i=0;i<previous.length();i++){JSONObject old=previous.optJSONObject(i);if(old!=null&&!job.getString("id").equals(old.optString("id")))jobs.put(old);}
+                    SyncEngine.cache(this,new JSONObject().put("jobs",jobs));
+                }catch(Exception ignored){/* The server acknowledgement remains authoritative. */}
+                boolean failed="failed".equals(job.optString("state"));
+                uploadFinished(failed?job.optString("error","PC에 저장하지 못했습니다. 파일을 다시 선택해 보내 주세요."):"pc_saved".equals(job.optString("state"))?"PC가 파일을 저장하고 해시를 확인했습니다.":"서버가 파일을 받았습니다. PC 저장은 아직 확인되지 않았습니다. ‘지금 결과 확인’에서 진행 상태를 확인하세요.",failed);
+            }catch(Exception error){uploadFinished(error instanceof UploadSender.UploadException||error instanceof Api.ApiException?error.getMessage():"파일 전송을 확인하지 못했습니다. 준비된 파일로 재시도해 주세요.",true);}
+        });
+    }
+    private void confirmDiscardUpload() {
+        if(busy)return;
+        new AlertDialog.Builder(this).setTitle("전송 대기를 취소할까요?")
+            .setMessage("앱의 전송 준비만 지웁니다. 휴대폰 원본은 유지되며, 이미 서버에 도착한 파일은 취소되지 않습니다.")
+            .setNegativeButton("유지",null).setPositiveButton("대기 취소",(dialog,which)->{
+                if(busy)return;uploadBusy(true);worker.execute(()->{try{UploadSender.discard(this);uploadFinished("전송 대기를 취소했습니다. 휴대폰 원본은 유지됩니다.",false);}catch(Exception error){uploadFinished("전송 준비를 정리하지 못했습니다. 다시 시도해 주세요.",true);}});
+            }).show();
+    }
     private void pair() {
         if (busy) return; String base=urlField.getText().toString().trim(), code=codeField.getText().toString().trim();
         if (!code.matches("[0-9]{6}")) { showStatus("6자리 코드를 확인하세요.",true);return; }
@@ -167,18 +258,25 @@ public final class MainActivity extends Activity {
         });
     }
     private void syncNow() {
-        if (busy) return;busy=true;syncButton.setEnabled(false);showStatus("작업 결과를 확인하고 있습니다…",false);
+        if (busy) return;uploadBusy(true);showStatus("작업 결과를 확인하고 있습니다…",false);
         worker.execute(()->{
             try {
                 int count=SyncEngine.sync(this,()->Thread.currentThread().isInterrupted());
-                runOnUiThread(()->{busy=false;draw();showStatus(count>0?count+"개 결과를 갤럭시에 저장하고 검증했습니다.":"새로 저장할 파일이 없습니다. 이미 저장한 파일은 최근 작업에서 열 수 있습니다.",false);});
+                runOnUiThread(()->{busy=false;draw();showStatus(count>0?count+"개 결과를 갤럭시에 저장하고 검증했습니다.":"최근 작업 상태를 갱신했습니다. 저장한 결과는 아래에서 열 수 있습니다.",false);});
             }catch(Exception error){runOnUiThread(()->{busy=false;draw();showStatus(error.getMessage()==null?"동기화에 실패했습니다.":error.getMessage(),true);});}
         });
     }
     private void chooseFolder() {
+        if(busy)return;
         Intent choose=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);choose.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);startActivityForResult(choose,PICK_FOLDER);
     }
-    @Override protected void onActivityResult(int code,int result,@Nullable Intent data){super.onActivityResult(code,result,data);if(code==PICK_FOLDER&&result==Activity.RESULT_OK&&data!=null){Uri uri=data.getData();try{getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);getPreferences(0).edit().putString("export_tree",uri.toString()).apply();draw();showStatus("선택한 폴더에 결과를 복사합니다.",false);}catch(Exception error){showStatus("폴더 권한을 저장하지 못했습니다.",true);}}}
+    @Override protected void onActivityResult(int code,int result,@Nullable Intent data){
+        super.onActivityResult(code,result,data);
+        if(code==PICK_UPLOAD){
+            if(result==Activity.RESULT_OK&&data!=null&&data.getData()!=null)prepareUpload(data.getData());
+            else{busy=false;draw();showStatus("파일 선택을 취소했습니다.",false);}
+        }else if(code==PICK_FOLDER&&result==Activity.RESULT_OK&&data!=null){Uri uri=data.getData();try{getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);getPreferences(0).edit().putString("export_tree",uri.toString()).apply();draw();showStatus("선택한 폴더에 결과를 복사합니다.",false);}catch(Exception error){showStatus("폴더 권한을 저장하지 못했습니다.",true);}}
+    }
     private void clearFolder(){String previous=getPreferences(0).getString("export_tree",null);if(previous!=null){try{getContentResolver().releasePersistableUriPermission(Uri.parse(previous),Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);}catch(Exception ignored){}getPreferences(0).edit().remove("export_tree").apply();}draw();}
     private void openArtifact(String jobId,JSONObject artifact){try{File file=FileSafety.artifact(getFilesDir(),jobId,artifact.getString("id"),artifact.getString("filename"));if(!SyncEngine.verified(file,artifact))throw new Exception("파일 무결성 확인이 필요합니다. 다시 동기화해 주세요.");Uri uri=FileProvider.getUriForFile(this,getPackageName()+".files",file);Intent open=new Intent(Intent.ACTION_VIEW).setDataAndType(uri,artifact.optString("mime","application/octet-stream")).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);startActivity(Intent.createChooser(open,"파일을 열 앱 선택"));}catch(Exception error){showStatus(error.getMessage()==null?"파일을 열 수 없습니다.":error.getMessage(),true);}}
     private void showStatus(String message,boolean error){if(status!=null){status.setText(message);status.setTextColor(error?Color.rgb(178,53,53):Color.rgb(52,89,230));}}
