@@ -110,3 +110,37 @@ for (const edited of [false, true]) {
     assert.deepEqual(await readFile(join(f.documents, filename)), source, 'editing must preserve the PC source');
   });
 }
+
+test('unverified AI evidence offers independent keyword candidates and cannot automatically send a PC file', async t => {
+  const f = await fixture(t);
+  await writeFile(join(f.documents, 'requested-report.txt'), 'Quarterly figures and the final report.');
+  const body = { requestId: randomUUID(), query: 'requested-report', delivery: 'download', autoSend: true };
+  assert.equal((await f.phone('/api/jobs', { method: 'POST', body })).status, 201);
+  let calls = 0;
+  const result = await runOnce({
+    env: { ...f.env, AI_MODE: 'groq', GROQ_API_KEY: 'mock-only-key', GROQ_MODEL: 'mock-model' },
+    stateDir: join(f.dir, 'fallback-agent'),
+    fetchImpl: async (url, options) => {
+      if (url === 'https://api.groq.com/openai/v1/chat/completions') {
+        calls++;
+        const payload = JSON.parse(JSON.parse(options.body).messages[1].content);
+        return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: {
+          content: JSON.stringify({ selections: [{ id: payload.documents[0].id, score: 1,
+            reason: 'unverified AI claim', evidence: 'fabricated quotation that is not in the document' }] }),
+        } }] }), { headers: { 'Content-Type': 'application/json' } });
+      }
+      return fetch(url, options);
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.mode, 'lexical');
+  assert.equal(result.candidates[0].filename, 'requested-report.txt');
+  assert.match(result.candidates[0].reason, /키워드 검색/);
+  assert.equal(JSON.stringify(result).includes('unverified AI claim'), false);
+  const job = (await f.phone('/api/jobs')).data.jobs[0];
+  assert.equal(job.state, 'needs_selection');
+  assert.equal(job.mode, 'lexical');
+  assert.equal(job.selectedId, null);
+  assert.equal(job.artifact, undefined);
+  assert.equal((await f.request('/api/agent/next', { token: tokens.agentToken })).data.job, null);
+});

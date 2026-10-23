@@ -121,7 +121,7 @@ jobs:
           adb shell am instrument -w -r -e class kr.nightdesk.phone.MobileUiScreenshotTest -e screenshotPrefix compact-130 kr.nightdesk.phone.test/androidx.test.runner.AndroidJUnitRunner | tee android-app/app/build/ui-verification/compact-130-test.txt
           grep -Eq 'OK \([1-9][0-9]* tests?\)' android-app/app/build/ui-verification/compact-130-test.txt
           adb pull /sdcard/Android/data/kr.nightdesk.phone/files/ui-screenshots android-app/app/build/ui-verification/
-          test "$(find android-app/app/build/ui-verification/ui-screenshots -type f -name '*.png' | wc -l)" -eq 14
+          test "$(find android-app/app/build/ui-verification/ui-screenshots -type f -name '*.png' | wc -l)" -eq 16
           SCRIPT
 
       - name: Exercise navigation and capture real Android screenshots

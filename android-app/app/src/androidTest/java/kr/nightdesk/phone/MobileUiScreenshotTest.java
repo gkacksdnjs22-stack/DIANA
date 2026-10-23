@@ -6,6 +6,7 @@ import static androidx.test.espresso.action.ViewActions.click;
 import static androidx.test.espresso.action.ViewActions.closeSoftKeyboard;
 import static androidx.test.espresso.action.ViewActions.replaceText;
 import static androidx.test.espresso.action.ViewActions.scrollTo;
+import static androidx.test.espresso.action.ViewActions.typeText;
 import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
 import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
@@ -23,14 +24,18 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.Rect;
+import android.os.ParcelFileDescriptor;
+import android.os.SystemClock;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.widget.TextView;
 import android.widget.EditText;
 import android.widget.ScrollView;
 
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SdkSuppress;
 import androidx.test.platform.app.InstrumentationRegistry;
 
 import org.json.JSONArray;
@@ -41,11 +46,14 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import java.io.File;
+import java.io.ByteArrayOutputStream;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Real Android views and screenshots, using only inert local demo files and a reserved host. */
 @RunWith(AndroidJUnit4.class)
@@ -236,6 +244,142 @@ public final class MobileUiScreenshotTest {
         assertCommandDraft();
         navigate("home");
         assertHomeOnlyControls();
+    }
+
+    @Test @SdkSuppress(minSdkVersion = 30)
+    public void realKeyboardKeepsFocusedRequestFieldsVisibleAndRetainsTypedDraft() throws Exception {
+        String previousSetting = shell("settings get secure show_ime_with_hard_keyboard").trim();
+        shell("settings put secure show_ime_with_hard_keyboard 1");
+        try {
+            navigate("pc_sync");
+            onView(withTagValue(equalTo("pc_query"))).perform(scrollTo(), click());
+            awaitImeVisibility(true);
+            assertFocusedFieldAboveIme("pc_query");
+            onView(withTagValue(equalTo("pc_query"))).perform(typeText("quarterly report"));
+            assertFocusedFieldAboveIme("pc_query");
+            onView(withTagValue(equalTo("pc_query"))).check(matches(withText("quarterly report")))
+                .perform(closeSoftKeyboard());
+            awaitImeVisibility(false);
+
+            onView(withTagValue(equalTo("pc_edit_instruction"))).perform(scrollTo(), click());
+            awaitImeVisibility(true);
+            assertFocusedFieldAboveIme("pc_edit_instruction");
+            onView(withTagValue(equalTo("pc_edit_instruction"))).perform(typeText("summarize the key changes"));
+            assertFocusedFieldAboveIme("pc_edit_instruction");
+            onView(withTagValue(equalTo("pc_edit_instruction"))).check(matches(withText("summarize the key changes")));
+            screenshot("08-keyboard");
+            assertFocusedFieldAboveIme("pc_edit_instruction");
+            onView(withTagValue(equalTo("pc_edit_instruction"))).perform(closeSoftKeyboard());
+            awaitImeVisibility(false);
+
+            navigate("home");
+            navigate("pc_sync");
+            assertKeyboardDraft();
+            scenario.recreate();
+            assertScreen("pc_sync");
+            assertKeyboardDraft();
+            // No submit action is tapped: typing and keyboard changes stay entirely local.
+        } finally {
+            scenario.onActivity(activity -> {
+                if (activity.getWindow().getInsetsController() != null)
+                    activity.getWindow().getInsetsController().hide(WindowInsets.Type.ime());
+            });
+            shell(previousSetting.matches("[01]")
+                ? "settings put secure show_ime_with_hard_keyboard " + previousSetting
+                : "settings delete secure show_ime_with_hard_keyboard");
+        }
+    }
+
+    private void assertKeyboardDraft() {
+        onView(withTagValue(equalTo("pc_query"))).check(matches(withText("quarterly report")));
+        onView(withTagValue(equalTo("pc_edit_instruction"))).check(matches(withText("summarize the key changes")));
+    }
+
+    private void awaitImeVisibility(boolean expected) {
+        long deadline = SystemClock.uptimeMillis() + 5000;
+        while (SystemClock.uptimeMillis() < deadline) {
+            AtomicReference<Boolean> visible = new AtomicReference<>(false);
+            scenario.onActivity(activity -> {
+                WindowInsets insets = activity.getWindow().getDecorView().getRootWindowInsets();
+                visible.set(insets != null && insets.isVisible(WindowInsets.Type.ime())
+                    && insets.getInsets(WindowInsets.Type.ime()).bottom > 0);
+            });
+            if (visible.get() == expected) return;
+            SystemClock.sleep(50);
+        }
+        throw new AssertionError("The real Android IME did not become " + (expected ? "visible" : "hidden"));
+    }
+
+    private void assertFocusedFieldAboveIme(String tag) {
+        long deadline = SystemClock.uptimeMillis() + 5000;
+        ImeGeometry last = null;
+        int stable = 0, previousBottom = -1;
+        while (SystemClock.uptimeMillis() < deadline) {
+            last = imeGeometry(tag);
+            stable = last.imeBottom == previousBottom && last.fullyVisible() ? stable + 1 : 0;
+            previousBottom = last.imeBottom;
+            if (stable >= 3) return;
+            SystemClock.sleep(50);
+        }
+        throw new AssertionError("Focused input must remain fully above the real IME: " + tag + " " + last);
+    }
+
+    private ImeGeometry imeGeometry(String tag) {
+        AtomicReference<ImeGeometry> result = new AtomicReference<>();
+        scenario.onActivity(activity -> {
+            View decor = activity.getWindow().getDecorView();
+            EditText field = decor.findViewWithTag(tag);
+            assertNotNull("The focused request field must exist", field);
+            WindowInsets insets = decor.getRootWindowInsets();
+            int imeBottom = insets == null ? 0 : insets.getInsets(WindowInsets.Type.ime()).bottom;
+            int imeTop = activity.getWindowManager().getCurrentWindowMetrics().getBounds().bottom - imeBottom;
+            int[] position = new int[2]; field.getLocationOnScreen(position);
+            Rect full = new Rect(position[0], position[1], position[0] + field.getWidth(), position[1] + field.getHeight());
+            Rect visible = new Rect(); boolean shown = field.getGlobalVisibleRect(visible);
+            Rect caret = new Rect(full);
+            if (field.getLayout() != null) {
+                int line = field.getLayout().getLineForOffset(Math.max(0, field.getSelectionEnd()));
+                caret.top = position[1] + field.getTotalPaddingTop() + field.getLayout().getLineTop(line) - field.getScrollY();
+                caret.bottom = position[1] + field.getTotalPaddingTop() + field.getLayout().getLineBottom(line) - field.getScrollY();
+            }
+            ScrollView page = findScroll(decor);
+            int viewport = page == null ? 0 : page.getHeight() - page.getPaddingTop() - page.getPaddingBottom();
+            result.set(new ImeGeometry(full, visible, caret, viewport, imeTop, imeBottom,
+                shown && field.hasFocus() && insets != null && insets.isVisible(WindowInsets.Type.ime())));
+        });
+        return result.get();
+    }
+
+    private static final class ImeGeometry {
+        final Rect full, visible, caret;
+        final int viewport, imeTop, imeBottom;
+        final boolean focusedAndShown;
+        ImeGeometry(Rect full, Rect visible, Rect caret, int viewport, int imeTop, int imeBottom, boolean focusedAndShown) {
+            this.full = full; this.visible = visible; this.caret = caret; this.viewport = viewport;
+            this.imeTop = imeTop; this.imeBottom = imeBottom; this.focusedAndShown = focusedAndShown;
+        }
+        boolean fullyVisible() {
+            if (!focusedAndShown || imeBottom <= 0 || viewport <= 0 || visible.isEmpty()) return false;
+            Rect expected = full.height() <= viewport ? full : caret;
+            return expected.bottom <= imeTop + 2 && visible.bottom <= imeTop + 2
+                && visible.top <= expected.top + 2 && visible.bottom >= expected.bottom - 2
+                && visible.left <= expected.left + 2 && visible.right >= expected.right - 2;
+        }
+        @Override public String toString() {
+            return "full=" + full + ", visible=" + visible + ", caret=" + caret
+                + ", viewport=" + viewport + ", imeTop=" + imeTop + ", imeBottom=" + imeBottom
+                + ", focused=" + focusedAndShown;
+        }
+    }
+
+    private static String shell(String command) throws Exception {
+        ParcelFileDescriptor descriptor = InstrumentationRegistry.getInstrumentation().getUiAutomation().executeShellCommand(command);
+        try (FileInputStream input = new ParcelFileDescriptor.AutoCloseInputStream(descriptor);
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[1024]; int count;
+            while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+            return output.toString(StandardCharsets.UTF_8.name());
+        }
     }
 
     private JSONObject artifact(String filename, String mime, byte[] bytes) throws Exception {

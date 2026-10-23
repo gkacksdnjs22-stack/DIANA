@@ -9,6 +9,7 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.LayerDrawable;
@@ -23,6 +24,7 @@ import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowInsets;
+import android.view.WindowManager;
 import android.webkit.MimeTypeMap;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -53,6 +55,7 @@ public final class MainActivity extends Activity {
     private static final int TEXT=0xfff4f7ff, MUTED=0xff98abc3, CYAN=0xff4ce0d6, PURPLE=0xffae9bff, ERROR=0xffff9d9d;
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
     private final Handler main=new Handler(Looper.getMainLooper());
+    private final Runnable revealFocusedInput=this::scrollFocusedInput;
     private final int[] pageScroll=new int[5];
     private ForegroundRefresh foregroundRefresh;
     private SecureStore secureStore;
@@ -66,7 +69,7 @@ public final class MainActivity extends Activity {
     private JSONArray displayedJobs=new JSONArray();
     private JSONObject displayedSession;
     private volatile boolean busy;
-    private boolean resumed, renderQueued, statusError, drawerRefreshPending, showPhoneUpload;
+    private boolean resumed, renderQueued, statusError, drawerRefreshPending, showPhoneUpload, imeVisible, deferredInputRender;
     private int selectedTab=HOME, renderedTab=HOME, visibleSaved=15, visibleRecent=30, detailScroll;
     private String detailId="", renderedDetailId="", urlDraft="", codeDraft="", requestQueryDraft="", requestEditDraft="", statusMessage="";
     private final SharedPreferences.OnSharedPreferenceChangeListener settingsChanged=(preferences,key)->{
@@ -76,6 +79,7 @@ public final class MainActivity extends Activity {
 
     @Override protected void onCreate(@Nullable Bundle state) {
         super.onCreate(state);
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         requestQueryDraft=getPreferences(0).getString("pc_query_draft","");requestEditDraft=getPreferences(0).getString("pc_edit_draft","");
         if(state!=null){
             boolean oldTabs=state.getInt("routeVersion",1)<2;
@@ -125,21 +129,36 @@ public final class MainActivity extends Activity {
     }
     private boolean alive(){return !isFinishing()&&!isDestroyed();}
     private int dp(float value){return Math.round(value*getResources().getDisplayMetrics().density);}
+    private void revealFocusedInputSoon(){main.removeCallbacks(revealFocusedInput);main.post(revealFocusedInput);}
+    private void scrollFocusedInput(){
+        if(!alive()||scroll==null||!scroll.isAttachedToWindow())return;
+        View focused=getCurrentFocus();if(!(focused instanceof EditText)||!focused.isShown())return;
+        EditText input=(EditText)focused;int margin=dp(12);Rect visible=new Rect(0,-margin,input.getWidth(),input.getHeight()+margin);
+        if(visible.height()>scroll.getHeight()&&input.getLayout()!=null){
+            int offset=Math.max(0,Math.min(input.getSelectionEnd(),input.length()));int line=input.getLayout().getLineForOffset(offset);
+            visible.top=input.getTotalPaddingTop()+input.getLayout().getLineTop(line)-margin;
+            visible.bottom=input.getTotalPaddingTop()+input.getLayout().getLineBottom(line)+margin;
+        }
+        input.requestRectangleOnScreen(visible,true);
+    }
     private void rememberViewState(){
         if(urlField!=null)urlDraft=urlField.getText().toString();if(codeField!=null)codeDraft=codeField.getText().toString();
         if(requestQueryField!=null){requestQueryDraft=requestQueryField.getText().toString();requestEditDraft=requestEditField==null?"":requestEditField.getText().toString();getPreferences(0).edit().putString("pc_query_draft",requestQueryDraft).putString("pc_edit_draft",requestEditDraft).apply();}
         if(scroll!=null){if(renderedDetailId.isEmpty())pageScroll[renderedTab]=scroll.getScrollY();else detailScroll=scroll.getScrollY();}
     }
     private void queueRender(){
-        if(renderQueued)return;renderQueued=true;main.post(()->{renderQueued=false;if(resumed&&!busy&&alive())draw();});
+        if(renderQueued)return;renderQueued=true;main.post(()->{renderQueued=false;if(resumed&&!busy&&alive())renderAutomatically();});
     }
+    private boolean editingRequestWithKeyboard(){View focus=getCurrentFocus();return selectedTab==SEND&&detailId.isEmpty()&&focus!=null&&focus.hasFocus()&&(focus==requestQueryField||focus==requestEditField)&&imeVisible;}
+    private void renderAutomatically(){if(editingRequestWithKeyboard()){deferredInputRender=true;return;}draw();}
+    private void resumeDeferredInputRender(){if(deferredInputRender&&!editingRequestWithKeyboard())queueRender();}
     private void resetViews(){
         root=null;recentJobs=null;pageContent=null;scroll=null;status=null;pushStatus=null;urlField=null;codeField=null;requestQueryField=null;requestEditField=null;
         pairButton=null;syncButton=null;folderButton=null;disconnectButton=null;uploadPickButton=null;uploadSendButton=null;uploadCancelButton=null;requestSubmitButton=null;requestDiscardButton=null;autoReceive=null;folderCopy=null;
     }
     private void draw(){
         if(menuPopup!=null&&menuPopup.isShowing()){drawerRefreshPending=true;return;}
-        if(!alive())return;rememberViewState();resetViews();
+        if(!alive())return;deferredInputRender=false;rememberViewState();resetViews();
         JSONObject session=null;boolean connectionError=false;
         try{session=secureStore.load();}catch(Exception error){connectionError=true;}
         // Rendering failures must never erase a valid pairing credential.
@@ -154,8 +173,9 @@ public final class MainActivity extends Activity {
         LinearLayout shell=column();shell.setBackgroundColor(BG);
         if(Build.VERSION.SDK_INT>=30)getWindow().setDecorFitsSystemWindows(false);
         shell.setOnApplyWindowInsetsListener((v,insets)->{
-            if(Build.VERSION.SDK_INT>=30){android.graphics.Insets safe=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());v.setPadding(safe.left,safe.top,safe.right,safe.bottom);}
-            else v.setPadding(insets.getSystemWindowInsetLeft(),insets.getSystemWindowInsetTop(),insets.getSystemWindowInsetRight(),insets.getSystemWindowInsetBottom());
+            if(Build.VERSION.SDK_INT>=30){android.graphics.Insets safe=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());int imeBottom=insets.getInsets(WindowInsets.Type.ime()).bottom;imeVisible=insets.isVisible(WindowInsets.Type.ime())&&imeBottom>0;int bottom=Math.max(safe.bottom,imeBottom);v.setPadding(safe.left,safe.top,safe.right,bottom);}
+            else{v.setPadding(insets.getSystemWindowInsetLeft(),insets.getSystemWindowInsetTop(),insets.getSystemWindowInsetRight(),insets.getSystemWindowInsetBottom());Rect frame=new Rect();getWindow().getDecorView().getWindowVisibleDisplayFrame(frame);imeVisible=getResources().getDisplayMetrics().heightPixels-frame.bottom>dp(160);}
+            v.post(()->{if(v.isAttachedToWindow()){revealFocusedInputSoon();resumeDeferredInputRender();}});
             return insets;
         });
         LinearLayout header=row();header.setPadding(dp(14),dp(10),dp(20),dp(8));header.setGravity(Gravity.CENTER_VERTICAL);header.setBaselineAligned(false);header.setMinimumHeight(dp(64));
@@ -167,6 +187,7 @@ public final class MainActivity extends Activity {
         TextView badge=label(session==null?"연결 전":"●  연결됨",11,session==null?MUTED:CYAN,true);badge.setPadding(dp(10),dp(7),dp(10),dp(7));badge.setBackground(shape(session==null?SURFACE:0xff102e35,20,0));header.addView(badge);
         shell.addView(header,new LinearLayout.LayoutParams(-1,-2));
         scroll=new ScrollView(this);scroll.setFillViewport(true);scroll.setClipToPadding(false);scroll.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
+        scroll.addOnLayoutChangeListener((v,left,top,right,bottom,oldLeft,oldTop,oldRight,oldBottom)->{if(bottom-top!=oldBottom-oldTop||right-left!=oldRight-oldLeft)revealFocusedInputSoon();});
         root=column();root.setPadding(dp(20),dp(10),dp(20),dp(26));scroll.addView(root);shell.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         status=label(statusMessage,13,statusError?ERROR:CYAN,false);status.setVisibility(statusMessage.isEmpty()?View.GONE:View.VISIBLE);
         status.setPadding(dp(14),dp(10),dp(14),dp(10));status.setBackground(shape(SURFACE,12,BORDER));root.addView(status);
@@ -378,7 +399,7 @@ public final class MainActivity extends Activity {
     private android.graphics.drawable.Drawable tinted(int resource,int color){android.graphics.drawable.Drawable drawable=getDrawable(resource).mutate();drawable.setTint(color);return drawable;}
     private ImageView icon(int resource,int color){ImageView image=new ImageView(this);image.setImageResource(resource);image.setImageTintList(ColorStateList.valueOf(color));image.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);return image;}
     private Button button(LinearLayout parent,String text,boolean primary){Button view=new Button(this);view.setText(text);view.setTextSize(14);view.setAllCaps(false);view.setTextColor(primary?0xff072a2c:TEXT);view.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));view.setGravity(Gravity.CENTER);view.setPadding(dp(16),dp(10),dp(16),dp(12));view.setMinHeight(dp(50));view.setMinimumHeight(dp(50));view.setBackgroundTintList(null);view.setBackground(new RippleDrawable(ColorStateList.valueOf(primary?0x40ffffff:0x284ce0d6),buttonFace(primary),shape(Color.WHITE,14,0)));view.setElevation(dp(primary?5:2));LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(-1,-2);params.topMargin=dp(10);parent.addView(view,params);return view;}
-    private EditText field(LinearLayout parent,String hint,int type){EditText field=new EditText(this);field.setTextSize(15);field.setSingleLine(true);field.setHint(hint);field.setInputType(type);field.setTextColor(TEXT);field.setHintTextColor(MUTED);field.setPadding(dp(14),dp(12),dp(14),dp(12));field.setMinHeight(dp(54));field.setBackgroundTintList(null);field.setBackground(inputFace());LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(-1,-2);params.topMargin=dp(12);parent.addView(field,params);return field;}
+    private EditText field(LinearLayout parent,String hint,int type){EditText field=new EditText(this);field.setTextSize(15);field.setSingleLine(true);field.setHint(hint);field.setInputType(type);field.setTextColor(TEXT);field.setHintTextColor(MUTED);field.setPadding(dp(14),dp(12),dp(14),dp(12));field.setMinHeight(dp(54));field.setBackgroundTintList(null);field.setBackground(inputFace());field.setOnFocusChangeListener((v,focused)->{if(focused)revealFocusedInputSoon();else main.post(this::resumeDeferredInputRender);});LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(-1,-2);params.topMargin=dp(12);parent.addView(field,params);return field;}
     private void divider(LinearLayout parent){View line=new View(this);line.setBackgroundColor(BORDER);LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(-1,dp(1));params.topMargin=dp(8);params.bottomMargin=dp(8);parent.addView(line,params);}
     private void empty(LinearLayout parent,int icon,String heading,String copy){LinearLayout card=card(parent);ImageView image=icon(icon,PURPLE);card.addView(image,new LinearLayout.LayoutParams(dp(30),dp(30)));card.addView(label(heading,17,TEXT,true));card.addView(label(copy,13,MUTED,false));}
     private static String time(String value){if(value==null||value.isEmpty())return "아직 없음";try{return DateTimeFormatter.ofPattern("M. d. HH:mm",Locale.KOREA).withZone(ZoneId.systemDefault()).format(Instant.parse(value));}catch(Exception ignored){return value;}}
@@ -391,7 +412,7 @@ public final class MainActivity extends Activity {
         try{worker.execute(()->{try{JSONArray remote=Api.request(session,"/api/jobs",null).getJSONArray("jobs");boolean pending=false;for(int i=0;i<remote.length();i++){JSONObject job=remote.optJSONObject(i);if(job==null)continue;String state=job.optString("state");boolean upload="upload".equals(job.optString("kind"));if(upload?("waiting_pc".equals(state)||"receiving_pc".equals(state)):("waiting_pc".equals(state)||"searching".equals(state)||"ready_to_send".equals(state)||"sending".equals(state)))pending=true;}final boolean waiting=pending;main.post(()->{if(alive())completion.finish(waiting,false,()->applyJobStatuses(session,remote));});}catch(Exception error){main.post(()->{if(alive())completion.finish(false,true,null);});}});}catch(RejectedExecutionException ignored){completion.finish(false,false,null);}
     }
     private void applyJobStatuses(JSONObject session,JSONArray remote){
-        try{if(!alive()||!sameSession(session,secureStore.load()))return;JSONArray combined=mergeJobStatuses(displayedJobs,remote);if(combined.toString().equals(displayedJobs.toString()))return;displayedJobs=combined;if(!busy&&(selectedTab==SEND||selectedTab==RECENT))draw();}catch(Exception ignored){/* Keep the last authenticated visible state. */}
+        try{if(!alive()||!sameSession(session,secureStore.load()))return;JSONArray combined=mergeJobStatuses(displayedJobs,remote);if(combined.toString().equals(displayedJobs.toString()))return;displayedJobs=combined;if(!busy&&(selectedTab==SEND||selectedTab==RECENT))renderAutomatically();}catch(Exception ignored){/* Keep the last authenticated visible state. */}
     }
     private static JSONArray mergeJobStatuses(JSONArray base,JSONArray observed){
         java.util.Map<String,JSONObject> changes=new java.util.LinkedHashMap<>();for(int i=0;i<observed.length();i++){JSONObject job=observed.optJSONObject(i);if(job!=null)changes.put(job.optString("id"),job);}
