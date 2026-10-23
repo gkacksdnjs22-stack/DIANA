@@ -74,7 +74,7 @@ public final class MainActivity extends Activity {
     private String detailId="", renderedDetailId="", urlDraft="", codeDraft="", requestQueryDraft="", requestEditDraft="", statusMessage="";
     private final SharedPreferences.OnSharedPreferenceChangeListener settingsChanged=(preferences,key)->{
         if(!resumed)return;
-        if("push_status".equals(key)||"last_sync".equals(key)||"last_error".equals(key)||"export_error".equals(key)||"export_tree".equals(key))queueRender();
+        if("push_status".equals(key)||"last_sync".equals(key)||"last_error".equals(key)||"export_error".equals(key)||"export_tree".equals(key)||"latest_receive_v1".equals(key))queueRender();
     };
 
     @Override protected void onCreate(@Nullable Bundle state) {
@@ -229,6 +229,7 @@ public final class MainActivity extends Activity {
         hero.addView(label("마지막 동기화  "+time(getPreferences(0).getString("last_sync","")),12,MUTED,false));
         pushStatus=label("빠른 수신  ·  "+getSharedPreferences("settings",0).getString("push_status","연결 확인 중"),12,CYAN,false);hero.addView(pushStatus);
         syncButton=button(hero,"지금 동기화",true);syncButton.setTag("home_sync");syncButton.setContentDescription("지금 결과 확인");syncButton.setEnabled(!busy);syncButton.setOnClickListener(v->syncNow());
+        try{drawLatestReceive(hero,SyncEngine.latestReceiveLog(this,displayedSession));}catch(Exception ignored){/* A missing log must not hide the sync controls. */}
         String lastError=getPreferences(0).getString("last_error","");if(!lastError.isEmpty())hero.addView(label("동기화 확인 필요 · "+lastError,12,ERROR,false));
         drawFolderCard(pageContent,false);
     }
@@ -243,6 +244,14 @@ public final class MainActivity extends Activity {
             for(int j=0;j<artifacts.length();j++){JSONObject artifact=artifacts.optJSONObject(j);if(artifact!=null)drawArtifact(pageContent,job.optString("id"),artifact);}
         }
         if(saved.length()>visibleSaved)button(pageContent,"파일 더 보기",false).setOnClickListener(v->{visibleSaved+=15;draw();});
+    }
+    private void drawLatestReceive(LinearLayout parent,JSONObject received){
+        if(received==null)return;String filename=received.optString("filename","");if(filename.isEmpty())return;
+        LinearLayout log=column();log.setTag("home_receive_log");LinearLayout.LayoutParams logParams=new LinearLayout.LayoutParams(-1,-2);logParams.topMargin=dp(12);parent.addView(log,logParams);
+        View separator=new View(this);separator.setBackgroundColor(0xff36556b);log.addView(separator,new LinearLayout.LayoutParams(-1,dp(1)));
+        LinearLayout header=row();header.setGravity(Gravity.CENTER_VERTICAL);header.addView(label("최근 수신",11,PURPLE,true),new LinearLayout.LayoutParams(0,-2,1));header.addView(label(time(received.optString("receivedAt","")),11,MUTED,false));log.addView(header);
+        LinearLayout names=row();names.setGravity(Gravity.CENTER_VERTICAL);TextView name=label(filename,12,TEXT,false);name.setMaxLines(2);name.setEllipsize(android.text.TextUtils.TruncateAt.END);names.addView(name,new LinearLayout.LayoutParams(0,-2,1));
+        int extra=received.optInt("count",1)-1;if(extra>0){TextView count=label("외 "+extra+"개",11,CYAN,false);LinearLayout.LayoutParams countParams=new LinearLayout.LayoutParams(-2,-2);countParams.leftMargin=dp(8);names.addView(count,countParams);}log.addView(names);
     }
     private void drawFolderCard(LinearLayout parent,boolean controls){
         boolean selected=getPreferences(0).getString("export_tree",null)!=null;

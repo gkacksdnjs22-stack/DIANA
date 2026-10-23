@@ -68,6 +68,8 @@ public final class MobileUiScreenshotTest {
     private static final String TITLE = "이번 주 업무 보고서";
     private static final String TEXT_NAME = "주간_업무_정리.txt";
     private static final String APK_NAME = "DIANA-install-check.apk";
+    private static final String LATEST_RECEIVED_NAME = "방금_받은_보고서.pdf";
+    private static final String PREVIOUS_RECEIVED_NAME = "이전_받은_메모.txt";
     private Context context;
     private ActivityScenario<MainActivity> scenario;
 
@@ -85,6 +87,7 @@ public final class MobileUiScreenshotTest {
             .put("phoneToken", "ui-demo-only-no-real-credentials-0000000000000000")
             .put("firebase", new JSONObject().put("enabled", false));
         new SecureStore(context).save(session);
+        SyncEngine.recordLatestReceive(context, session, LATEST_RECEIVED_NAME, 1, "2026-10-23T05:50:00Z");
 
         JSONObject text = artifact(TEXT_NAME, "text/plain", "주요 성과를 확인하고 다음 주 할 일을 정리했습니다.\n".getBytes(StandardCharsets.UTF_8));
         JSONObject apk = artifact(APK_NAME, "application/vnd.android.package-archive", "inert-ui-fixture-never-install".getBytes(StandardCharsets.UTF_8));
@@ -288,6 +291,66 @@ public final class MobileUiScreenshotTest {
                 ? "settings put secure show_ime_with_hard_keyboard " + previousSetting
                 : "settings delete secure show_ime_with_hard_keyboard");
         }
+    }
+
+    @Test public void homeShowsOnlyLatestReceiveAndKeepsItBoundToTheCurrentConnection() throws Exception {
+        assertHomeOnlyControls();
+        awaitHomeReceiveLog(LATEST_RECEIVED_NAME);
+
+        context.getSharedPreferences("MainActivity", 0).edit().remove("latest_receive_v1").commit();
+        awaitHomeReceiveLog(null);
+        JSONObject session = new SecureStore(context).load();
+        SyncEngine.recordLatestReceive(context, session, PREVIOUS_RECEIVED_NAME, 2, "2026-10-23T05:49:00Z");
+        awaitHomeReceiveLog(PREVIOUS_RECEIVED_NAME);
+        SyncEngine.recordLatestReceive(context, session, LATEST_RECEIVED_NAME, 1, "2026-10-23T05:50:00Z");
+        awaitHomeReceiveLog(LATEST_RECEIVED_NAME);
+        onView(withTagValue(equalTo("home_receive_log"))).check((view, error) -> {
+            if (error != null) throw error;
+            assertFalse("An earlier receipt must not remain in the latest-only row", containsText(view, PREVIOUS_RECEIVED_NAME));
+        });
+
+        scenario.recreate();
+        assertHomeOnlyControls();
+        awaitHomeReceiveLog(LATEST_RECEIVED_NAME);
+        navigate("files");
+        navigate("home");
+        awaitHomeReceiveLog(LATEST_RECEIVED_NAME);
+
+        JSONObject differentConnection = new JSONObject(session.toString())
+            .put("phoneId", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+        new SecureStore(context).save(differentConnection);
+        scenario.recreate();
+        assertHomeOnlyControls();
+        awaitHomeReceiveLog(null);
+    }
+
+    private void awaitHomeReceiveLog(String filename) {
+        long deadline = SystemClock.uptimeMillis() + 5000;
+        while (SystemClock.uptimeMillis() < deadline) {
+            AtomicReference<Boolean> ready = new AtomicReference<>(false);
+            scenario.onActivity(activity -> {
+                View decor = activity.getWindow().getDecorView();
+                View log = decor.findViewWithTag("home_receive_log");
+                int count = countTag(decor, "home_receive_log");
+                ready.set(filename == null ? count == 0 : count == 1 && log != null && containsText(log, filename));
+            });
+            if (ready.get()) {
+                if (filename == null) onView(withTagValue(equalTo("home_receive_log"))).check(doesNotExist());
+                else onView(withTagValue(equalTo("home_receive_log"))).check(matches(isDisplayed()));
+                return;
+            }
+            SystemClock.sleep(50);
+        }
+        throw new AssertionError("Home must show exactly one newest receive log, or none when empty: " + filename);
+    }
+
+    private static int countTag(View view, String tag) {
+        int count = tag.equals(view.getTag()) ? 1 : 0;
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int index = 0; index < group.getChildCount(); index++) count += countTag(group.getChildAt(index), tag);
+        }
+        return count;
     }
 
     private void assertKeyboardDraft() {
