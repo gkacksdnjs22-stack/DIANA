@@ -28,7 +28,31 @@ final class SyncEngine {
     private static final int MAX_SAVED_JOBS = 1000;
     private static final SyncGate SYNC_GATE = new SyncGate();
     private static final Object CACHE_LOCK = new Object();
+    private static final String LATEST_RECEIVE = "latest_receive_v1";
     enum ExternalCopyState { NOT_SELECTED, PENDING, COPIED, FAILED }
+
+    private static String receiveBinding(JSONObject session) throws Exception {
+        return RecentReceive.binding(Api.validateBase(session.getString("baseUrl"), BuildConfig.DEBUG), session.getString("phoneId"));
+    }
+    static JSONObject latestReceiveLog(Context c, JSONObject session) {
+        if (session == null) return null;
+        try {
+            String stored = c.getSharedPreferences("MainActivity", 0).getString(LATEST_RECEIVE, "");
+            if (stored.isEmpty()) return null;
+            JSONObject value = new JSONObject(stored);
+            if (value.getInt("version") != 1 || !receiveBinding(session).equals(value.getString("binding"))) return null;
+            RecentReceive.Event event = new RecentReceive.Event(value.getString("filename"), value.getInt("count"), value.getString("receivedAt"));
+            return new JSONObject().put("filename", event.filename).put("count", event.count).put("receivedAt", event.receivedAt);
+        } catch (Exception ignored) { return null; }
+    }
+    // Package-only writer also lets native fixtures seed the exact production format.
+    static void recordLatestReceive(Context c, JSONObject session, String filename, int count, String receivedAt) throws Exception {
+        RecentReceive.Event event = new RecentReceive.Event(filename, count, receivedAt);
+        JSONObject value = new JSONObject().put("version", 1).put("binding", receiveBinding(session))
+            .put("filename", event.filename).put("count", event.count).put("receivedAt", event.receivedAt);
+        if (!c.getSharedPreferences("MainActivity", 0).edit().putString(LATEST_RECEIVE, value.toString()).commit())
+            throw new IOException("최근 수신 기록을 저장하지 못했습니다.");
+    }
 
     // UI-only presence check. Actual opening, receipts and folder copies still hash the file.
     static boolean hasLocalArtifact(Context c, String jobId, JSONObject artifact) {
@@ -170,8 +194,8 @@ final class SyncEngine {
         job.put("artifacts", artifacts); // The recent-jobs screen can open the verified local file.
         return artifacts;
     }
-    private static void download(JSONObject session, String jobId, JSONObject artifact, File target, boolean singleFile, BooleanSupplier stopped) throws Exception {
-        if (verified(target, artifact)) return;
+    private static boolean download(JSONObject session, String jobId, JSONObject artifact, File target, boolean singleFile, BooleanSupplier stopped) throws Exception {
+        if (verified(target, artifact)) return false;
         File directory = target.getParentFile(); if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("앱 저장 폴더를 만들지 못했습니다.");
         String route = "/api/jobs/" + jobId + (singleFile ? "/file" : "/artifacts/" + artifact.getString("id"));
         HttpURLConnection connection = Api.connect(session.getString("baseUrl"), route, session.getString("phoneToken"), "GET");
@@ -195,6 +219,7 @@ final class SyncEngine {
             if (!verified(target, artifact)) throw new IOException("저장된 파일을 다시 검증하지 못했습니다.");
         } catch (Exception error) { if (output != null) file.failWrite(output); throw error; }
         finally { connection.disconnect(); }
+        return true;
     }
     private static void exportCopy(Context c, String jobId, JSONObject artifact, File source) throws Exception {
         SharedPreferences settings = c.getSharedPreferences("MainActivity", 0);
@@ -256,7 +281,7 @@ final class SyncEngine {
         JSONObject session = new SecureStore(c).load(); if (session == null) return 0;
         JSONObject listing = Api.request(session, "/api/jobs", null); JSONArray jobs = listing.optJSONArray("jobs");
         if (jobs == null) throw new IOException("작업 목록 응답이 올바르지 않습니다.");
-        int received = 0; String firstError = null; String exportError = null;
+        RecentReceive.Batch received = new RecentReceive.Batch(); String firstError = null; String exportError = null;
         JSONArray savedHistory = cachedSaved(c); boolean historyChanged = false;
         for (int index = 0; index < jobs.length(); index++) {
             if (stopped.getAsBoolean() || Thread.currentThread().isInterrupted()) throw new InterruptedIOException("동기화가 중단되었습니다.");
@@ -267,13 +292,18 @@ final class SyncEngine {
                 boolean singleFile = !"overnight".equals(job.optString("kind"));
                 String jobId = job.getString("id"); if (!FileSafety.UUID.matcher(jobId).matches() || artifacts.length() > 30) throw new IOException("작업 파일 목록을 확인해 주세요.");
                 Set<String> ids = new HashSet<>(); JSONArray receipt = new JSONArray();
-                boolean newlySaved = false;
                 for (int item = 0; item < artifacts.length(); item++) {
                     JSONObject artifact = artifacts.getJSONObject(item); validateManifest(artifact);
                     if (!ids.add(artifact.getString("id"))) throw new IOException("중복된 결과 파일 ID입니다.");
                     File target = FileSafety.artifact(c.getFilesDir(), jobId, artifact.getString("id"), artifact.getString("filename"));
-                    if (!verified(target, artifact)) newlySaved = true;
-                    download(session, jobId, artifact, target, singleFile, stopped);
+                    boolean newlyVerified = download(session, jobId, artifact, target, singleFile, stopped);
+                    RecentReceive.Event latest = received.afterTransfer(newlyVerified, artifact.getString("filename"), Instant.now().toString());
+                    if (latest != null) {
+                        // The verified private file is received even if a later folder
+                        // copy or server acknowledgement fails. No-new runs never write.
+                        try { recordLatestReceive(c, session, latest.filename, latest.count, latest.receivedAt); }
+                        catch (Exception ignored) { /* This display record never blocks a verified file receipt. */ }
+                    }
                     receipt.put(new JSONObject().put("id", artifact.getString("id")).put("sha256", artifact.getString("sha256")));
                     try { exportCopy(c, jobId, artifact, target); } catch (Exception error) { exportError = error.getMessage(); }
                 }
@@ -288,15 +318,14 @@ final class SyncEngine {
                 job.put("phoneSavedAt", acknowledgement.optString("phoneSavedAt", savedAt));
                 if (!singleFile) job.put("state", acknowledgement.optBoolean("onTime") ? "download_ready" : "deadline_exceeded");
                 savedHistory = rememberSaved(savedHistory, job, artifacts); historyChanged = true;
-                if (newlySaved) received += artifacts.length();
             } catch (Exception error) { if (firstError == null) firstError = error.getMessage(); }
         }
         cache(c, listing);
         if (historyChanged) cacheSaved(c, savedHistory);
         SharedPreferences.Editor update = c.getSharedPreferences("MainActivity", 0).edit().putString("last_sync", Instant.now().toString()).putString("last_error", firstError == null ? "" : firstError).putString("export_error", exportError == null ? "" : exportError);
         update.apply();
-        if (received > 0) Notifications.received(c, received);
+        if (received.count() > 0) Notifications.received(c, received.count());
         if (firstError != null) throw new IOException(firstError);
-        return received;
+        return received.count();
     }
 }
