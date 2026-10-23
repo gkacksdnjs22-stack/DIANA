@@ -13,6 +13,14 @@ import android.os.Build;
 final class Notifications {
     static final String CHANNEL = "nightdesk-results";
     static void ensureChannel(Context c) { c.getSystemService(NotificationManager.class).createNotificationChannel(new NotificationChannel(CHANNEL, "작업 결과 도착", NotificationManager.IMPORTANCE_DEFAULT)); }
+    static void pending(Context c) {
+        if (Build.VERSION.SDK_INT >= 33 && c.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return;
+        ensureChannel(c);
+        PendingIntent open = PendingIntent.getActivity(c, 0, new Intent(c, MainActivity.class), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        Notification notification = new Notification.Builder(c, CHANNEL).setSmallIcon(R.drawable.ic_diana_notification).setContentTitle("새 파일이 준비됐어요")
+            .setContentText("자동 저장을 시작합니다. 결과는 DIANA에서 확인할 수 있어요.").setContentIntent(open).setAutoCancel(true).build();
+        c.getSystemService(NotificationManager.class).notify(1001, notification);
+    }
     static void received(Context c, int count) {
         if (Build.VERSION.SDK_INT >= 33 && c.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return;
         PendingIntent open = PendingIntent.getActivity(c, 0, new Intent(c, MainActivity.class), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
