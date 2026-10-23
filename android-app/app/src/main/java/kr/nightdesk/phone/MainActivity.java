@@ -227,11 +227,12 @@ public final class MainActivity extends Activity {
         boolean selected=getPreferences(0).getString("export_tree",null)!=null;
         if(!controls){
             LinearLayout compact=card(parent);compact.setPadding(dp(14),dp(14),dp(14),dp(14));compact.setBackground(techPanel(0xff22213b,0xff111a2d,0xff44486d,false));
-            LinearLayout line=row();line.setGravity(Gravity.CENTER_VERTICAL);line.setBaselineAligned(false);
-            LinearLayout description=column();line.addView(description,new LinearLayout.LayoutParams(0,-2,1));
+            boolean stacked=getResources().getConfiguration().fontScale>=1.2f||getResources().getConfiguration().screenWidthDp<380;
+            LinearLayout line=stacked?column():row();line.setGravity(Gravity.CENTER_VERTICAL);line.setBaselineAligned(false);
+            LinearLayout description=column();line.addView(description,stacked?new LinearLayout.LayoutParams(-1,-2):new LinearLayout.LayoutParams(0,-2,1));
             TextView heading=label(selected?"실제 휴대폰 폴더":"실제 폴더 저장 꺼짐",selected?11:14,selected?MUTED:TEXT,!selected);heading.setPadding(0,0,0,0);description.addView(heading);
             TextView destination=label(selected?SyncEngine.selectedFolderLabel(this):"앱 안에만 보관 중이에요.",selected?14:11,selected?PURPLE:MUTED,selected);destination.setPadding(0,dp(4),0,0);description.addView(destination);
-            folderButton=button(line,selected?"변경":"폴더 선택",false);folderButton.setTag("home_folder");LinearLayout.LayoutParams actionParams=new LinearLayout.LayoutParams(dp(selected?72:100),-2);actionParams.leftMargin=dp(10);folderButton.setLayoutParams(actionParams);folderButton.setContentDescription(selected?"갤럭시 저장 폴더 변경":"갤럭시 저장 폴더 선택");folderButton.setEnabled(!busy);folderButton.setOnClickListener(v->chooseFolder());compact.addView(line);
+            folderButton=button(line,selected?"변경":"폴더 선택",false);folderButton.setTag("home_folder");LinearLayout.LayoutParams actionParams=new LinearLayout.LayoutParams(stacked?-1:dp(selected?72:100),-2);if(stacked)actionParams.topMargin=dp(10);else actionParams.leftMargin=dp(10);folderButton.setLayoutParams(actionParams);folderButton.setContentDescription(selected?"갤럭시 저장 폴더 변경":"갤럭시 저장 폴더 선택");folderButton.setEnabled(!busy);folderButton.setOnClickListener(v->chooseFolder());compact.addView(line);
             if(selected){TextView note=label("폴더 복사 표시는 마지막 확인 기준이에요.",11,MUTED,false);note.setPadding(0,dp(6),0,0);compact.addView(note);}
             String problem=getPreferences(0).getString("export_error","");if(!problem.isEmpty())compact.addView(label("폴더 복사 확인 필요 · 설정에서 확인해 주세요.",11,ERROR,false));
             return;
