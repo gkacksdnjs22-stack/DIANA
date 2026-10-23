@@ -152,7 +152,8 @@ final class SyncEngine {
         if (lower.endsWith(".hwpx")) return "application/vnd.hancom.hwpx";
         return "application/octet-stream";
     }
-    private static JSONArray availableArtifacts(JSONObject job) throws Exception {
+    // Metadata only; the foreground detail view also normalizes legacy single-file jobs.
+    static JSONArray availableArtifacts(JSONObject job) throws Exception {
         JSONArray artifacts = job.optJSONArray("artifacts");
         if (artifacts != null && artifacts.length() > 0) return artifacts;
         JSONObject single = job.optJSONObject("artifact");
