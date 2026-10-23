@@ -25,8 +25,8 @@ final class ApkInstaller {
             return;
         }
         Uri uri=FileProvider.getUriForFile(activity,activity.getPackageName()+".files",file);
-        Intent install=new Intent(Intent.ACTION_INSTALL_PACKAGE).setData(uri)
-            .setClipData(ClipData.newRawUri("APK",uri)).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        Intent install=new Intent(Intent.ACTION_INSTALL_PACKAGE).setData(uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        install.setClipData(ClipData.newRawUri("APK",uri));
         activity.startActivity(install);
     }
 }
