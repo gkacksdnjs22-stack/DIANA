@@ -152,10 +152,9 @@ test('Groq selection passes through exact-source evidence checks', async () => {
   assert.equal(result.candidates[0].sha256, document.sha256);
 });
 
-test('Groq cannot invent paths, evidence, or repeat source selections', async t => {
+test('Groq cannot invent paths or repeat source selections', async t => {
   for (const [name, selections, pattern] of [
     ['unknown document', [{ ...selection, id: '../../outside.txt' }], /unknown/],
-    ['invented evidence', [{ ...selection, evidence: '원문에 없는 99,000원' }], /evidence/],
     ['repeated document', [selection, selection], /repeated/],
     ['extra routing property', [{ ...selection, recipient: 'model-controlled@example.com' }], /schema/],
   ]) {
@@ -163,6 +162,15 @@ test('Groq cannot invent paths, evidence, or repeat source selections', async t 
       await assert.rejects(searchDocuments('제주 출장비', [document], { env: groqEnv, fetchImpl: async () => chatResponse(JSON.stringify({ selections })) }), pattern);
     });
   }
+});
+
+test('Groq invented evidence is discarded in favor of independently grounded keyword candidates', async () => {
+  const result = await searchDocuments('제주 출장비', [document], { env: groqEnv,
+    fetchImpl: async () => chatResponse(JSON.stringify({ selections: [{ ...selection, evidence: '원문에 없는 99,000원' }] })) });
+  assert.equal(result.mode, 'lexical');
+  assert.equal(result.candidates[0].id, document.id);
+  assert.match(result.candidates[0].reason, /키워드 검색/);
+  assert.equal(JSON.stringify(result).includes('99,000원'), false);
 });
 
 test('malformed, refused, and unfinished Groq output cannot become successful selections', async t => {

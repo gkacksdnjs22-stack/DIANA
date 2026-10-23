@@ -165,7 +165,12 @@ test('OpenAI cannot select unknown paths or invent evidence', async t => {
   const scan = await scanDocuments({ documentRoot: documents });
   const options = { env: { AI_MODE: 'openai', OPENAI_API_KEY: 'mock-key', OPENAI_MODEL: 'mock-model' } };
   await assert.rejects(searchDocuments('source', scan.documents, { ...options, fetchImpl: async () => aiResponse([{ id: '../../outside.txt', score: 1, reason: 'chosen', evidence: 'source' }]) }), /unknown/);
-  await assert.rejects(searchDocuments('source', scan.documents, { ...options, fetchImpl: async () => aiResponse([{ id: scan.documents[0].id, score: 1, reason: 'chosen', evidence: 'fabricated quotation' }]) }), /evidence/);
+  const recovered = await searchDocuments('source', scan.documents, { ...options, fetchImpl: async () => aiResponse([{ id: scan.documents[0].id, score: 1, reason: 'chosen', evidence: 'fabricated quotation' }]) });
+  assert.equal(recovered.mode, 'lexical');
+  assert.equal(recovered.candidates[0].id, scan.documents[0].id);
+  assert.match(recovered.candidates[0].reason, /키워드 검색/);
+  assert.equal(recovered.candidates[0].reason.includes('chosen'), false);
+  await assert.rejects(searchDocuments('unmatched-query', scan.documents, { ...options, fetchImpl: async () => aiResponse([{ id: scan.documents[0].id, score: 1, reason: 'chosen', evidence: 'fabricated quotation' }]) }), /evidence/);
   await assert.rejects(searchDocuments('source', scan.documents, { env: { AI_MODE: 'openai' } }), /OPENAI_API_KEY and OPENAI_MODEL/);
 });
 
