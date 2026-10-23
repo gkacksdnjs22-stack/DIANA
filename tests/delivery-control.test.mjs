@@ -48,6 +48,8 @@ test('owner delivery becomes an existing-protocol single file that paired Galaxy
   assert.equal(job.phoneSavedAt, undefined); assert.equal(job.request.delivery, 'download');
   assert.equal(job.request.query, '휴대폰으로 보내기 · DIANA-debug.apk'); assert.equal(job.request.subject, metadata.filename);
   assert.deepEqual(job.artifact, { ...metadata, mime:'application/vnd.android.package-archive', createdAt:new Date(f.now()).toISOString() });
+  assert.deepEqual(job.artifacts, [{ id:metadata.sha256, ...metadata, mime:'application/vnd.android.package-archive' }]);
+  assert.equal(job.artifacts[0].id, job.artifact.sha256);
   assert.deepEqual(f.transfers.files.get(delivered.id + '.bin'), content);
   const response = await fetch(`${f.base}/api/jobs/${delivered.id}/file`, { headers:{ Authorization:`Bearer ${phone}` } });
   assert.equal(response.status, 200); assert.equal(Number(response.headers.get('content-length')), content.length);
