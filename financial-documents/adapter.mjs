@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, lstat, realpath } from 'node:fs/promises';
+import { mkdir, open, lstat, realpath, opendir } from 'node:fs/promises';
 import { createFilePolicy } from '../local-ai/files.mjs';
 import { checkedDirectory, digest } from '../personal-ai/documents/files.mjs';
 import { boundedRead, readSelectedText, verifyOpenedOutput } from './files.mjs';
@@ -40,7 +40,7 @@ function validateConfig(c) {
  */
 export class FinancialDocuments {
   #configPath; #configHash; #config; #policy; #python;
-  #pending = new Map(); #tokens = new Map(); #requests = new Map(); #generation = 0;
+  #pending = new Map(); #tokens = new Map(); #requests = new Map(); #saved = new Map(); #generation = 0;
 
   static async create({ configPath }) {
     const instance = new FinancialDocuments();
@@ -73,6 +73,62 @@ export class FinancialDocuments {
     await this.#current();
     return this.#config.documents.filter(d => d.read_roles.includes(this.#config.role))
       .map(d => ({ id: d.id, version: d.version, classification: d.classification }));
+  }
+
+  async #readSaved(requestId, selection) {
+    if(!validId(requestId)||!['patch','convert'].includes(selection.action))fail('NO_SAVED_RESULT');
+    await this.#current(false,[selection.target_doc,...selection.source_ids,selection.guideline_id]);
+    const directory=path.join(this.#policy.output,'.financial-ledger');
+    const receipt=strictJSON((await boundedRead(path.join(directory,'request-'+requestId+'.json'),8192,null,true)).content);
+    keys(receipt,['request_id','plan_hash','approval_id','input_hash','status','time','output_hash']);
+    if(receipt.request_id!==requestId||receipt.status!=='COMPLETED'||!HASH.test(receipt.plan_hash)||!HASH.test(receipt.output_hash)||
+      !validId(receipt.approval_id)||receipt.input_hash!==digest(JSON.stringify(selection))||typeof receipt.time!=='string'||!Number.isFinite(Date.parse(receipt.time)))fail('NO_SAVED_RESULT');
+    const outputFile=path.join(this.#policy.output,'DIANA-finance-'+receipt.plan_hash+'.'+selection.format);
+    const file=await boundedRead(outputFile,2_000_000,receipt.output_hash);
+    return{receipt,file,result:{status:'COMPLETED',saved:true,storage_verified:true,request_id:requestId,outputFile,output_hash:receipt.output_hash,plan_hash:receipt.plan_hash}};
+  }
+
+  /** Restore verified completed files only, never pending plans or approvals. */
+  async loadSavedResults(inputs) {
+    const selections=inputs.map(explicitOperation),byHash=new Map(selections.map((s,index)=>[digest(JSON.stringify(s)),{selection:s,index}]));
+    await this.#current();await checkedDirectory(this.#policy.output);
+    const directory=path.join(this.#policy.output,'.financial-ledger');
+    let stat;try{stat=await lstat(directory);}catch(e){if(e.code==='ENOENT')return[];throw e;}
+    if(!stat.isDirectory()||stat.isSymbolicLink()||await realpath(directory)!==directory)fail('LEDGER_UNSAFE');
+    const records=[];let count=0;
+    for await(const entry of await opendir(directory)){
+      if(++count>10000)break;
+      const match=/^request-([A-Za-z0-9][A-Za-z0-9_-]{0,63})\.json$/u.exec(entry.name);if(!match||!entry.isFile()||entry.isSymbolicLink())continue;
+      try{const r=strictJSON((await boundedRead(path.join(directory,entry.name),8192,null,true)).content);const allowed=byHash.get(r.input_hash);
+        if(allowed&&r.status==='COMPLETED'&&Number.isFinite(Date.parse(r.time)))records.push({id:match[1],time:r.time,...allowed});}catch{}
+    }
+    records.sort((a,b)=>b.time.localeCompare(a.time));const restored=[];
+    for(const record of records){
+      if(restored.length===8)break;
+      try{const saved=await this.#readSaved(record.id,record.selection);this.#saved.set(record.id,{selection:record.selection,result:clone(saved.result)});
+        restored.push({requestId:record.id,selectionIndex:record.index,createdAt:saved.receipt.time,result:clone(saved.result)});}catch{}
+    }
+    return restored;
+  }
+
+  /** Read-only review of an exact verified saved file; does not cancel a plan. */
+  async reviewSaved(requestId) {
+    const record=this.#saved.get(requestId);if(!record)fail('NO_SAVED_RESULT');
+    const saved=await this.#readSaved(requestId,record.selection);
+    if(saved.result.outputFile!==record.result.outputFile||saved.result.output_hash!==record.result.output_hash||saved.result.plan_hash!==record.result.plan_hash)fail('CONTENT_CHANGED');
+    const selection={...record.selection,action:'checklist_review',item_ids:[]};const reviewId=randomUUID();
+    const payload=await this.#payload(selection,reviewId);
+    const original=[payload.review_doc,...payload.source_docs,payload.guideline];
+    payload.review_doc={...payload.review_doc,format:record.selection.format,content:saved.file.content,hash:saved.file.hash};
+    const plan=await callCore(this.#python,payload);
+    const fresh=await this.#payload(selection,reviewId);
+    const documents=[fresh.review_doc,...fresh.source_docs,fresh.guideline];
+    if(documents.some((d,i)=>d.hash!==original[i].hash||d.version!==original[i].version))fail('CONTENT_CHANGED');
+    const after=await this.#readSaved(requestId,record.selection);
+    if(after.result.output_hash!==saved.result.output_hash||after.result.plan_hash!==saved.result.plan_hash)fail('CONTENT_CHANGED');
+    if(!['READY','ACTION_REQUIRED'].includes(plan.status))fail('SAVED_REVIEW_FAILED');
+    return clone({status:plan.status,reviewComplete:plan.review_complete===true,items:plan.items||[],unresolved:plan.unresolved||[],
+      body:plan.expected_body||'',checkedAt:new Date().toISOString()});
   }
 
   async #ledgerDirectory() {
@@ -306,6 +362,10 @@ export class FinancialDocuments {
     } finally {
       this.#pending.delete(record.plan.plan_id);
       if (receiptHandle) { try { await receiptHandle.close(); } catch { result = { ...result, status: 'UNCERTAIN', reason: 'RECEIPT_CLOSE_FAILED', saved: false }; } }
+    }
+    if(result.status==='COMPLETED'&&result.saved===true&&result.storage_verified===true){
+      this.#saved.set(result.request_id,{selection:clone(record.selection),result:clone(result)});
+      while(this.#saved.size>16)this.#saved.delete(this.#saved.keys().next().value);
     }
     return result;
   }

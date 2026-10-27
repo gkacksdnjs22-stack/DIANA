@@ -6,11 +6,12 @@ import { boundedRead, readSelectedText, verifyOpenedOutput } from './files.mjs';
 import { strictJSON, keys, fail } from './strict-json.mjs';
 import { createFilePolicy } from '../local-ai/files.mjs';
 import { checkedDirectory, digest } from '../personal-ai/documents/files.mjs';
-import { UUID, FINANCE_FINAL, publicTask, validTask } from '../lib/financial-contract.mjs';
+import { UUID, FINANCE_FINAL, publicTask, publicFinanceJob, validTask } from '../lib/financial-contract.mjs';
 import { acquireWorkerLock } from './worker-lock.mjs';
 
 const within = (root, target) => { const r = path.relative(root, target); return !r || r !== '..' && !r.startsWith('..' + path.sep) && !path.isAbsolute(r); };
 const safeConsole = value => JSON.stringify(value, null, 2).replace(/[\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4,'0'));
+const taskSelection=(task,action,format)=>({action,format,target_doc:task.target_doc,source_ids:task.source_ids,guideline_id:task.guideline_id,item_ids:action==='patch'?task.item_ids:[]});
 
 // Resolve a not-yet-created directory via its checked existing ancestor. Reject
 // overlaps BEFORE mkdir/lock/journal can place anything in a protected tree.
@@ -50,9 +51,9 @@ export function financialTransport(env = process.env, fetchImpl = fetch) {
 }
 
 export class FinancialWorker {
-  #configPath; #configHash; #config; #coreConfig; #coreHash; #adapter; #policy; #api; #out; #active = null; #lock; #stateRoot; #workerId = randomUUID(); #chain = Promise.resolve();
-  static async create({ configPath, api, output = () => {}, documentRoot = path.resolve('sample-documents') }) {
-    const w = new FinancialWorker(); w.#configPath = path.resolve(configPath); w.#api = api; w.#out = output;
+  #configPath; #configHash; #config; #coreConfig; #coreHash; #adapter; #policy; #api; #out; #onEvent; #detailOutput; #active = null; #lock; #stateRoot; #workerId = randomUUID(); #chain = Promise.resolve();
+  static async create({ configPath, api, output = () => {}, onEvent = () => {}, detailOutput = true, documentRoot = path.resolve('sample-documents') }) {
+    const w = new FinancialWorker(); w.#configPath = path.resolve(configPath); w.#api = api; w.#out = output; w.#onEvent = onEvent; w.#detailOutput = detailOutput;
     const raw = await boundedRead(w.#configPath, 100_000); w.#configHash = raw.hash; const c = strictJSON(raw.content);
     keys(c, ['schema_version','coreConfig','stateDir','tasks']);
     if (c.schema_version !== 1 || !path.isAbsolute(c.coreConfig) || !path.isAbsolute(c.stateDir) || !Array.isArray(c.tasks) || !c.tasks.length || c.tasks.length > 20) fail('INVALID_WORKER_CONFIG');
@@ -85,9 +86,44 @@ export class FinancialWorker {
     // Lifetime coordinator lease + O_EXCL: one local approval owner, including
     // stale-file recovery and release.
     w.#lock=await acquireWorkerLock(c.stateDir,{pid:process.pid,workerId:w.#workerId});
+    try{await w.#restoreSaved();}catch(e){await w.#lock.close();w.#lock=null;throw e;}
     return w;
   }
   serial(action) { const p = this.#chain.then(action); this.#chain = p.catch(() => {}); return p; }
+  #emit(type,data) {
+    // Local presentation only. Never hand the renderer a live executable plan.
+    try { this.#onEvent(structuredClone({type,...data})); } catch {}
+  }
+  #presentJob(a) {
+    this.#emit('job',{job:publicFinanceJob(a.job),label:a.task?.label||'금융 문서 작업',phase:a.phase,
+      approvalReady:a.phase==='review'&&a.job.state==='PC_REVIEW_REQUIRED'&&!a.outbox&&!a.noJournal&&Date.now()<=a.approvalExpires,
+      approvalExpires:a.approvalExpires||null});
+  }
+  #presentResult(id,result,historical=false){
+    this.#emit('result',{requestId:id,result:{status:result.status,saved:result.saved===true,storageVerified:result.storage_verified===true,
+      reviewComplete:typeof result.review_complete==='boolean'?result.review_complete:null,outputFile:result.outputFile||'',unresolved:result.unresolved||[],historical}});
+  }
+  async #restoreSaved(){
+    const candidates=[];for(const task of this.#config.tasks)for(const action of task.actions)for(const format of task.formats)if(['patch','convert'].includes(action))candidates.push({task,input:taskSelection(task,action,format)});
+    const saved=await this.#adapter.loadSavedResults(candidates.map(c=>c.input));
+    for(const entry of saved.reverse()){
+      if(!UUID.test(entry.requestId))continue;const{task,input}=candidates[entry.selectionIndex];
+      // A completed storage receipt alone is not a confirmed worker outcome:
+      // audit/close/report failures can still have ended UNCERTAIN. Require the
+      // worker's last durable, acknowledged completion too; never repair state.
+      let last;try{const raw=(await boundedRead(path.join(this.#stateRoot,entry.requestId+'.jsonl'),2_000_000)).content;
+        last=strictJSON(raw.trimEnd().split('\n').at(-1));keys(last,['version','job','phase','outbox']);
+      }catch{continue;}
+      const job=last.job;
+      if(last.version!==1||last.outbox!==null||job?.id!==entry.requestId||job.taskId!==task.id||job.action!==input.action||job.format!==input.format||job.state!=='LOCAL_SAVE_COMPLETED'||job.code!=='PC_SAVED'||job.saved!==true||!Number.isSafeInteger(job.revision))continue;
+      this.#emit('job',{job:publicFinanceJob(job),label:task.label,phase:'finished',approvalReady:false,approvalExpires:null});
+      this.#presentResult(entry.requestId,{...entry.result,review_complete:job.reviewComplete===true},true);
+    }
+  }
+  async reviewSaved(id){return this.serial(async()=>{
+    if(!UUID.test(id)||!await this.#policyCurrent())fail('LOCAL_REVIEW_INVALIDATED');
+    const review=await this.#adapter.reviewSaved(id);this.#emit('recheck',{requestId:id,recheck:review});
+  });}
   async #policyCurrent() {
     return (await boundedRead(this.#configPath,100_000)).hash === this.#configHash && (await boundedRead(this.#config.coreConfig,100_000)).hash === this.#coreHash;
   }
@@ -155,7 +191,7 @@ export class FinancialWorker {
   async #observe(a) {
     const j = (await this.#api(`/api/agent/financial/jobs/${a.job.id}/observe`, {workerId:this.#workerId})).job;
     if (!j || j.id !== a.job.id || !Number.isSafeInteger(j.revision)) fail('CONTROL_RESPONSE_INVALID');
-    a.job = j; return j;
+    a.job = j; this.#presentJob(a); return j;
   }
   async #report(a, state, code, saved = false, reviewComplete = false) {
     a.outbox = {workerId:this.#workerId, generation:a.generation, revision:a.job.revision, reportId:randomUUID(), state, code, saved, reviewComplete};
@@ -172,7 +208,7 @@ export class FinancialWorker {
       if(!matched && (!FINANCE_FINAL.has(result.job.state)||result.job.revision<a.outbox.revision))fail('CONTROL_RESPONSE_INVALID');
       a.job = result.job; a.outbox = null;
       if(!matched){this.#adapter.cancelPending();a.phase='terminal';}
-      await this.#journal(a); return matched;
+      await this.#journal(a); this.#presentJob(a); return matched;
     } catch (e) {
       if (e.status === 409) {
         await this.#observe(a); a.outbox = null;
@@ -211,7 +247,7 @@ export class FinancialWorker {
     if (!received) return;
     if (!UUID.test(received.id) || received.workerId !== this.#workerId || received.state !== 'PROCESSING' || !Number.isSafeInteger(received.generation)) fail('CONTROL_RESPONSE_INVALID');
     const task = this.#config.tasks.find(t => t.id === received.taskId && t.actions.includes(received.action) && t.formats.includes(received.format));
-    const a = {job:received, generation:received.generation, phase:'preparing', outbox:null}; this.#active = a;
+    const a = {job:received, task, generation:received.generation, phase:'preparing', outbox:null}; this.#active = a; this.#presentJob(a);
     try {
       // An existing journal is never treated as permission to execute again.
       for(const extension of ['.json','.jsonl']) {
@@ -222,15 +258,18 @@ export class FinancialWorker {
       await this.#journal(a);
       if (!task) { await this.#report(a,'BLOCKED','LOCAL_CHECK_FAILED'); return; }
       a.task = task;
-      a.plan = await this.#adapter.prepare({action:received.action, format:received.format, target_doc:task.target_doc, source_ids:task.source_ids, guideline_id:task.guideline_id, item_ids:received.action === 'patch' ? task.item_ids : []}, {requestId:received.id});
+      a.plan = await this.#adapter.prepare(taskSelection(task,received.action,received.format), {requestId:received.id});
       a.approvalExpires=Date.now()+this.#coreConfig.approval_ttl_ms;
-      // Full source, evidence and output are rendered ONLY to the PC console.
+      // Source, evidence and output go ONLY to the local PC presentation.
       const localDocs = [];
       for (const id of [task.target_doc,...task.source_ids,task.guideline_id]) {
         const entry = this.#coreConfig.documents.find(d => d.id === id && d.read_roles.includes(this.#coreConfig.role));
         if (!entry) fail('ACCESS_DENIED'); localDocs.push(await readSelectedText(this.#policy,entry));
       }
-      this.#out('PC 전용 검토 · 문서 내용/최종 승인/결과 파일은 PC에만 유지\n' + safeConsole({requestId:received.id, operation:{action:received.action,format:received.format}, localDocuments:localDocs, plan:a.plan}) + '\n');
+      this.#emit('review',{requestId:received.id,documents:localDocs.map(({id,format,content})=>({id,format,content})),
+        review:{status:a.plan.status,reason:a.plan.reason,items:a.plan.items||[],unresolved:a.plan.unresolved||[],
+          before:localDocs[0]?.content||'',after:a.plan.expected_body||'',diff:a.plan.unified_diff||'',output:a.plan.output_content||'',reviewComplete:a.plan.review_complete===true}});
+      if(this.#detailOutput)this.#out('PC 전용 검토 · 문서 내용/최종 승인/결과 파일은 PC에만 유지\n' + safeConsole({requestId:received.id, operation:{action:received.action,format:received.format}, localDocuments:localDocs, plan:a.plan}) + '\n');
     } catch (e) {
       if (a.outbox) throw e; // An ACK failure only retries its metadata report.
       this.#adapter.cancelPending();
@@ -240,7 +279,7 @@ export class FinancialWorker {
     // outcome. The next tick explicitly resumes this phase, never prepare().
     await this.#finishPreparation(a);
   }
-  /** Called exclusively by local terminal input; there is no network approval API. */
+  /** Local terminal or authenticated loopback UI only; never the relay server. */
   async localCommand(command, id) { return this.serial(async () => {
     const a = this.#active;
     if (!['approve','reject','cancel'].includes(command) || !UUID.test(id) || !a || a.job.id !== id || a.phase !== 'review' || a.outbox || a.noJournal) fail('NO_LOCAL_REVIEW');
@@ -263,7 +302,8 @@ export class FinancialWorker {
     try { result=await this.#adapter.execute(approved.token); }
     catch { result={status:'UNCERTAIN'}; }
     finally { clearTimeout(expire); }
-    this.#out('PC 전용 저장 결과\n'+safeConsole(result)+'\n');
+    this.#presentResult(a.job.id,result);
+    if(this.#detailOutput)this.#out('PC 전용 저장 결과\n'+safeConsole(result)+'\n');
     const saved=result.status==='COMPLETED' && result.saved===true && result.storage_verified===true;
     a.phase='finished';
     // Persist this outcome before attempting its network ACK; never execute twice.

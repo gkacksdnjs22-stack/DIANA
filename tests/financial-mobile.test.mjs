@@ -11,11 +11,12 @@ import { createControlServer } from '../lib/control.mjs';
 import { FinancialWorker, financialTransport } from '../financial-documents/remote-worker.mjs';
 import { publicFinanceJob } from '../lib/financial-contract.mjs';
 import { boundedRead } from '../financial-documents/files.mjs';
+import { createReviewViewer } from '../financial-documents/review-viewer.mjs';
 
 const tokens={userToken:'u'.repeat(40),agentToken:'a'.repeat(40),gatewayToken:'g'.repeat(40)};
 const python=process.env.DIANA_TEST_PYTHON || path.join(os.homedir(),'.cache/codex-runtimes/codex-primary-runtime/dependencies/python',process.platform==='win32'?'python.exe':'bin/python');
 const privateMarker='PRIVATE_FINANCE_BODY_CANARY_8271';
-async function fixture(t,{ttl=300_000}={}){
+async function fixture(t,{ttl=300_000,localView=false,onPresentation=()=>{}}={}){
   const parent=path.resolve('.local');await mkdir(parent,{recursive:true});const root=await mkdtemp(path.join(parent,'financial-mobile-test-'));
   const input=path.join(root,'input'),output=path.join(root,'output'),generic=path.join(root,'generic'),state=path.join(root,'state');
   await cp(path.resolve('financial-documents/fixtures/fund-a'),input,{recursive:true});await mkdir(output);await mkdir(generic);
@@ -26,7 +27,7 @@ async function fixture(t,{ttl=300_000}={}){
   await writeFile(coreConfig,JSON.stringify(core));
   const task={id:randomUUID(),label:'가상 검토서 보완',actions:['patch','convert','checklist_review'],formats:['md','txt','json'],target_doc:'REVIEW_A',source_ids:['DD_A'],guideline_id:'PE-02',item_ids:['KEY_MAN']};
   const config={schema_version:1,coreConfig,stateDir:state,tasks:[task]};await writeFile(workerConfig,JSON.stringify(config));
-  let now=Date.now(),server,base,deviceId='home-pc';const wire=[],consoleOutput=[];
+  let now=Date.now(),server,base,deviceId='home-pc';const wire=[],consoleOutput=[],presentation=[];
   const dbPath=path.join(root,'control.sqlite');
   const start=async()=>{server=createControlServer({...tokens,deviceId,dbPath,transferDir:path.join(root,'relay'),now:()=>now});server.listen(0,'127.0.0.1');await once(server,'listening');base='http://127.0.0.1:'+server.address().port;};
   const stop=async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));};
@@ -44,7 +45,7 @@ async function fixture(t,{ttl=300_000}={}){
   };
   let worker;
   t.after(async()=>{if(worker)await worker.close();await stop();assert.equal(path.dirname(root),parent);assert.match(path.basename(root),/^financial-mobile-test-/u);await rm(root,{recursive:true,force:true});});
-  worker=await FinancialWorker.create({configPath:workerConfig,api,output:s=>consoleOutput.push(s),documentRoot:generic});
+  worker=await FinancialWorker.create({configPath:workerConfig,api,output:s=>consoleOutput.push(s),onEvent:e=>{presentation.push(e);onPresentation(e);},detailOutput:!localView,documentRoot:generic});
   async function request(route,{method='GET',token=tokens.userToken,body,raw}={}){
     const text=raw??(body===undefined?undefined:JSON.stringify(body));
     const res=await fetch(base+route,{method,headers:{Authorization:'Bearer '+token,...(text===undefined?{}:{'Content-Type':'application/json'})},body:text});
@@ -69,12 +70,47 @@ async function fixture(t,{ttl=300_000}={}){
     t.after(()=>{server.removeListener('request',listener);request.destroy();});
     await started;return {finish:()=>{request.end('}');return result;}};
   };
-  return {root,input,output,generic,state,task,config,core,coreConfig,workerConfig,wire,consoleOutput,request,phone,pair,create,get,files,deferredCancel,
+  return {root,input,output,generic,state,task,config,core,coreConfig,workerConfig,wire,consoleOutput,presentation,request,phone,pair,create,get,files,deferredCancel,
     get worker(){return worker;},advance:n=>now+=n,drop:s=>dropState=s,gate:fn=>onGate=fn,fault:(route,timing='before',count=1)=>faults.push({route,timing,count}),get saveStarts(){return saveStarts;},
-    restartServer:async(nextDevice)=>{await stop();if(nextDevice)deviceId=nextDevice;await start();},restartWorker:async()=>{await worker.close();worker=await FinancialWorker.create({configPath:workerConfig,api,output:s=>consoleOutput.push(s),documentRoot:generic});},
+    restartServer:async(nextDevice)=>{await stop();if(nextDevice)deviceId=nextDevice;await start();},restartWorker:async()=>{await worker.close();worker=await FinancialWorker.create({configPath:workerConfig,api,output:s=>consoleOutput.push(s),onEvent:e=>{presentation.push(e);onPresentation(e);},detailOutput:!localView,documentRoot:generic});},
     dump:()=>{const db=new DatabaseSync(dbPath);try{return db.prepare('SELECT key,value FROM settings').all();}finally{db.close();}}
   };
 }
+
+test('loopback approval saves once and saved rechecks survive restart without changing relay state or another approval',async t=>{
+  let f;const view=await createReviewViewer({onCommand:(command,id)=>f.worker.localCommand(command,id),onRecheck:id=>f.worker.reviewSaved(id)});t.after(()=>view.close());
+  f=await fixture(t,{localView:true,onPresentation:e=>view.accept(e)});const url=new URL(view.url),key=new URLSearchParams(url.hash.slice(1)).get('view');
+  const read=async()=>(await(await fetch(url.origin+'/api/view',{headers:{Authorization:'Bearer '+key}})).json()).jobs;
+  const act=async(entry,action)=>fetch(url.origin+'/api/local-action',{method:'POST',headers:{Authorization:'Bearer '+key,Origin:url.origin,'Content-Type':'application/json'},body:JSON.stringify({requestId:entry.job.id,viewId:action==='recheck'?entry.resultId:entry.reviewId,action})});
+  await f.worker.tick();const first=await f.create();await f.worker.tick();let entry=(await read()).find(e=>e.job.id===first.id);
+  assert.equal((await act(entry,'approve')).status,200);assert.equal((await f.get(first.id)).state,'LOCAL_SAVE_COMPLETED');assert.equal((await f.files()).length,1);
+  entry=(await read()).find(e=>e.job.id===first.id);assert.equal((await act(entry,'recheck')).status,200);
+  const reviewed=(await read()).find(e=>e.job.id===first.id);assert.deepEqual(reviewed.recheck.items.map(i=>i.status),['SATISFIED','SATISFIED','MISSING_NO_EVIDENCE']);assert.equal(f.saveStarts,1);
+  await f.worker.tick();const next=await f.create('convert','txt');await f.worker.tick();assert.equal((await act(entry,'recheck')).status,200);const pending=(await read()).find(e=>e.job.id===next.id);assert.equal((await act(pending,'approve')).status,200);assert.equal((await f.files()).length,2);
+  await f.restartWorker();entry=(await read()).find(e=>e.job.id===first.id);assert.equal(entry.result.historical,true);assert.equal(entry.approvalReady,false);assert.equal((await act(entry,'recheck')).status,200);assert.equal(f.saveStarts,2);
+  assert.ok(!JSON.stringify(f.wire).includes(privateMarker));assert.ok(!JSON.stringify(f.dump()).includes(privateMarker));
+});
+for(const record of ['uncertain','pending-ack','corrupt'])test('history restore does not promote '+record+' worker journals to saved completion',async t=>{
+  const f=await fixture(t,{localView:true});await f.worker.tick();const j=await f.create();await f.worker.tick();await f.worker.localCommand('approve',j.id);await f.worker.close();
+  const file=path.join(f.state,j.id+'.jsonl'),raw=await readFile(file,'utf8'),last=JSON.parse(raw.trimEnd().split('\n').at(-1)),output=await readFile(path.join(f.output,(await f.files())[0]));
+  if(record==='uncertain'){last.job.state='UNCERTAIN';last.job.code='RECOVERY_REQUIRED';last.job.saved=false;}
+  if(record==='pending-ack')last.outbox={state:'LOCAL_SAVE_COMPLETED'};
+  await writeFile(file,record==='corrupt'?'INVALID_EXISTING_JOURNAL':raw+JSON.stringify(last)+'\n');
+  const before=f.presentation.length;await f.restartWorker();assert.ok(!f.presentation.slice(before).some(e=>e.type==='job'&&e.job.id===j.id));assert.deepEqual(await readFile(path.join(f.output,(await f.files())[0])),output);
+});
+
+test('local view receives detached readable snapshots without approval secrets or console document dumps',async t=>{
+  const f=await fixture(t,{localView:true});await f.worker.tick();const j=await f.create();await f.worker.tick();
+  const review=f.presentation.find(e=>e.type==='review'&&e.requestId===j.id);
+  assert.ok(review.documents.some(d=>d.content.includes(privateMarker)));assert.ok(review.review.after.includes(privateMarker));
+  for(const field of ['canonical_payload','plan_hash','plan_id','approval_id','token'])assert.ok(!JSON.stringify(review).includes('"'+field+'"'));
+  assert.ok(!f.consoleOutput.join('').includes(privateMarker));assert.ok(f.presentation.some(e=>e.type==='job'&&e.job.id===j.id&&e.approvalReady===true));
+  review.review.after='MUTATED_VIEW_ONLY';review.documents[0].content='MUTATED_VIEW_ONLY';
+  await f.worker.localCommand('approve',j.id);assert.equal((await f.get(j.id)).state,'LOCAL_SAVE_COMPLETED');
+  const bytes=await readFile(path.join(f.output,(await f.files())[0]),'utf8');assert.ok(bytes.includes(privateMarker));assert.ok(!bytes.includes('MUTATED_VIEW_ONLY'));
+  const result=f.presentation.find(e=>e.type==='result');assert.equal(result.result.storageVerified,true);assert.equal(result.result.reviewComplete,false);
+  assert.ok(!JSON.stringify(f.wire).includes(privateMarker));assert.ok(!JSON.stringify(f.dump()).includes(privateMarker));
+});
 
 test('real paired phone → existing Python core → local test approval → save/readback → minimal state; queue does not invalidate review',async t=>{
   const f=await fixture(t);await f.worker.tick();

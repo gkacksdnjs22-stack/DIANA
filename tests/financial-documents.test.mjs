@@ -45,6 +45,26 @@ async function approve(adapter, plan) {
 }
 const outputs = async folder => (await readdir(folder)).filter(name => /\.(?:md|txt|json)$/u.test(name));
 
+for(const format of ['md','txt','json'])test('saved '+format+' is reviewed as the actual saved body and restored without approvals',async t=>{
+  const f=await setup(t),input=selection('patch',format),plan=await f.adapter.prepare(input),approved=await approve(f.adapter,plan),result=await f.adapter.execute(approved.token);
+  const bytes=await readFile(result.outputFile),review=await f.adapter.reviewSaved(result.request_id);
+  assert.deepEqual(review.items.map(i=>i.status),['SATISFIED','SATISFIED','MISSING_NO_EVIDENCE']);assert.equal(review.reviewComplete,false);assert.deepEqual(review.unresolved.map(i=>i.item_id),['LPAC']);
+  assert.deepEqual(await readFile(result.outputFile),bytes);assert.equal((await outputs(f.output)).length,1);
+  const restarted=await FinancialDocuments.create({configPath:f.configPath}),loaded=await restarted.loadSavedResults([input]);assert.equal(loaded.length,1);assert.equal(loaded[0].requestId,result.request_id);
+  assert.deepEqual((await restarted.reviewSaved(result.request_id)).items.map(i=>i.status),review.items.map(i=>i.status));assert.equal((await restarted.approve(plan.plan_id,plan.plan_hash)).reason,'UNKNOWN_OR_CHANGED_PLAN');
+});
+test('saved recheck leaves another pending plan and its explicit approval intact',async t=>{
+  const f=await setup(t),plan=await f.adapter.prepare(selection()),approved=await approve(f.adapter,plan),saved=await f.adapter.execute(approved.token);
+  const next=await f.adapter.prepare(selection('convert','txt',[]));await f.adapter.reviewSaved(saved.request_id);const second=await approve(f.adapter,next);assert.equal((await f.adapter.execute(second.token)).status,'COMPLETED');assert.equal((await outputs(f.output)).length,2);
+});
+test('saved review refuses tampered files, unregistered receipts and changed policy without overwriting',async t=>{
+  const f=await setup(t),input=selection(),plan=await f.adapter.prepare(input),approved=await approve(f.adapter,plan),saved=await f.adapter.execute(approved.token);
+  await assert.rejects(f.adapter.reviewSaved(randomUUID()),{code:'NO_SAVED_RESULT'});
+  const changed=Buffer.from('EXTERNAL_MODIFICATION');await writeFile(saved.outputFile,changed);await assert.rejects(f.adapter.reviewSaved(saved.request_id),{code:'CONTENT_CHANGED'});
+  const restarted=await FinancialDocuments.create({configPath:f.configPath});assert.deepEqual(await restarted.loadSavedResults([input]),[]);assert.deepEqual(await readFile(saved.outputFile),changed);
+  f.config.documents[0].read_roles=[];await f.updateConfig();await assert.rejects(f.adapter.reviewSaved(saved.request_id));assert.deepEqual(await readFile(saved.outputFile),changed);
+});
+
 test('real synthetic review preserves satisfied item and explicitly patches only evidence-backed omission', async t => {
   const f = await setup(t);
   const original = await readFile(path.join(f.input, 'review.md'));
