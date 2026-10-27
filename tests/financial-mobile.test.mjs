@@ -31,11 +31,14 @@ async function fixture(t,{ttl=300_000}={}){
   const start=async()=>{server=createControlServer({...tokens,deviceId,dbPath,transferDir:path.join(root,'relay'),now:()=>now});server.listen(0,'127.0.0.1');await once(server,'listening');base='http://127.0.0.1:'+server.address().port;};
   const stop=async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));};
   await start();
-  let dropState=null;let saveStarts=0;let onGate=null;
+  let dropState=null;let saveStarts=0;let onGate=null;const faults=[];
+  const inject=(route,timing)=>{const f=faults.find(f=>route.endsWith(f.route)&&f.timing===timing&&f.count>0);if(f){f.count--;throw Object.assign(Error('TEST_CONTROL_OFFLINE'),{code:'CONTROL_OFFLINE'});}};
   const api=async(route,body)=>{
+    inject(route,'before');
     if(body?.state==='LOCAL_SAVING')saveStarts++;
     const r=await request(route,{method:'POST',token:tokens.agentToken,body});
     if(r.status>=400)throw Object.assign(Error('CONTROL_REJECTED'),{status:r.status});
+    inject(route,'after');
     if(body?.state==='LOCAL_SAVING'&&onGate)await onGate();
     if(dropState&&body?.state===dropState){dropState=null;throw Error('TEST_ACK_LOST');}return r.data;
   };
@@ -67,7 +70,7 @@ async function fixture(t,{ttl=300_000}={}){
     await started;return {finish:()=>{request.end('}');return result;}};
   };
   return {root,input,output,generic,state,task,config,core,coreConfig,workerConfig,wire,consoleOutput,request,phone,pair,create,get,files,deferredCancel,
-    get worker(){return worker;},advance:n=>now+=n,drop:s=>dropState=s,gate:fn=>onGate=fn,get saveStarts(){return saveStarts;},
+    get worker(){return worker;},advance:n=>now+=n,drop:s=>dropState=s,gate:fn=>onGate=fn,fault:(route,timing='before',count=1)=>faults.push({route,timing,count}),get saveStarts(){return saveStarts;},
     restartServer:async(nextDevice)=>{await stop();if(nextDevice)deviceId=nextDevice;await start();},restartWorker:async()=>{await worker.close();worker=await FinancialWorker.create({configPath:workerConfig,api,output:s=>consoleOutput.push(s),documentRoot:generic});},
     dump:()=>{const db=new DatabaseSync(dbPath);try{return db.prepare('SELECT key,value FROM settings').all();}finally{db.close();}}
   };
@@ -193,6 +196,38 @@ for(const change of ['source','policy','expiry'])test('a recovered review ACK st
   try{await f.worker.localCommand('approve',j.id);}catch{}
   try{await f.worker.tick();}catch{}
   assert.equal((await f.get(j.id)).state,'BLOCKED');assert.equal((await f.files()).length,0);assert.equal(f.saveStarts,0);
+});
+
+for(const route of ['/register','/next','/observe'])for(const timing of ['before','after'])test('preparation recovers '+route+' '+timing+' communication failures and unblocks its queue',async t=>{
+  const f=await fixture(t);await f.worker.tick();const j=await f.create();const next=await f.create('convert');
+  f.fault(route,timing,route==='/observe'?2:1);
+  for(let i=0;i<8;i++){try{await f.worker.tick();}catch{}if((await f.get(j.id)).state==='PC_REVIEW_REQUIRED')break;}
+  assert.equal((await f.get(j.id)).state,'PC_REVIEW_REQUIRED');await f.worker.localCommand('approve',j.id);
+  assert.equal((await f.get(j.id)).state,'LOCAL_SAVE_COMPLETED');assert.equal((await f.files()).length,1);assert.equal(f.saveStarts,1);
+  for(let i=0;i<4;i++){await f.worker.tick();if((await f.get(next.id)).state==='PC_REVIEW_REQUIRED')break;}
+  assert.equal((await f.get(next.id)).state,'PC_REVIEW_REQUIRED');
+  assert.equal(f.consoleOutput.filter(s=>s.includes('"requestId": "'+j.id+'"')&&s.includes('"localDocuments"')).length,1);
+});
+
+test('a genuine preparation failure plus failed error lookups terminates after reconnection',async t=>{
+  const f=await fixture(t);await f.worker.tick();const j=await f.create();
+  const source=path.join(f.input,'review.md'),original=await readFile(source);await writeFile(source,Buffer.from([255,254]));
+  f.fault('/observe','before',2);try{await f.worker.tick();}catch{}await writeFile(source,original);
+  const next=await f.create('convert');
+  for(let i=0;i<8;i++){try{await f.worker.tick();}catch{}if(['FAILED','BLOCKED'].includes((await f.get(j.id)).state))break;}
+  assert.ok(['FAILED','BLOCKED'].includes((await f.get(j.id)).state));assert.equal((await f.files()).length,0);
+  for(let i=0;i<4;i++){await f.worker.tick();if((await f.get(next.id)).state==='PC_REVIEW_REQUIRED')break;}
+  assert.equal((await f.get(next.id)).state,'PC_REVIEW_REQUIRED');assert.equal(f.saveStarts,0);
+});
+
+for(const invalidation of ['cancel','expiry','source'])test('preparing-phase reconnection honors '+invalidation+' without executing stale work',async t=>{
+  const f=await fixture(t,{ttl:invalidation==='expiry'?150:300_000});await f.worker.tick();const j=await f.create();f.fault('/observe','before',2);try{await f.worker.tick();}catch{}
+  if(invalidation==='cancel')await f.phone('/api/financial/jobs/'+j.id+'/cancel',{method:'POST',body:{}});
+  if(invalidation==='expiry')await new Promise(r=>setTimeout(r,180));
+  if(invalidation==='source')await writeFile(path.join(f.input,'review.md'),'Changed during preparation outage');
+  for(let i=0;i<5;i++){try{await f.worker.tick();}catch{}if((await f.get(j.id)).state!=='PROCESSING')break;}
+  if(invalidation==='source'){try{await f.worker.localCommand('approve',j.id);}catch{}}
+  assert.equal((await f.get(j.id)).state,invalidation==='cancel'?'CANCELLED':'BLOCKED');assert.equal((await f.files()).length,0);assert.equal(f.saveStarts,0);
 });
 
 for(const mutation of ['source','policy','expiry'])test('local '+mutation+' change invalidates pending approval without save',async t=>{

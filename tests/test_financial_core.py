@@ -39,6 +39,34 @@ def change_doc(payload, key, content):
 
 
 class FinancialCoreTests(unittest.TestCase):
+    def test_declaration_question_condition_negation_matrix(self):
+        for positive, negative in [("LPAC participation right exists.", "LPAC participation right does not exist."),
+                                   ("LPAC 참여권이 명시되어 있다.", "LPAC 참여권이 없다.")]:
+            base = positive[:-1]
+            cases = [(positive, True), (positive + " " + positive, True),
+                     (base + "?", False), (base + "？", False), (base + "﹖", False),
+                     (base + "⁇", False), (base + "? " + positive, False),
+                     (positive + " If manager agrees.", False), (base + " if manager agrees.", False),
+                     (positive + "\nOnly if confirmed.", False), (positive + " 단, 운용사 동의 시.", False),
+                     (negative, False), (positive + " " + negative, False),
+                     (positive + " Not confirmed.", False), (positive + " 미확인.", False),
+                     (positive + " Unregistered context.", False)]
+            for location in ("review", "source"):
+                for content, certain in cases:
+                    with self.subTest(positive=positive, location=location, content=content):
+                        payload = fixture()
+                        guide = json.loads(payload["guideline"]["content"])
+                        guide["rules"] = [{"id": "LP9", "label": "LPAC", "aliases": ["LPAC"],
+                            "required_terms": ["LPAC"], "condition": "all", "source_ids": ["S9"],
+                            "positive_statements": [positive], "negative_statements": [negative]}]
+                        change_doc(payload, "guideline", canonical(guide))
+                        change_doc(payload, "review_doc", content if location == "review" else "Unrelated review.")
+                        payload["source_docs"] = [doc("S9", content if location == "source" else "Unrelated material.")]
+                        result = handle(payload)
+                        expected = ("SATISFIED" if location == "review" else "MISSING_WITH_EVIDENCE") if certain else "NEEDS_CONFIRMATION"
+                        self.assertEqual(result["items"][0]["status"], expected)
+                        self.assertEqual(result["review_complete"], certain and location == "review")
+
     def test_ellipsis_normalization_cannot_turn_registered_negation_positive(self):
         positive = "LPAC participation right exists."
         for punctuation in ("…", "‥", "...", "．．．", "︙"):
@@ -224,10 +252,12 @@ import financial_core.interface
 
     def test_quote_newlines_and_patch_tampering(self):
         payload = fixture("patch", ["KM9"])
-        source = "Heading\r\n\r\nKey departure suspends investment.\r\nUnrelated original line."
+        # Keep the newline within a registered statement. Unregistered trailing
+        # context is now conservatively covered by the verdict matrix above.
+        source = "Heading\r\n\r\nKey departure suspends\r\ninvestment."
         payload["source_docs"] = [doc("S9", source)]
         result = handle(payload)
-        quote = "Key departure suspends investment.\r\nUnrelated original line."
+        quote = "Key departure suspends\r\ninvestment."
         self.assertEqual(result["changes"][0]["source"]["quote"], quote)
         self.assertIn(quote, result["expected_body"])
         from financial_core.doc_parser import parse_document

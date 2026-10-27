@@ -4,11 +4,48 @@ import { open, lstat, realpath, readdir, link, unlink } from 'node:fs/promises';
 import { checkedDirectory } from '../personal-ai/documents/files.mjs';
 import { strictJSON, keys, fail } from './strict-json.mjs';
 import { UUID } from '../lib/financial-contract.mjs';
+import { DatabaseSync } from 'node:sqlite';
 
 const same=(a,b)=>a.dev===b.dev&&a.ino===b.ino&&a.size===b.size&&a.mtimeNs===b.mtimeNs&&a.ctimeNs===b.ctimeNs&&a.nlink===b.nlink;
 const regular=s=>s.isFile()&&!s.isSymbolicLink()&&s.size>0n&&s.size<=4096n;
 const archiveName=id=>'abandoned-'+id+'.lock';
 const dead=pid=>{try{process.kill(pid,0);return false;}catch(e){return e.code==='ESRCH';}};
+const COORDINATOR_APP=0x44494c4b;
+const COORDINATOR_TABLE='CREATE TABLE diana_worker_lock_protocol(version INTEGER PRIMARY KEY CHECK(version=1))';
+
+function protocol(db){
+  const schema=db.prepare("SELECT type,name,sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").all();
+  if(db.prepare('PRAGMA application_id').get().application_id!==COORDINATOR_APP||db.prepare('PRAGMA journal_mode').get().journal_mode!=='delete'||schema.length!==1||schema[0].type!=='table'||schema[0].name!=='diana_worker_lock_protocol'||schema[0].sql!==COORDINATOR_TABLE)fail('WORKER_LOCK_UNCERTAIN');
+  const rows=db.prepare('SELECT version FROM diana_worker_lock_protocol').all();if(rows.length!==1||rows[0].version!==1)fail('WORKER_LOCK_UNCERTAIN');
+}
+
+async function coordination(directory){
+  const filename=path.join(directory,'worker-coordination.sqlite');let created=false;
+  // An unknown sidecar is not ours to truncate, replay or remove. Our lifetime
+  // transaction never writes rows, so a running lease creates no sidecars.
+  for(const suffix of ['-journal','-wal','-shm']){
+    let exists=false;try{await lstat(filename+suffix);exists=true;}catch(e){if(e.code!=='ENOENT')throw e;}
+    if(exists)fail('WORKER_LOCK_UNCERTAIN');
+  }
+  try{const h=await open(filename,'wx',0o600);await h.close();created=true;}catch(e){if(e.code!=='EEXIST')throw e;}
+  if(created){
+    const s=await lstat(filename,{bigint:true});if(!s.isFile()||s.isSymbolicLink()||s.nlink!==1n||s.size!==0n||await realpath(filename)!==filename)fail('WORKER_LOCK_UNCERTAIN');
+    const db=new DatabaseSync(filename);try{db.exec(`PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA application_id=${COORDINATOR_APP}; ${COORDINATOR_TABLE}; INSERT INTO diana_worker_lock_protocol VALUES(1);`);}finally{db.close();}
+  }
+  const s=await lstat(filename,{bigint:true});
+  if(!s.isFile()||s.isSymbolicLink()||s.nlink!==1n||s.size<100n||s.size>1048576n||await realpath(filename)!==filename)fail('WORKER_LOCK_UNCERTAIN');
+  // Validate a known, metadata-only database before allowing a writable open.
+  let probe;try{probe=new DatabaseSync(filename,{readOnly:true});protocol(probe);}catch{fail('WORKER_LOCK_UNCERTAIN');}finally{probe?.close();}
+  const current=await lstat(filename,{bigint:true});if(!same(current,s))fail('WORKER_LOCK_UNCERTAIN');
+  const db=new DatabaseSync(filename);
+  try{
+    protocol(db);db.exec('PRAGMA busy_timeout=0');
+    // Held for the complete lease, including recovery, owner publication and
+    // release. SQLite's OS lock is released automatically on process death.
+    try{db.exec('BEGIN IMMEDIATE');}catch(e){if(e.errcode===5||e.errcode===6)fail('WORKER_ALREADY_RUNNING');throw e;}
+    return db;
+  }catch(e){db.close();throw e;}
+}
 
 /** Lock metadata only. Document boundedRead keeps its nlink===1 restriction.
  * A two-link record is readable ONLY if both links are accounted for by the
@@ -45,7 +82,7 @@ async function snapshot(directory) {
   }finally{await h.close();}
 }
 
-export async function acquireWorkerLock(directory) {
+async function acquireFile(directory) {
   await checkedDirectory(directory);
   const filename=path.join(directory,'worker.lock');
   try{return await open(filename,'wx',0o600);}catch(e){if(e.code!=='EEXIST')throw e;}
@@ -62,4 +99,26 @@ export async function acquireWorkerLock(directory) {
   if(!same(await lstat(filename,{bigint:true}),current.stat)||!same(await lstat(current.archive,{bigint:true}),current.stat))fail('WORKER_LOCK_UNCERTAIN');
   await unlink(filename);
   try{return await open(filename,'wx',0o600);}catch(e){if(e.code==='EEXIST')fail('WORKER_ALREADY_RUNNING');throw e;}
+}
+
+export async function acquireWorkerLock(directory,owner){
+  keys(owner,['pid','workerId']);if(owner.pid!==process.pid||!UUID.test(owner.workerId))fail('WORKER_LOCK_UNCERTAIN');
+  await checkedDirectory(directory);
+  const db=await coordination(directory);let handle;
+  try{
+    handle=await acquireFile(directory);await handle.writeFile(JSON.stringify(owner));await handle.sync();
+    const owned=await handle.stat({bigint:true}),filename=path.join(directory,'worker.lock');
+    if(!regular(owned)||owned.nlink!==1n||!same(owned,await lstat(filename,{bigint:true})))fail('WORKER_LOCK_UNCERTAIN');
+    let closed=false;
+    return{async close(){
+      if(closed)return;closed=true;
+      try{
+        await checkedDirectory(directory);
+        if(!same(owned,await lstat(filename,{bigint:true})))fail('WORKER_LOCK_UNCERTAIN');
+        await handle.close();handle=null;
+        if(!same(owned,await lstat(filename,{bigint:true})))fail('WORKER_LOCK_UNCERTAIN');
+        await unlink(filename);
+      }finally{try{await handle?.close();}finally{try{db.exec('ROLLBACK');}finally{db.close();}}}
+    }};
+  }catch(e){try{await handle?.close();}finally{try{db.exec('ROLLBACK');}finally{db.close();}}throw e;}
 }

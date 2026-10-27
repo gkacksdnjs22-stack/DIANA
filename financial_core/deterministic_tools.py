@@ -46,7 +46,8 @@ def statement_sentences(raw):
             digit = normalize(after)
             if (before and before in dots) or (after and after in dots) or (digit and digit[0].isdecimal()):
                 continue
-        yield raw[start:index]
+        # A question mark is semantic content, not disposable punctuation.
+        yield raw[start:index + 1] if char in "?？" else raw[start:index]
         start = index + 1
     yield raw[start:]
 
@@ -54,14 +55,27 @@ def statement_sentences(raw):
 def statement_states(raw, rule):
     positive = {normalize(s).rstrip(".!?。") for s in rule["positive_statements"]}
     negative = {normalize(s).rstrip(".!?。") for s in rule["negative_statements"]}
+    whole = normalize(raw)
+    if "?" in whole:
+        return ["unknown"]
+    # A registered whole statement may wrap across original line breaks.
+    complete = whole.rstrip(".!?。")
+    if complete in negative:
+        return ["negative"]
+    if complete in positive:
+        return ["positive"]
     states = []
     # Normalize only AFTER original sentence boundaries have been chosen.
     # NFKC must not turn … into three separators and discard its condition.
     for sentence in statement_sentences(raw):
-        if not sentence.strip() or not relevant(sentence, rule):
+        if not sentence.strip():
             continue
         normalized = normalize(sentence)
-        states.append("positive" if normalized in positive else "negative" if normalized in negative else "unknown")
+        # The caller selected this whole paragraph as evidence. Do not discard
+        # unregistered neighbouring clauses: they may qualify/negate a match.
+        # Compatibility question forms are detected after normalization too.
+        states.append("unknown" if "?" in normalized else
+                      "negative" if normalized in negative else "positive" if normalized in positive else "unknown")
     return states or ["unknown"]
 
 

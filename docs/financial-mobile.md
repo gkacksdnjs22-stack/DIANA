@@ -73,9 +73,15 @@ worker journal은 요청 메타데이터/단계/미전송 상태 보고만 담�
 
 PC_REVIEW_REQUIRED의 상태 보고 ACK만 유실됐다면 현재 인스턴스의 유효한 검토 계획을 보존하고 동일 보고를 재전송한다. ACK 확인 전에는 로컬 승인도 허용하지 않으며, 확인 후 사용자가 직접 승인해야 한다. 원문/정책 변경·취소·만료는 계속 계획을 무효화한다.
 
+prepare와 네트워크 조회의 오류 처리를 분리한다. 준비 후 조회가 실패하면 `preparing`과 유효한 로컬 계획을 유지하고, 준비 자체가 실패하면 `preparation_failed`와 고정 실패 결과를 유지한다. 다음 tick은 최신 서버 상태를 확인한 뒤 해당 단계를 마무리하며 prepare/execute를 다시 호출하지 않는다. 취소·서버 만료·승인 유효 시간·로컬 원문/정책 검사도 생략하지 않는다. 서버 heartbeat 만료가 먼저 발생했다면 기존 요청을 되살리지 않고 차단 상태를 따른다.
+
 90초 heartbeat가 끊기면 준비/승인 대기는 BLOCKED, 저장 중은 UNCERTAIN이다. 이전 worker의 늦은 상태 보고는 덮어쓰지 못한다. 재시작 시 승인 토큰을 복원하지 않으며 기존 요청을 자동 재실행하지 않는다. PC에서 기록을 확인하고 필요하면 새로운 요청과 새로운 승인을 만든다. worker.lock은 살아 있는 PID나 판별 불가 PID가 있으면 시작을 거부하며, 죽은 PID가 확인되면 기존 lock을 보존하고 새 세션으로 시작한다. 보관 link 생성 직후 중단돼 두 경로가 남아도 같은 상태 폴더의 worker.lock/해당 abandoned-UUID.lock이 정확히 같은 파일·링크 수 2인지 확인한 뒤 복구를 재개한다. 낯선 링크·추가 링크·충돌 보관 파일은 보존하며 거부한다. 일반 문서 boundedRead의 단일 링크 제한은 완화하지 않는다. 다른 프로세스를 종료하지 않는다.
 
 UNCERTAIN은 PC의 worker journal, 출력 폴더, `.financial-ledger`의 claim/완료/감사 기록과 파일 재읽기를 확인해야 한다. 이 버전은 불확실한 저장을 자동으로 완료 처리하거나 다시 실행하지 않는다. 요청은 서버당 최대 500개 보존하며 한도 도달 시 429로 거절한다. 이 버전에는 원격 기록 삭제/보관 정리 API가 없다.
+
+동시 재시작의 stale-lock 삭제는 상태 폴더의 `worker-coordination.sqlite`에서 `BEGIN IMMEDIATE` 조정 잠금을 획득한 프로세스만 수행한다. 이 트랜잭션은 기존 파일 확인·보관·삭제·새 소유자 기록뿐 아니라 worker 종료 시 소유 파일 삭제까지 계속 유지한다. 경쟁 프로세스는 소유 파일을 지우지 못하고 거부된다. 조정 DB에는 문서나 작업 데이터 없이 프로토콜 버전만 저장하며, 알려진 스키마/파일 조건을 확인한 뒤 사용한다. 기존 잠금의 PID 확인은 signal 0만 사용한다. 현재 프로토콜을 사용하는 별도 프로세스의 동시 시작·지연 삭제·정상 해제 없이 프로세스 종료 후 재시작을 검사했다. SQLite의 트랜잭션 잠금 근거는 [공식 문서](https://www.sqlite.org/lang_transaction.html)에 있다. 초기 DB 생성 중 중단돼 빈 파일/불완전한 DB가 남거나 낯선 파일·링크가 있으면 보존하고 시작을 거부하므로 PC에서 수동 확인이 필요하다. 구버전 worker와의 혼용이나 외부 프로그램의 파일 변조를 OS 차원에서 막는 기능은 아니다.
+
+코어는 등록된 확정 진술만 인정한다. 질문 표시가 있는 근거는 확정 긍정으로 채택하지 않으며, 선택된 근거 문단에서 등록되지 않은 조건·부정·주변 문장을 버리지 않고 추가 확인 대상으로 처리한다. 따라서 관련 없는 문장이 함께 있는 문단도 보수적으로 `NEEDS_CONFIRMATION`이 될 수 있다. 등록 진술 자체의 줄바꿈은 허용하고 원문 인용은 보존한다. 이는 자유로운 한국어/금융 의미 이해나 질문 자동 답변 기능이 아니다.
 
 ## 로컬 재현
 
@@ -112,7 +118,7 @@ npm run finance:worker -- --config C:\work\diana\.local\financial-mobile-demo-�
 ## 검증 명령과 배포 경계
 
 ```powershell
-node --test tests/financial-mobile.test.mjs tests/financial-documents.test.mjs
+node --test tests/financial-mobile.test.mjs tests/financial-documents.test.mjs tests/financial-worker-lock.test.mjs
 python -B -m unittest discover -s tests -p test_financial_core.py
 ```
 

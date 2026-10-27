@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, lstat, realpath, unlink } from 'node:fs/promises';
+import { mkdir, open, lstat, realpath } from 'node:fs/promises';
 import { FinancialDocuments } from './adapter.mjs';
 import { boundedRead, readSelectedText, verifyOpenedOutput } from './files.mjs';
 import { strictJSON, keys, fail } from './strict-json.mjs';
@@ -82,10 +82,9 @@ export class FinancialWorker {
       }
     }
     w.#policy = await createFilePolicy(w.#coreConfig.readRoots, w.#coreConfig.outputRoot);
-    // O_EXCL: two local consoles must never own the same approval state.
-    const lockPath = path.join(c.stateDir, 'worker.lock');
-    w.#lock=await acquireWorkerLock(c.stateDir);
-    await w.#lock.writeFile(JSON.stringify({pid:process.pid,workerId:w.#workerId})); await w.#lock.sync();
+    // Lifetime coordinator lease + O_EXCL: one local approval owner, including
+    // stale-file recovery and release.
+    w.#lock=await acquireWorkerLock(c.stateDir,{pid:process.pid,workerId:w.#workerId});
     return w;
   }
   serial(action) { const p = this.#chain.then(action); this.#chain = p.catch(() => {}); return p; }
@@ -126,6 +125,23 @@ export class FinancialWorker {
     await boundedRead(destination,2_000_000,digest(next));j.bytes=next;
   }
   async #closeJournal(a) { if(a?.journal){const j=a.journal;a.journal=null;await j.handle.close();} }
+  async #finishPreparation(a, observed=false) {
+    if(!observed)await this.#observe(a);
+    if(FINANCE_FINAL.has(a.job.state)){this.#adapter.cancelPending();return;}
+    if(a.phase==='preparation_failed'){
+      await this.#report(a,a.failureState||'FAILED',a.failureCode||'LOCAL_OPERATION_FAILED');return;
+    }
+    if(!a.plan){this.#adapter.cancelPending();await this.#report(a,'FAILED','LOCAL_OPERATION_FAILED');return;}
+    if(Date.now()>a.approvalExpires){this.#adapter.cancelPending();await this.#report(a,'BLOCKED','LOCAL_CHECK_FAILED');return;}
+    if(a.plan.status==='AWAITING_APPROVAL'){
+      a.phase='review';
+      if(await this.#report(a,'PC_REVIEW_REQUIRED','PC_CHECK_REQUIRED'))this.#reviewInstructions(a);
+    }else{
+      const state=['ACTION_REQUIRED','CLARIFICATION_REQUIRED'].includes(a.plan.status)?'WAITING_FOR_INFORMATION':a.plan.status==='READY'?'REVIEW_COMPLETED':a.plan.status==='BLOCKED'?'BLOCKED':'FAILED';
+      const code={WAITING_FOR_INFORMATION:'PC_INFORMATION_REQUIRED',REVIEW_COMPLETED:a.plan.reason==='ALREADY_SATISFIED'?'NO_CHANGE_REQUIRED':'PC_REVIEWED',BLOCKED:'LOCAL_CHECK_FAILED',FAILED:'LOCAL_OPERATION_FAILED'}[state];
+      await this.#report(a,state,code,false,a.plan.review_complete===true&&state==='REVIEW_COMPLETED');
+    }
+  }
   #reviewInstructions(a) {
     if(a.phase==='review'&&a.job.state==='PC_REVIEW_REQUIRED'&&!a.outbox&&!a.noJournal&&!a.reviewAnnounced){
       this.#out(`로컬 최종 승인: approve ${a.job.id}\n거절: reject ${a.job.id}\n취소: cancel ${a.job.id}\n`);
@@ -182,6 +198,7 @@ export class FinancialWorker {
       await this.#observe(a);
       if (FINANCE_FINAL.has(a.job.state)) { this.#adapter.cancelPending(); await this.#closeJournal(a); this.#active = null; return; }
       if(a.noJournal){this.#adapter.cancelPending();await this.#report(a,a.job.state==='LOCAL_SAVING'?'UNCERTAIN':'BLOCKED',a.job.state==='LOCAL_SAVING'?'RECOVERY_REQUIRED':'LOCAL_CHECK_FAILED');return;}
+      if(a.phase==='preparing'||a.phase==='preparation_failed'){await this.#finishPreparation(a,true);return;}
       if (a.phase === 'executing' || a.phase === 'save_gate') {
         // Never resume an execution after a network exception or restart.
         this.#adapter.cancelPending(); await this.#report(a,'UNCERTAIN','RECOVERY_REQUIRED'); return;
@@ -206,6 +223,7 @@ export class FinancialWorker {
       if (!task) { await this.#report(a,'BLOCKED','LOCAL_CHECK_FAILED'); return; }
       a.task = task;
       a.plan = await this.#adapter.prepare({action:received.action, format:received.format, target_doc:task.target_doc, source_ids:task.source_ids, guideline_id:task.guideline_id, item_ids:received.action === 'patch' ? task.item_ids : []}, {requestId:received.id});
+      a.approvalExpires=Date.now()+this.#coreConfig.approval_ttl_ms;
       // Full source, evidence and output are rendered ONLY to the PC console.
       const localDocs = [];
       for (const id of [task.target_doc,...task.source_ids,task.guideline_id]) {
@@ -213,22 +231,14 @@ export class FinancialWorker {
         if (!entry) fail('ACCESS_DENIED'); localDocs.push(await readSelectedText(this.#policy,entry));
       }
       this.#out('PC 전용 검토 · 문서 내용/최종 승인/결과 파일은 PC에만 유지\n' + safeConsole({requestId:received.id, operation:{action:received.action,format:received.format}, localDocuments:localDocs, plan:a.plan}) + '\n');
-      await this.#observe(a);
-      if (FINANCE_FINAL.has(a.job.state)) { this.#adapter.cancelPending(); return; }
-      if (a.plan.status === 'AWAITING_APPROVAL') {
-        a.phase='review'; a.approvalExpires=Date.now()+this.#coreConfig.approval_ttl_ms;
-        if(await this.#report(a,'PC_REVIEW_REQUIRED','PC_CHECK_REQUIRED'))this.#reviewInstructions(a);
-      } else {
-        const state = ['ACTION_REQUIRED','CLARIFICATION_REQUIRED'].includes(a.plan.status) ? 'WAITING_FOR_INFORMATION' : a.plan.status === 'READY' ? 'REVIEW_COMPLETED' : a.plan.status === 'BLOCKED' ? 'BLOCKED' : 'FAILED';
-        const code = {WAITING_FOR_INFORMATION:'PC_INFORMATION_REQUIRED',REVIEW_COMPLETED:a.plan.reason==='ALREADY_SATISFIED'?'NO_CHANGE_REQUIRED':'PC_REVIEWED',BLOCKED:'LOCAL_CHECK_FAILED',FAILED:'LOCAL_OPERATION_FAILED'}[state];
-        await this.#report(a,state,code,false,a.plan.review_complete===true && state==='REVIEW_COMPLETED');
-      }
     } catch (e) {
       if (a.outbox) throw e; // An ACK failure only retries its metadata report.
       this.#adapter.cancelPending();
-      await this.#observe(a);
-      if (!FINANCE_FINAL.has(a.job.state)) await this.#report(a,e.code==='JOURNAL_CONFLICT'?'BLOCKED':'FAILED',e.code==='JOURNAL_CONFLICT'?'LOCAL_CHECK_FAILED':'LOCAL_OPERATION_FAILED');
+      a.phase='preparation_failed';a.failureState=e.code==='JOURNAL_CONFLICT'?'BLOCKED':'FAILED';a.failureCode=e.code==='JOURNAL_CONFLICT'?'LOCAL_CHECK_FAILED':'LOCAL_OPERATION_FAILED';
     }
+    // Communication failures here retain the prepared plan or fixed failure
+    // outcome. The next tick explicitly resumes this phase, never prepare().
+    await this.#finishPreparation(a);
   }
   /** Called exclusively by local terminal input; there is no network approval API. */
   async localCommand(command, id) { return this.serial(async () => {
@@ -262,6 +272,6 @@ export class FinancialWorker {
   async close() {
     await this.#chain; this.#adapter.cancelPending();
     await this.#closeJournal(this.#active);
-    if (this.#lock) { await this.#lock.close(); this.#lock=null; await unlink(path.join(this.#config.stateDir,'worker.lock')); }
+    if (this.#lock) { const lease=this.#lock;this.#lock=null;await lease.close(); }
   }
 }
