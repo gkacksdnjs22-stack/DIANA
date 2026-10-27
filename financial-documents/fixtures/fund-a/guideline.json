@@ -1,0 +1,36 @@
+{
+  "id": "PE-02",
+  "version": "1",
+  "rules": [
+    {
+      "id": "FX_HEDGE",
+      "label": "통화별 환노출·헤지 계획",
+      "aliases": ["통화별 환노출", "헤지 계획"],
+      "required_terms": ["환노출", "헤지 계획"],
+      "condition": "all",
+      "source_ids": ["DD_A"],
+      "positive_statements": ["통화별 환노출은 USD와 EUR로 구분하며 헤지 계획은 분기별 점검으로 명시한다"],
+      "negative_statements": ["통화별 환노출과 헤지 계획은 정하지 않았다"]
+    },
+    {
+      "id": "KEY_MAN",
+      "label": "핵심 운용역 이탈 조항",
+      "aliases": ["핵심 운용역", "운용역 이탈"],
+      "required_terms": ["운용역 이탈", "신규 투자", "출자자 협의"],
+      "condition": "all",
+      "source_ids": ["DD_A"],
+      "positive_statements": ["핵심 운용역 이탈 조항은 지정 운용역 이탈 시 신규 투자를 중단하고 출자자 협의를 진행한다고 명시한다"],
+      "negative_statements": ["핵심 운용역 이탈 조항은 없다"]
+    },
+    {
+      "id": "LPAC",
+      "label": "LP 자문위원회 참여권",
+      "aliases": ["LPAC", "LP 자문위원회"],
+      "required_terms": ["참여권"],
+      "condition": "any",
+      "source_ids": ["DD_A"],
+      "positive_statements": ["출자자에게 LPAC 참여권이 있다"],
+      "negative_statements": ["LPAC 참여권이 없다", "출자자에게 LPAC 참여권이 없다"]
+    }
+  ]
+}

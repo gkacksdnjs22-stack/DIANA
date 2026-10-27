@@ -1,0 +1,9 @@
+{
+  "id": "CHECK_Z",
+  "version": "rev2",
+  "rules": [
+    {"id":"COUNCIL_Z","label":"평의회 참여","aliases":["평의회"],"required_terms":["참여"],"condition":"all","source_ids":["EVIDENCE_Z"],"positive_statements":["평의회 참여 권한이 있다"],"negative_statements":["평의회 참여 권한이 없다"]},
+    {"id":"PERSON_Z","label":"주요 인력 중단 절차","aliases":["주요 인력"],"required_terms":["중단 절차","협의"],"condition":"all","source_ids":["EVIDENCE_Z"],"positive_statements":["주요 인력 중단 절차는 협의 후 집행한다"],"negative_statements":["주요 인력 중단 절차가 없다"]},
+    {"id":"CURRENCY_Z","label":"노출 통화","aliases":["노출 통화"],"required_terms":["노출 통화","방어 계획"],"condition":"all","source_ids":["EVIDENCE_Z"],"positive_statements":["노출 통화와 방어 계획을 확인했다"],"negative_statements":["노출 통화와 방어 계획은 미정이다"]}
+  ]
+}
