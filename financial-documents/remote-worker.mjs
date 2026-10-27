@@ -1,15 +1,34 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, rename, lstat, realpath, readFile, unlink } from 'node:fs/promises';
+import { mkdir, open, link, lstat, realpath, unlink } from 'node:fs/promises';
 import { FinancialDocuments } from './adapter.mjs';
-import { boundedRead, readSelectedText } from './files.mjs';
+import { boundedRead, readSelectedText, verifyOpenedOutput } from './files.mjs';
 import { strictJSON, keys, fail } from './strict-json.mjs';
 import { createFilePolicy } from '../local-ai/files.mjs';
-import { checkedDirectory } from '../personal-ai/documents/files.mjs';
+import { checkedDirectory, digest } from '../personal-ai/documents/files.mjs';
 import { UUID, FINANCE_FINAL, publicTask, validTask } from '../lib/financial-contract.mjs';
 
 const within = (root, target) => { const r = path.relative(root, target); return !r || r !== '..' && !r.startsWith('..' + path.sep) && !path.isAbsolute(r); };
 const safeConsole = value => JSON.stringify(value, null, 2).replace(/[\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4,'0'));
+
+// Resolve a not-yet-created directory via its checked existing ancestor. Reject
+// overlaps BEFORE mkdir/lock/journal can place anything in a protected tree.
+async function plannedDirectory(directory) {
+  let ancestor=path.resolve(directory); const tail=[];
+  for (;;) {
+    try { await lstat(ancestor); break; }
+    catch(e) { if(e.code!=='ENOENT')throw e; const parent=path.dirname(ancestor);if(parent===ancestor)throw e;tail.unshift(path.basename(ancestor));ancestor=parent; }
+  }
+  await checkedDirectory(ancestor);
+  return path.join(await realpath(ancestor),...tail);
+}
+async function stateBoundary(state, core, configPaths) {
+  for(const p of [...core.readRoots,core.outputRoot]) {
+    const root=await realpath(p);
+    if(within(root,state)||within(state,root))fail('FINANCE_STATE_OVERLAP');
+  }
+  for(const p of configPaths)if(within(state,await realpath(p)))fail('FINANCE_STATE_OVERLAP');
+}
 
 /** Only fixed financial routes. No catalog, transfer, mail, push or AI imports. */
 export function financialTransport(env = process.env, fetchImpl = fetch) {
@@ -30,7 +49,7 @@ export function financialTransport(env = process.env, fetchImpl = fetch) {
 }
 
 export class FinancialWorker {
-  #configPath; #configHash; #config; #coreConfig; #coreHash; #adapter; #policy; #api; #out; #active = null; #lock; #workerId = randomUUID(); #chain = Promise.resolve();
+  #configPath; #configHash; #config; #coreConfig; #coreHash; #adapter; #policy; #api; #out; #active = null; #lock; #stateRoot; #workerId = randomUUID(); #chain = Promise.resolve();
   static async create({ configPath, api, output = () => {}, documentRoot = path.resolve('sample-documents') }) {
     const w = new FinancialWorker(); w.#configPath = path.resolve(configPath); w.#api = api; w.#out = output;
     const raw = await boundedRead(w.#configPath, 100_000); w.#configHash = raw.hash; const c = strictJSON(raw.content);
@@ -44,6 +63,8 @@ export class FinancialWorker {
     w.#config = c;
     const core = await boundedRead(c.coreConfig, 100_000); w.#coreHash = core.hash; w.#coreConfig = strictJSON(core.content);
     w.#adapter = await FinancialDocuments.create({ configPath:c.coreConfig });
+    w.#stateRoot=await plannedDirectory(c.stateDir);
+    await stateBoundary(w.#stateRoot,w.#coreConfig,[c.coreConfig,w.#configPath]);
     // Fail closed if the ordinary document catalog could reach finance inputs/outputs/state/config.
     // Check real roots too; symlinks/alternate spelling cannot evade this overlap check.
     const generic = await realpath(path.resolve(documentRoot));
@@ -70,7 +91,8 @@ export class FinancialWorker {
       let dead=false;try{process.kill(previous.pid,0);}catch(error){dead=error.code==='ESRCH';}
       if(!dead)fail('WORKER_ALREADY_RUNNING');
       // Retain abandoned metadata for local recovery. Never kill any process.
-      await rename(lockPath,path.join(c.stateDir,'abandoned-'+previous.workerId+'.lock'));
+      await link(lockPath,path.join(c.stateDir,'abandoned-'+previous.workerId+'.lock'));
+      await unlink(lockPath);
       w.#lock=await open(lockPath,'wx',0o600);
     }
     await w.#lock.writeFile(JSON.stringify({pid:process.pid,workerId:w.#workerId})); await w.#lock.sync();
@@ -81,13 +103,39 @@ export class FinancialWorker {
     return (await boundedRead(this.#configPath,100_000)).hash === this.#configHash && (await boundedRead(this.#config.coreConfig,100_000)).hash === this.#coreHash;
   }
   async #journal(a) {
-    await checkedDirectory(this.#config.stateDir);
-    const destination = path.join(this.#config.stateDir, a.job.id + '.json'), temporary = destination + '.new';
-    const h = await open(temporary, 'wx', 0o600);
-    try { await h.writeFile(JSON.stringify({version:1, job:a.job, phase:a.phase, outbox:a.outbox || null})); await h.sync(); }
-    finally { await h.close(); }
-    await rename(temporary, destination);
+    // A preexisting/legacy file is evidence to block execution, not permission
+    // to replace it with a failure report. Such reports remain metadata-only.
+    if(a.noJournal)return;
+    try { await this.#appendJournal(a); }
+    catch(e) {
+      // Losing journal ownership disarms approval and all further disk writes.
+      // A later tick may report BLOCKED/UNCERTAIN, never resume execution.
+      a.noJournal=true;this.#adapter.cancelPending();
+      try{await this.#closeJournal(a);}catch{}
+      throw e;
+    }
   }
+  async #appendJournal(a) {
+    await checkedDirectory(this.#config.stateDir);
+    if(await realpath(this.#config.stateDir)!==this.#stateRoot)fail('FINANCE_STATE_OVERLAP');
+    await stateBoundary(this.#stateRoot,this.#coreConfig,[this.#config.coreConfig,this.#configPath]);
+    const destination=path.join(this.#stateRoot,a.job.id+'.jsonl');
+    if(!a.journal) {
+      try { a.journal={handle:await open(destination,'ax',0o600),bytes:Buffer.alloc(0)}; }
+      catch(e) { if(e.code==='EEXIST'){a.noJournal=true;fail('JOURNAL_CONFLICT');}throw e; }
+    }
+    const j=a.journal;
+    await verifyOpenedOutput(j.handle,destination,this.#stateRoot);
+    if(j.bytes.length)await boundedRead(destination,2_000_000,digest(j.bytes));
+    const line=Buffer.from(JSON.stringify({version:1,job:a.job,phase:a.phase,outbox:a.outbox||null})+'\n');
+    const next=Buffer.concat([j.bytes,line]);if(next.length>2_000_000)fail('JOURNAL_LIMIT');
+    // Append to the exclusively created, verified open handle. No rename,
+    // truncate, or overwrite of any existing journal/source file.
+    await j.handle.writeFile(line);await j.handle.sync();
+    await verifyOpenedOutput(j.handle,destination,this.#stateRoot);
+    await boundedRead(destination,2_000_000,digest(next));j.bytes=next;
+  }
+  async #closeJournal(a) { if(a?.journal){const j=a.journal;a.journal=null;await j.handle.close();} }
   async register() {
     if (!await this.#policyCurrent()) fail('LOCAL_POLICY_CHANGED');
     await this.#api('/api/agent/financial/register', { workerId:this.#workerId, tasks:this.#config.tasks.map(publicTask) });
@@ -99,7 +147,8 @@ export class FinancialWorker {
   }
   async #report(a, state, code, saved = false, reviewComplete = false) {
     a.outbox = {workerId:this.#workerId, generation:a.generation, revision:a.job.revision, reportId:randomUUID(), state, code, saved, reviewComplete};
-    await this.#journal(a); return this.#flush(a);
+    try { await this.#journal(a); } catch(e) { a.outbox=null;throw e; }
+    return this.#flush(a);
   }
   async #flush(a) {
     try {
@@ -135,7 +184,8 @@ export class FinancialWorker {
       const a = this.#active;
       if (a.outbox) await this.#flush(a);
       await this.#observe(a);
-      if (FINANCE_FINAL.has(a.job.state)) { this.#adapter.cancelPending(); this.#active = null; return; }
+      if (FINANCE_FINAL.has(a.job.state)) { this.#adapter.cancelPending(); await this.#closeJournal(a); this.#active = null; return; }
+      if(a.noJournal){this.#adapter.cancelPending();await this.#report(a,a.job.state==='LOCAL_SAVING'?'UNCERTAIN':'BLOCKED',a.job.state==='LOCAL_SAVING'?'RECOVERY_REQUIRED':'LOCAL_CHECK_FAILED');return;}
       if (a.phase === 'executing' || a.phase === 'save_gate') {
         // Never resume an execution after a network exception or restart.
         this.#adapter.cancelPending(); await this.#report(a,'UNCERTAIN','RECOVERY_REQUIRED'); return;
@@ -150,8 +200,11 @@ export class FinancialWorker {
     const a = {job:received, generation:received.generation, phase:'preparing', outbox:null}; this.#active = a;
     try {
       // An existing journal is never treated as permission to execute again.
-      try { await lstat(path.join(this.#config.stateDir,received.id+'.json')); await this.#report(a,'BLOCKED','LOCAL_CHECK_FAILED'); return; }
-      catch (e) { if (e.code !== 'ENOENT') throw e; }
+      for(const extension of ['.json','.jsonl']) {
+        let exists=false;try { await lstat(path.join(this.#stateRoot,received.id+extension));exists=true; }
+        catch(e){if(e.code!=='ENOENT')throw e;}
+        if(exists){a.noJournal=true;await this.#report(a,'BLOCKED','LOCAL_CHECK_FAILED');return;}
+      }
       await this.#journal(a);
       if (!task) { await this.#report(a,'BLOCKED','LOCAL_CHECK_FAILED'); return; }
       a.task = task;
@@ -178,13 +231,13 @@ export class FinancialWorker {
       this.#adapter.cancelPending();
       if (a.outbox) throw e; // An ACK failure only retries its metadata report.
       await this.#observe(a);
-      if (!FINANCE_FINAL.has(a.job.state)) await this.#report(a,'FAILED','LOCAL_OPERATION_FAILED');
+      if (!FINANCE_FINAL.has(a.job.state)) await this.#report(a,e.code==='JOURNAL_CONFLICT'?'BLOCKED':'FAILED',e.code==='JOURNAL_CONFLICT'?'LOCAL_CHECK_FAILED':'LOCAL_OPERATION_FAILED');
     }
   }
   /** Called exclusively by local terminal input; there is no network approval API. */
   async localCommand(command, id) { return this.serial(async () => {
     const a = this.#active;
-    if (!['approve','reject','cancel'].includes(command) || !UUID.test(id) || !a || a.job.id !== id || a.phase !== 'review' || a.outbox) fail('NO_LOCAL_REVIEW');
+    if (!['approve','reject','cancel'].includes(command) || !UUID.test(id) || !a || a.job.id !== id || a.phase !== 'review' || a.outbox || a.noJournal) fail('NO_LOCAL_REVIEW');
     await this.register(); await this.#observe(a);
     if (a.job.state !== 'PC_REVIEW_REQUIRED' || !await this.#policyCurrent()) { this.#adapter.cancelPending(); fail('LOCAL_REVIEW_INVALIDATED'); }
     if (command !== 'approve') { this.#adapter.cancelPending(); await this.#report(a,'CANCELLED',command==='reject'?'PC_REJECTED':'USER_CANCELLED'); return; }
@@ -212,6 +265,7 @@ export class FinancialWorker {
   }); }
   async close() {
     await this.#chain; this.#adapter.cancelPending();
+    await this.#closeJournal(this.#active);
     if (this.#lock) { await this.#lock.close(); this.#lock=null; await unlink(path.join(this.#config.stateDir,'worker.lock')); }
   }
 }

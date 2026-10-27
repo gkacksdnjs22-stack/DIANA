@@ -1,7 +1,7 @@
 """Literal registered statements only; search scores are never a verdict."""
 import difflib
 import re
-from .doc_parser import normalize, validate_common
+from .doc_parser import normalize, normalized_with_offsets, validate_common
 from .schemas import CoreError, canonical, fields, require, sha, HASH
 
 
@@ -35,8 +35,11 @@ def statement_states(raw, rule):
     positive = {normalize(s).rstrip(".!?。") for s in rule["positive_statements"]}
     negative = {normalize(s).rstrip(".!?。") for s in rule["negative_statements"]}
     states = []
-    # Fixed separators, no rule-controlled regex or eval. Whole sentences only.
-    for sentence in re.split(r"[.!?。\r\n]+", raw):
+    # Segment the same NFKC/casefold view used for literal rule comparison;
+    # citations still reference the unchanged raw paragraph. A period before
+    # a digit belongs to a decimal/version (including .5), never a boundary.
+    normalized_raw = normalized_with_offsets(raw)[0]
+    for sentence in re.split(r"\.(?!\d)|[!?。\r\n]+", normalized_raw):
         if not sentence.strip() or not relevant(sentence, rule):
             continue
         normalized = normalize(sentence)

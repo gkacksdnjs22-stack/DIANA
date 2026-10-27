@@ -39,6 +39,29 @@ def change_doc(payload, key, content):
 
 
 class FinancialCoreTests(unittest.TestCase):
+    def test_decimal_negative_statement_cannot_match_its_positive_prefix(self):
+        for value in ("1.5", "1.50", "1.005", ".5", "-1.5", "１．５", "1.⁵"):
+            for suffix in ("", " Additional unrelated sentence."):
+                with self.subTest(value=value, suffix=suffix):
+                    payload = fixture()
+                    positive = "Management fee in percent: 1."
+                    negative = "Management fee in percent: " + value + "."
+                    guide = json.loads(payload["guideline"]["content"])
+                    guide["rules"] = [{"id": "FEE", "label": "Management fee", "aliases": ["Management fee"],
+                        "required_terms": ["Management", "fee"], "condition": "all", "source_ids": ["S9"],
+                        "positive_statements": [positive], "negative_statements": [negative]}]
+                    change_doc(payload, "guideline", canonical(guide))
+                    change_doc(payload, "review_doc", negative + suffix)
+                    payload["source_docs"] = [doc("S9", "Unrelated material.")]
+                    result = handle(payload)
+                    self.assertEqual(result["items"][0]["status"], "NEEDS_CONFIRMATION")
+                    self.assertFalse(result["review_complete"])
+                    self.assertEqual(result["items"][0]["review_references"][0]["quote"], negative + suffix)
+                    change_doc(payload, "review_doc", positive)
+                    result = handle(payload)
+                    self.assertEqual(result["items"][0]["status"], "SATISFIED")
+                    self.assertTrue(result["review_complete"])
+
     def test_review_and_selected_patch(self):
         payload = fixture()
         result = handle(payload)

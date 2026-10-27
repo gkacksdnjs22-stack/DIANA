@@ -8,7 +8,7 @@ Android ≡ 메뉴에 ‘금융 문서 작업’을 추가했다. PC 등록 작�
 
 서버는 기존 인증·페어링·영속 settings 어댑터를 사용하며 `finance:v1:` 네임스페이스로 일반 jobs와 분리한다. 허용 필드/상태 코드와 전체 실행 절차는 [financial-mobile.md](financial-mobile.md)에 있다. 공개 응답을 개별 필드로 구성하며 코어 객체를 서버에 전달하지 않는다.
 
-전용 금융 worker는 기존 FinancialDocuments와 Python 코어를 수정 없이 재사용한다. 한 인스턴스/한 활성 계획, 로컬 TTY 승인, 저장 시작 CAS, 실제 execute·재읽기 확인, 영속 메타데이터 outbox를 연결했다. 기존 일반 에이전트는 수정/재시작하지 않았다.
+최초 연결은 기존 FinancialDocuments와 Python 코어를 수정 없이 재사용했다. 이후 PR #11 리뷰 수정에서 코어의 문장 분리가 소수점을 보존하도록 보완했다. 한 인스턴스/한 활성 계획, 로컬 TTY 승인, 저장 시작 CAS, 실제 execute·재읽기 확인, 영속 메타데이터 outbox를 연결했다. 기존 일반 에이전트는 수정/재시작하지 않았다.
 
 `scripts/financial-dev.mjs`를 실제 테스트용 TTY에서 시작해 임시 localhost 서버와 금융 대기 콘솔이 켜지는 것을 확인했고, `exit` 입력 후 종료 코드 0으로 자신이 만든 서버/worker만 종료됐다. 이 시작·종료 검사는 사용자의 문서 최종 승인 재현과는 별개다.
 
@@ -17,8 +17,9 @@ Android ≡ 메뉴에 ‘금융 문서 작업’을 추가했다. PC 등록 작�
 | 검사 | 결과 |
 |---|---|
 | 기존 서버·전송·페어링·push·영속 저장·코어를 포함한 Node 회귀 실행 | 196개 통과, 실패/스킵 0 |
-| 최종 금융 연결 전용 Node 실행 | 16개 통과, 실패/스킵 0; 앞의 회귀 검사와 중복 포함, 합산하지 않음 |
-| Python 금융 코어 | 21개 통과 |
+| 최종 금융 연결 전용 Node 실행 | 리뷰 수정 후 28개 통과, 실패/스킵 0; 전체 검사와 중복 포함, 합산하지 않음 |
+| PR 소스의 전체 Node 회귀 실행 | 리뷰 수정 후 387개 통과, 실패/스킵 0 |
+| Python 금융 코어 | 리뷰 수정 후 22개 통과 |
 | 기존 금융 문서 변환 왕복 | 6개 경로 VERIFIED, findings=[] |
 | Android JVM 단위 테스트 | 9개 클래스, 50개 통과, 실패/오류 0 |
 | Android debug 앱·계측 테스트 APK 빌드 | BUILD SUCCESSFUL |
@@ -70,3 +71,15 @@ Node 정상 흐름은 실제 loopback HTTP, 기존 pair-code/phone-token 인증,
 5. 서버 반영 후 새 APK 설치와 실제 화면·취소·상태 갱신을 확인한다. 새 금융 API가 없는 서버에서는 앱이 미지원 안내를 표시하며 일반 전송으로 우회하지 않는다.
 
 운영 배포·PC 운영 worker 연결·실기기 검사·실제 Supabase 재시작에 대한 금융 모드 종합 검사는 미실행이다. 기존 Supabase 어댑터 회귀 검사는 가짜 Postgres 풀로 실행했으며 실제 서비스의 보장으로 과장하지 않는다. OS 전체 격리나 금융 규정 준수도 이번 검증 범위가 아니다.
+
+## PR #11 병합 전 리뷰 수정
+
+`4d44c935`에서 지적된 세 문제를 실제 실패하는 테스트로 먼저 재현하고 수정했다.
+
+- 취소: 부분 HTTP 본문을 보내고 남은 부분은 저장 시작 이후에 전송하는 검사에서 CANCELLED 덮어쓰기를 재현했다. 취소 본문 수신 후 refresh와 최신 owned 조회를 수행하고 상태 확인/갱신 사이에 await를 두지 않는다. 이제 LOCAL_SAVING을 유지하고 실제 저장 완료 보고도 성공한다. 저장 완료·만료를 가로지르는 지연 취소도 현재 상태를 반환한다.
+- 상태 폴더/journal: readRoots/outputRoot와 같은 위치·하위·상위 폴더 및 설정 파일을 포함하는 상태 폴더를 mkdir/lock 생성 전에 거부한다. 새 journal은 배타적으로 만든 JSONL 파일에만 추가 기록한다. 기존 `.json`/`.jsonl`을 차단 근거로 사용하면서도 바이트 그대로 보존하고, 실행 중 journal 내용 변경은 승인과 저장 시작을 차단한다. 확인되지 않은 파일을 실패 보고로 교체하지 않는다.
+- 문장 분리: 원문 인용을 바꾸지 않고 기존 NFKC/casefold 뷰에서 숫자 앞의 마침표를 보존한다. 등록된 부정 문장 `Management fee in percent: 1.5.`는 긍정 문장 `Management fee in percent: 1.`의 앞부분으로 채택되지 않는다. 소수 여러 자리·선행 소수점·음수·전각/호환 숫자와 후속 문장도 확인했으며 부정은 NEEDS_CONFIRMATION/review_complete=false, 등록된 긍정은 SATISFIED를 유지한다.
+
+최종 검사는 PR 원본과 수정 파일만 조합한 폴더의 Node 387개, 금융 전용 28개, Python 22개 모두 통과했다. 이 수치는 서로 합산하지 않는다. 기존 문서 왕복 6개 경로도 `VERIFIED`, findings=[]이며 보고서는 `.local/financial-roundtrip/run-aKpuKC/report.json`이다. 7개 변경 파일의 diff 공백 검사도 통과했다.
+
+기존 보호 표본 200개 중 변경은 이번 요청에서 명시적으로 허용한 `financial_core/deterministic_tools.py`와 그 회귀 검사 `tests/test_financial_core.py` 두 파일뿐이다. 나머지 198개는 동일했다. 학습·모델·독립 시험·기존 문서·기존 감사/승인 기록·운영 서버에는 변경을 가하지 않았다. 이번 수정에는 Android 소스나 APK 변경이 없어 기존 Android 결과를 재실행한 것으로 표시하지 않는다. 실기기 검증과 운영 배포·PR 병합은 하지 않았다.
