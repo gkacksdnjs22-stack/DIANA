@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>DIANA · PC 문서 검토</title><link rel="icon" type="image/png" href="/diana-icon.png"><link rel="stylesheet" href="/review.css"><script type="module" src="/review.js"></script></head>
+<body>
+<aside class="sidebar">
+  <div class="brand"><img class="brand-icon" src="/diana-icon.png" alt="" width="48" height="48"><div>DIANA<small>LOCAL WORKSPACE</small></div></div>
+  <div class="workspace-label">금융 문서 작업 <span>PC 전용</span></div>
+  <div class="queue-heading">최근 요청 <span id="job-count">0</span></div>
+  <nav id="jobs" aria-label="최근 금융 요청"><p class="muted">모바일에서 요청하면 여기에 표시돼요.</p></nav>
+  <div class="local-note"><span class="shield" aria-hidden="true">◇</span><strong>문서는 이 PC 안에</strong><p>원문·근거·수정안·결과 파일은 로컬 검토 화면에서만 확인합니다.</p><small>현재 실행 세션의 최근 8건</small></div>
+</aside>
+<main>
+  <header class="topbar"><div class="breadcrumb">DIANA <span>/</span> 금융 문서 검토</div><div id="connection" class="connection"><i></i><span>연결 확인 중</span></div></header>
+  <section id="empty" class="empty"><img class="empty-icon" src="/diana-icon.png" alt="DIANA" width="150" height="150"><div class="eyebrow">YOUR PC, YOUR DOCUMENTS</div><h1>검토할 문서를 기다리고 있어요.</h1><p>휴대폰 DIANA에서 금융 문서 작업을 요청해 주세요.<br>검토 내용과 수정안이 이 화면에 도착합니다.</p><div class="flow"><span>모바일 요청</span><b>→</b><span>PC 검토 · 승인</span><b>→</b><span>저장 · 재읽기</span></div><p id="session-help" class="muted"></p></section>
+  <div id="detail" hidden>
+    <section class="heading"><div><div class="eyebrow">DOCUMENT REVIEW</div><h1 id="title"></h1><p id="subtitle"></p></div><span id="state" class="state"></span></section>
+    <p class="summary-caption">요청 당시 검토 요약 · 최신 저장본 판단은 ‘저장본 재검토’에서 확인하세요.</p>
+    <section class="metrics" aria-label="요청 당시 검토 요약"><div><span>확인된 항목</span><strong id="satisfied">—</strong><small>검토서에 명시된 내용</small></div><div><span>근거 있는 보완</span><strong id="missing">—</strong><small>원문으로 보완할 수 있는 항목</small></div><div><span>추가 확인</span><strong id="unresolved">—</strong><small>근거 부족 또는 표현 확인</small></div><div><span>파일 저장</span><strong id="saved">대기</strong><small id="saved-note">PC 승인 후 저장합니다</small></div></section>
+    <section id="approval" class="approval"><div><span class="eyebrow">LOCAL APPROVAL</span><h2 id="approval-title">검토 내용을 준비하고 있어요.</h2><p id="approval-note"></p></div><div class="approval-action"><div class="decision-buttons"><button id="approve-open" disabled>수정안 승인 <span>↗</span></button><button id="reject-open" class="secondary" disabled>거절</button></div><small id="expiry"></small></div></section>
+    <details id="command-fallback" class="command-fallback" hidden><summary>콘솔 명령으로 승인하기</summary><input id="approval-command" aria-label="PC 승인 명령" readonly spellcheck="false"></details>
+    <section class="workbench"><div class="tabbar" role="tablist" aria-label="검토 내용"><button role="tab" id="tab-diff" aria-controls="panel-diff" aria-selected="true" data-tab="diff">수정 전후</button><button role="tab" id="tab-checklist" aria-controls="panel-checklist" aria-selected="false" tabindex="-1" data-tab="checklist">요청 당시 검토</button><button role="tab" id="tab-sources" aria-controls="panel-sources" aria-selected="false" tabindex="-1" data-tab="sources">원문 · 근거</button><button role="tab" id="tab-result" aria-controls="panel-result" aria-selected="false" tabindex="-1" data-tab="result">저장 결과</button><button role="tab" id="tab-recheck" aria-controls="panel-recheck" aria-selected="false" tabindex="-1" data-tab="recheck">저장본 재검토</button></div>
+      <div id="panel-diff" role="tabpanel" aria-labelledby="tab-diff"><div class="document-toolbar"><span id="diff-note">업무 본문의 수정 전후를 비교합니다.</span><button id="toggle-diff" class="text-button" aria-expanded="false">변경 줄 보기</button></div><div class="comparison"><article><div class="doc-heading"><span class="dot before"></span>수정 전 <small>원본 유지</small></div><pre id="before"></pre></article><article><div class="doc-heading"><span class="dot after"></span>수정 후 <small>승인할 업무 본문</small></div><pre id="after"></pre></article></div><pre id="diff-lines" class="diff-lines" hidden></pre></div>
+      <div id="panel-checklist" role="tabpanel" aria-labelledby="tab-checklist" hidden><div class="section-intro"><h2>항목별 판단과 근거</h2><p>확정된 진술과 근거를 기준으로 확인합니다. 추가 확인 항목은 자동으로 충족 처리하지 않습니다.</p></div><div id="checklist"></div></div>
+      <div id="panel-sources" role="tabpanel" aria-labelledby="tab-sources" hidden><div class="source-toolbar"><label for="source-select">등록 문서</label><select id="source-select"></select><span>PC 로컬 자료</span></div><pre id="source-content" class="source-content"></pre></div>
+      <div id="panel-result" role="tabpanel" aria-labelledby="tab-result" hidden><div class="section-intro"><h2 id="result-title">저장 전입니다.</h2><p id="result-note">PC에서 검토하고 승인하면 저장 결과를 확인할 수 있어요.</p><button id="review-saved" class="review-saved" disabled>저장한 파일 다시 검토</button></div><div id="file-section" class="file-section" hidden><label>PC 저장 위치</label><code id="output-path"></code><button id="copy-path" class="text-button">경로 복사</button></div><div id="result-unresolved" class="result-unresolved"></div><pre id="result-content" class="source-content"></pre></div>
+      <div id="panel-recheck" role="tabpanel" aria-labelledby="tab-recheck" hidden><div class="section-intro"><h2 id="recheck-title">저장 파일을 다시 검토할 수 있어요.</h2><p id="recheck-note">저장 결과에서 ‘저장한 파일 다시 검토’를 눌러 주세요. PC의 현재 원문·지침을 사용합니다.</p></div><div id="recheck-items"></div><pre id="recheck-body" class="source-content"></pre></div>
+    </section>
+    <footer><span id="request-id"></span><span>승인·저장본 재검토는 이 PC 안에서만 처리합니다</span></footer>
+  </div>
+</main><div id="toast" role="status" aria-live="polite" hidden></div>
+<dialog id="decision-dialog" aria-labelledby="decision-title"><div class="eyebrow">PC LOCAL DECISION</div><h2 id="decision-title"></h2><p id="decision-summary"></p><p id="decision-warning"></p><div class="dialog-actions"><button id="decision-close" class="secondary">돌아가기</button><button id="decision-confirm">승인하고 저장</button></div></dialog>
+</body></html>

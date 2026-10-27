@@ -15,7 +15,7 @@ const workspace = path.resolve('.local');
 const selection = (action = 'patch', format = 'md', item_ids = ['KEY_MAN']) => ({ action, format, item_ids,
   target_doc: 'REVIEW_A', source_ids: ['DD_A'], guideline_id: 'PE-02' });
 
-async function setup(t, { variant = 'fund-a', ttl = 300_000 } = {}) {
+async function setup(t, { variant = 'fund-a', ttl = 300_000, classifications = {} } = {}) {
   await mkdir(workspace, { recursive: true });
   const root = await mkdtemp(path.join(workspace, 'financial-test-'));
   const input = path.join(root, 'input'); const output = path.join(root, 'output');
@@ -27,7 +27,7 @@ async function setup(t, { variant = 'fund-a', ttl = 300_000 } = {}) {
   const config = { schema_version: 1, principal: 'test-analyst', role: 'analyst', readRoots: [input], outputRoot: output,
     python, approval_ttl_ms: ttl, write_roles: ['analyst'], documents: ids.map(([id, relativePath]) => ({
       id, relativePath, version: variant === 'rearranged' && id === 'CHECK_Z' ? 'rev2' : '1', rootIndex: 0,
-      classification: 'synthetic', read_roles: ['analyst'] })) };
+      classification: classifications[id] || 'synthetic', read_roles: ['analyst'] })) };
   const updateConfig = () => writeFile(configPath, JSON.stringify(config));
   await updateConfig();
   t.after(async () => {
@@ -44,6 +44,40 @@ async function approve(adapter, plan) {
   return approved;
 }
 const outputs = async folder => (await readdir(folder)).filter(name => /\.(?:md|txt|json)$/u.test(name));
+
+for(const format of ['md','txt','json'])test('saved internal '+format+' recheck uses promoted classification before and after restart',async t=>{
+  const f=await setup(t,{classifications:{DD_A:'internal'}}),input=selection('patch',format),plan=await f.adapter.prepare(input);
+  assert.equal(plan.common_document.classification,'internal');const saved=await f.adapter.execute((await approve(f.adapter,plan)).token),bytes=await readFile(saved.outputFile);
+  const review=await f.adapter.reviewSaved(saved.request_id);assert.equal(review.classification,'internal');assert.deepEqual(review.items.map(i=>i.status),['SATISFIED','SATISFIED','MISSING_NO_EVIDENCE']);
+  f.config.documents.find(d=>d.id==='DD_A').classification='synthetic';await f.updateConfig();
+  const restarted=await FinancialDocuments.create({configPath:f.configPath});await restarted.loadSavedResults([input]);assert.equal((await restarted.reviewSaved(saved.request_id)).classification,'internal');
+  assert.deepEqual(await readFile(saved.outputFile),bytes);assert.equal((await outputs(f.output)).length,1);
+});
+for(const format of ['md','txt','json'])test('saved '+format+' review preserves unresolved-label diagnostic instead of returning an empty completed review',async t=>{
+  const f=await setup(t),plan=await f.adapter.prepare(selection('patch',format)),saved=await f.adapter.execute((await approve(f.adapter,plan)).token),bytes=await readFile(saved.outputFile);
+  const guidePath=path.join(f.input,'guideline.json'),guide=JSON.parse(await readFile(guidePath,'utf8'));guide.rules=guide.rules.filter(rule=>rule.id!=='LPAC');await writeFile(guidePath,JSON.stringify(guide));
+  await assert.rejects(f.adapter.reviewSaved(saved.request_id),e=>e.code==='UNRESOLVED_LABEL_REQUIRED');assert.deepEqual(await readFile(saved.outputFile),bytes);assert.equal((await outputs(f.output)).length,1);
+});
+
+for(const format of ['md','txt','json'])test('saved '+format+' is reviewed as the actual saved body and restored without approvals',async t=>{
+  const f=await setup(t),input=selection('patch',format),plan=await f.adapter.prepare(input),approved=await approve(f.adapter,plan),result=await f.adapter.execute(approved.token);
+  const bytes=await readFile(result.outputFile),review=await f.adapter.reviewSaved(result.request_id);
+  assert.deepEqual(review.items.map(i=>i.status),['SATISFIED','SATISFIED','MISSING_NO_EVIDENCE']);assert.equal(review.reviewComplete,false);assert.deepEqual(review.unresolved.map(i=>i.item_id),['LPAC']);
+  assert.deepEqual(await readFile(result.outputFile),bytes);assert.equal((await outputs(f.output)).length,1);
+  const restarted=await FinancialDocuments.create({configPath:f.configPath}),loaded=await restarted.loadSavedResults([input]);assert.equal(loaded.length,1);assert.equal(loaded[0].requestId,result.request_id);
+  assert.deepEqual((await restarted.reviewSaved(result.request_id)).items.map(i=>i.status),review.items.map(i=>i.status));assert.equal((await restarted.approve(plan.plan_id,plan.plan_hash)).reason,'UNKNOWN_OR_CHANGED_PLAN');
+});
+test('saved recheck leaves another pending plan and its explicit approval intact',async t=>{
+  const f=await setup(t),plan=await f.adapter.prepare(selection()),approved=await approve(f.adapter,plan),saved=await f.adapter.execute(approved.token);
+  const next=await f.adapter.prepare(selection('convert','txt',[]));await f.adapter.reviewSaved(saved.request_id);const second=await approve(f.adapter,next);assert.equal((await f.adapter.execute(second.token)).status,'COMPLETED');assert.equal((await outputs(f.output)).length,2);
+});
+test('saved review refuses tampered files, unregistered receipts and changed policy without overwriting',async t=>{
+  const f=await setup(t),input=selection(),plan=await f.adapter.prepare(input),approved=await approve(f.adapter,plan),saved=await f.adapter.execute(approved.token);
+  await assert.rejects(f.adapter.reviewSaved(randomUUID()),{code:'NO_SAVED_RESULT'});
+  const changed=Buffer.from('EXTERNAL_MODIFICATION');await writeFile(saved.outputFile,changed);await assert.rejects(f.adapter.reviewSaved(saved.request_id),{code:'CONTENT_CHANGED'});
+  const restarted=await FinancialDocuments.create({configPath:f.configPath});assert.deepEqual(await restarted.loadSavedResults([input]),[]);assert.deepEqual(await readFile(saved.outputFile),changed);
+  f.config.documents[0].read_roles=[];await f.updateConfig();await assert.rejects(f.adapter.reviewSaved(saved.request_id));assert.deepEqual(await readFile(saved.outputFile),changed);
+});
 
 test('real synthetic review preserves satisfied item and explicitly patches only evidence-backed omission', async t => {
   const f = await setup(t);
