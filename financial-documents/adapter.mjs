@@ -7,6 +7,7 @@ import { boundedRead, readSelectedText, verifyOpenedOutput } from './files.mjs';
 import { callCore, verifiedPython } from './python.mjs';
 import { explicitOperation } from './operation.mjs';
 import { fail, keys, strictJSON, validId } from './strict-json.mjs';
+import { storedClassification, assertCompletedCoreReview } from './saved-review.mjs';
 
 const HASH = /^[a-f0-9]{64}$/u;
 const clone = structuredClone;
@@ -119,16 +120,18 @@ export class FinancialDocuments {
     const selection={...record.selection,action:'checklist_review',item_ids:[]};const reviewId=randomUUID();
     const payload=await this.#payload(selection,reviewId);
     const original=[payload.review_doc,...payload.source_docs,payload.guideline];
-    payload.review_doc={...payload.review_doc,format:record.selection.format,content:saved.file.content,hash:saved.file.hash};
+    payload.review_doc={...payload.review_doc,format:record.selection.format,content:saved.file.content,hash:saved.file.hash,
+      classification:storedClassification(saved.file.content,record.selection.format)};
     const plan=await callCore(this.#python,payload);
     const fresh=await this.#payload(selection,reviewId);
     const documents=[fresh.review_doc,...fresh.source_docs,fresh.guideline];
     if(documents.some((d,i)=>d.hash!==original[i].hash||d.version!==original[i].version))fail('CONTENT_CHANGED');
     const after=await this.#readSaved(requestId,record.selection);
     if(after.result.output_hash!==saved.result.output_hash||after.result.plan_hash!==saved.result.plan_hash)fail('CONTENT_CHANGED');
-    if(!['READY','ACTION_REQUIRED'].includes(plan.status))fail('SAVED_REVIEW_FAILED');
-    return clone({status:plan.status,reviewComplete:plan.review_complete===true,items:plan.items||[],unresolved:plan.unresolved||[],
-      body:plan.expected_body||'',checkedAt:new Date().toISOString()});
+    assertCompletedCoreReview(plan,reviewId);this.#integrity(plan);
+    return clone({status:plan.status,reason:plan.reason,classification:payload.review_doc.classification,
+      reviewComplete:plan.review_complete,items:plan.items,unresolved:plan.unresolved,
+      body:plan.expected_body,checkedAt:new Date().toISOString()});
   }
 
   async #ledgerDirectory() {

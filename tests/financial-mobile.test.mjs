@@ -90,6 +90,16 @@ test('loopback approval saves once and saved rechecks survive restart without ch
   await f.restartWorker();entry=(await read()).find(e=>e.job.id===first.id);assert.equal(entry.result.historical,true);assert.equal(entry.approvalReady,false);assert.equal((await act(entry,'recheck')).status,200);assert.equal(f.saveStarts,2);
   assert.ok(!JSON.stringify(f.wire).includes(privateMarker));assert.ok(!JSON.stringify(f.dump()).includes(privateMarker));
 });
+test('saved-review core diagnostics reach the PC UI as failures and recover after the guideline is corrected',async t=>{
+  let f;const view=await createReviewViewer({onRecheck:id=>f.worker.reviewSaved(id)});t.after(()=>view.close());f=await fixture(t,{localView:true,onPresentation:e=>view.accept(e)});
+  const url=new URL(view.url),key=new URLSearchParams(url.hash.slice(1)).get('view'),read=async()=>(await(await fetch(url.origin+'/api/view',{headers:{Authorization:'Bearer '+key}})).json()).jobs;
+  const recheck=async e=>fetch(url.origin+'/api/local-action',{method:'POST',headers:{Authorization:'Bearer '+key,Origin:url.origin,'Content-Type':'application/json'},body:JSON.stringify({requestId:e.job.id,viewId:e.resultId,action:'recheck'})});
+  await f.worker.tick();const j=await f.create();await f.worker.tick();await f.worker.localCommand('approve',j.id);const entry=(await read()).find(e=>e.job.id===j.id);assert.equal((await recheck(entry)).status,200);
+  const guidePath=path.join(f.input,'guideline.json'),original=await readFile(guidePath),guide=JSON.parse(original);guide.rules=guide.rules.filter(r=>r.id!=='LPAC');await writeFile(guidePath,JSON.stringify(guide));
+  const beforeWire=f.wire.length,failed=await recheck(entry);assert.equal(failed.status,409);assert.equal((await failed.json()).review.reason,'UNRESOLVED_LABEL_REQUIRED');assert.equal(f.wire.length,beforeWire);
+  const state=(await read()).find(e=>e.job.id===j.id).recheck;assert.equal(state.status,'FAILED');assert.equal(state.reason,'UNRESOLVED_LABEL_REQUIRED');assert.equal(state.coreStatus,'ACTION_REQUIRED');assert.equal(state.items,undefined);assert.equal(state.body,undefined);
+  await writeFile(guidePath,original);assert.equal((await recheck(entry)).status,200);assert.equal((await read()).find(e=>e.job.id===j.id).recheck.reason,'REVIEW_RESULT');assert.equal((await f.files()).length,1);assert.equal(f.saveStarts,1);
+});
 for(const record of ['uncertain','pending-ack','corrupt'])test('history restore does not promote '+record+' worker journals to saved completion',async t=>{
   const f=await fixture(t,{localView:true});await f.worker.tick();const j=await f.create();await f.worker.tick();await f.worker.localCommand('approve',j.id);await f.worker.close();
   const file=path.join(f.state,j.id+'.jsonl'),raw=await readFile(file,'utf8'),last=JSON.parse(raw.trimEnd().split('\n').at(-1)),output=await readFile(path.join(f.output,(await f.files())[0]));

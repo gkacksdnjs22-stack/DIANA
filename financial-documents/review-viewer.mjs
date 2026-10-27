@@ -4,8 +4,9 @@ import {randomBytes,randomUUID,timingSafeEqual} from 'node:crypto';
 import {once} from 'node:events';
 import {strictJSON,keys} from './strict-json.mjs';
 import {UUID} from '../lib/financial-contract.mjs';
+import {reviewFailure} from './saved-review.mjs';
 
-const assets=new Map([['/',['index.html','text/html; charset=utf-8']],['/review.js',['review.js','text/javascript; charset=utf-8']],['/review.css',['review.css','text/css; charset=utf-8']],['/diana-icon.png',['diana-icon.png','image/png']]]);
+const assets=new Map([['/',['index.html','text/html; charset=utf-8']],['/review.js',['review.js','text/javascript; charset=utf-8']],['/recheck-view.mjs',['recheck-view.mjs','text/javascript; charset=utf-8']],['/review.css',['review.css','text/css; charset=utf-8']],['/diana-icon.png',['diana-icon.png','image/png']]]);
 
 /** PC loopback UI. Relay credentials never authorize local decisions. */
 export async function createReviewViewer({onCommand=null,onRecheck=null}={}){
@@ -41,7 +42,11 @@ export async function createReviewViewer({onCommand=null,onRecheck=null}={}){
       busy.add(body.requestId);
       if(!recheck)jobs.set(body.requestId,{...entry,approvalReady:false});
       try{if(recheck)await onRecheck(body.requestId);else await onCommand(body.action,body.requestId);finish(200,'{"ok":true}','application/json; charset=utf-8');}
-      catch{finish(409,'LOCAL_ACTION_REJECTED');}
+      catch(error){
+        if(recheck){const failure={...reviewFailure(error),checkedAt:new Date().toISOString()},current=jobs.get(body.requestId);if(current)jobs.set(body.requestId,{...current,recheck:failure});
+          finish(409,JSON.stringify({ok:false,code:'SAVED_REVIEW_FAILED',review:failure}),'application/json; charset=utf-8');}
+        else finish(409,'LOCAL_ACTION_REJECTED');
+      }
       finally{busy.delete(body.requestId);}
     })().catch(()=>{if(!res.headersSent&&!res.destroyed)finish(409,'LOCAL_ACTION_REJECTED');});
   });

@@ -8,6 +8,7 @@ import { createFilePolicy } from '../local-ai/files.mjs';
 import { checkedDirectory, digest } from '../personal-ai/documents/files.mjs';
 import { UUID, FINANCE_FINAL, publicTask, publicFinanceJob, validTask } from '../lib/financial-contract.mjs';
 import { acquireWorkerLock } from './worker-lock.mjs';
+import { reviewFailure } from './saved-review.mjs';
 
 const within = (root, target) => { const r = path.relative(root, target); return !r || r !== '..' && !r.startsWith('..' + path.sep) && !path.isAbsolute(r); };
 const safeConsole = value => JSON.stringify(value, null, 2).replace(/[\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4,'0'));
@@ -121,8 +122,11 @@ export class FinancialWorker {
     }
   }
   async reviewSaved(id){return this.serial(async()=>{
-    if(!UUID.test(id)||!await this.#policyCurrent())fail('LOCAL_REVIEW_INVALIDATED');
-    const review=await this.#adapter.reviewSaved(id);this.#emit('recheck',{requestId:id,recheck:review});
+    if(!UUID.test(id))fail('LOCAL_REVIEW_INVALIDATED');
+    try{
+      if(!await this.#policyCurrent())fail('LOCAL_REVIEW_INVALIDATED');
+      const review=await this.#adapter.reviewSaved(id);this.#emit('recheck',{requestId:id,recheck:review});
+    }catch(error){this.#emit('recheck',{requestId:id,recheck:{...reviewFailure(error),checkedAt:new Date().toISOString()}});throw error;}
   });}
   async #policyCurrent() {
     return (await boundedRead(this.#configPath,100_000)).hash === this.#configHash && (await boundedRead(this.#config.coreConfig,100_000)).hash === this.#coreHash;

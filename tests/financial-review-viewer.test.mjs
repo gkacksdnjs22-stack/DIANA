@@ -4,9 +4,31 @@ import {request} from 'node:http';
 import {randomUUID} from 'node:crypto';
 import {createReviewViewer} from '../financial-documents/review-viewer.mjs';
 import {openReviewWindow} from '../financial-documents/worker-cli.mjs';
+import {recheckView} from '../financial-documents/review-ui/recheck-view.mjs';
 
 async function fixture(t,options={}){const view=await createReviewViewer(options);t.after(()=>view.close());const url=new URL(view.url),token=new URLSearchParams(url.hash.slice(1)).get('view');return{view,base:url.origin,token,read:()=>fetch(url.origin+'/api/view',{headers:{Authorization:'Bearer '+token}}),post:body=>fetch(url.origin+'/api/local-action',{method:'POST',headers:{Authorization:'Bearer '+token,Origin:url.origin,'Content-Type':'application/json'},body:JSON.stringify(body)})};}
 function reviewJob(f){const id=randomUUID();f.view.accept({type:'job',job:{id,state:'PC_REVIEW_REQUIRED'},label:'가상 검토',phase:'review',approvalReady:true,approvalExpires:Date.now()+300000});f.view.accept({type:'review',requestId:id,review:{before:'원문',after:'수정안'},documents:[]});return id;}
+test('core diagnostic responses and empty review-shaped objects never render as completed',()=>{
+ for(const response of [{status:'ACTION_REQUIRED',reason:'UNRESOLVED_LABEL_REQUIRED'},
+   {status:'ACTION_REQUIRED',reason:'UNRESOLVED_LABEL_REQUIRED',items:[],body:'',reviewComplete:false},
+   {status:'READY',reason:'REVIEW_RESULT',items:[],body:'',reviewComplete:true},
+   {status:'FAILED',reason:'CONTENT_CHANGED'}]){
+  const view=recheckView(response);assert.equal(view.state,'failed');assert.match(view.title,/완료하지 못/);assert.ok(!view.note.includes('충족 0'));assert.equal(view.body,'');assert.deepEqual(view.items,[]);
+ }
+ const diagnostic=recheckView({status:'ACTION_REQUIRED',reason:'UNRESOLVED_LABEL_REQUIRED'});assert.equal(diagnostic.reason,'UNRESOLVED_LABEL_REQUIRED');assert.match(diagnostic.note,/지침/);
+});
+test('genuine complete and incomplete saved reviews retain their distinct UI states',()=>{
+ const normal={status:'ACTION_REQUIRED',reason:'REVIEW_RESULT',reviewComplete:false,items:[{status:'SATISFIED'},{status:'MISSING_NO_EVIDENCE'}],body:'검증된 본문',checkedAt:'2026-10-27T00:00:00Z'};
+ assert.equal(recheckView(null).state,'idle');const incomplete=recheckView(normal);assert.equal(incomplete.state,'completed');assert.match(incomplete.note,/충족 1 \/ 전체 2/);assert.equal(incomplete.body,'검증된 본문');
+ const complete=recheckView({...normal,status:'READY',reviewComplete:true,items:[{status:'SATISFIED'}]});assert.equal(complete.state,'completed');assert.match(complete.title,/모든 검토 항목/);
+});
+test('recheck failure replaces previous success and preserves only its fixed diagnostic code',async t=>{
+ const f=await fixture(t,{onRecheck:async()=>{throw Object.assign(Error('PRIVATE_DIAGNOSTIC_TEXT'),{code:'UNRESOLVED_LABEL_REQUIRED',coreStatus:'ACTION_REQUIRED'});}}),id=reviewJob(f);
+ f.view.accept({type:'result',requestId:id,result:{saved:true,storageVerified:true}});f.view.accept({type:'recheck',requestId:id,recheck:{status:'READY',reason:'REVIEW_RESULT',items:[{status:'SATISFIED'}],body:'OLD_BODY',reviewComplete:true}});
+ const e=(await(await f.read()).json()).jobs[0],response=await f.post({requestId:id,viewId:e.resultId,action:'recheck'});assert.equal(response.status,409);
+ const result=await response.json();assert.equal(result.review.reason,'UNRESOLVED_LABEL_REQUIRED');assert.equal(result.review.coreStatus,'ACTION_REQUIRED');assert.ok(!JSON.stringify(result).includes('PRIVATE_DIAGNOSTIC_TEXT'));
+ const current=(await(await f.read()).json()).jobs[0].recheck;assert.equal(current.status,'FAILED');assert.equal(current.items,undefined);assert.equal(current.body,undefined);assert.equal(recheckView(current).state,'failed');
+});
 test('only same-origin authenticated decisions for the exact current review reach the local bridge',async t=>{
  const calls=[],f=await fixture(t,{onCommand:async(...args)=>calls.push(args)}),id=reviewJob(f),entry=(await(await f.read()).json()).jobs[0],body={requestId:id,viewId:entry.reviewId,action:'approve'};
  for(const [headers,expected]of [[{'Content-Type':'application/json'},401],[{Authorization:'Bearer '+f.token,'Content-Type':'application/json'},403],[{Authorization:'Bearer '+f.token,Origin:'https://example.invalid','Content-Type':'application/json'},403]])assert.equal((await fetch(f.base+'/api/local-action',{method:'POST',headers,body:JSON.stringify(body)})).status,expected);
@@ -43,6 +65,7 @@ test('local view preserves only eight session snapshots and cannot mutate worker
  const r=await f.read(),data=await r.json();assert.equal(data.jobs.length,8);assert.equal(data.jobs[0].label,'가상 9');assert.equal(data.jobs[0].documents[0].content,'<script>PRIVATE_LOCAL_TEXT</script>');assert.equal(data.jobs[0].approvalReady,false);
  f.view.accept({type:'connection',connected:true});assert.equal((await(await f.read()).json()).connection.connected,true);
  const page=await(await fetch(f.base)).text();assert.ok(!page.includes('PRIVATE_LOCAL_TEXT'));assert.ok(!page.includes(f.token));
+ assert.match(page,/<script type="module"/);const module=await fetch(f.base+'/recheck-view.mjs');assert.equal(module.status,200);assert.match(module.headers.get('content-type'),/javascript/);
  const js=await(await fetch(f.base+'/review.js')).text();assert.ok(!js.includes('innerHTML'));assert.ok(!js.includes('eval('));assert.ok(!js.includes('document.write'));assert.ok(!/https?:\/\//.test(js));
 });
 test('malformed local request URLs are rejected without stopping the viewer',async t=>{
