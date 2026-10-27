@@ -1,12 +1,13 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, link, lstat, realpath, unlink } from 'node:fs/promises';
+import { mkdir, open, lstat, realpath, unlink } from 'node:fs/promises';
 import { FinancialDocuments } from './adapter.mjs';
 import { boundedRead, readSelectedText, verifyOpenedOutput } from './files.mjs';
 import { strictJSON, keys, fail } from './strict-json.mjs';
 import { createFilePolicy } from '../local-ai/files.mjs';
 import { checkedDirectory, digest } from '../personal-ai/documents/files.mjs';
 import { UUID, FINANCE_FINAL, publicTask, validTask } from '../lib/financial-contract.mjs';
+import { acquireWorkerLock } from './worker-lock.mjs';
 
 const within = (root, target) => { const r = path.relative(root, target); return !r || r !== '..' && !r.startsWith('..' + path.sep) && !path.isAbsolute(r); };
 const safeConsole = value => JSON.stringify(value, null, 2).replace(/[\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4,'0'));
@@ -83,18 +84,7 @@ export class FinancialWorker {
     w.#policy = await createFilePolicy(w.#coreConfig.readRoots, w.#coreConfig.outputRoot);
     // O_EXCL: two local consoles must never own the same approval state.
     const lockPath = path.join(c.stateDir, 'worker.lock');
-    try { w.#lock = await open(lockPath, 'wx', 0o600); }
-    catch (e) {
-      if(e.code!=='EEXIST')throw e;
-      const previous=strictJSON((await boundedRead(lockPath,4096)).content);
-      if(!Number.isInteger(previous.pid)||previous.pid<1||!UUID.test(previous.workerId))fail('WORKER_LOCK_UNCERTAIN');
-      let dead=false;try{process.kill(previous.pid,0);}catch(error){dead=error.code==='ESRCH';}
-      if(!dead)fail('WORKER_ALREADY_RUNNING');
-      // Retain abandoned metadata for local recovery. Never kill any process.
-      await link(lockPath,path.join(c.stateDir,'abandoned-'+previous.workerId+'.lock'));
-      await unlink(lockPath);
-      w.#lock=await open(lockPath,'wx',0o600);
-    }
+    w.#lock=await acquireWorkerLock(c.stateDir);
     await w.#lock.writeFile(JSON.stringify({pid:process.pid,workerId:w.#workerId})); await w.#lock.sync();
     return w;
   }
@@ -136,6 +126,12 @@ export class FinancialWorker {
     await boundedRead(destination,2_000_000,digest(next));j.bytes=next;
   }
   async #closeJournal(a) { if(a?.journal){const j=a.journal;a.journal=null;await j.handle.close();} }
+  #reviewInstructions(a) {
+    if(a.phase==='review'&&a.job.state==='PC_REVIEW_REQUIRED'&&!a.outbox&&!a.noJournal&&!a.reviewAnnounced){
+      this.#out(`로컬 최종 승인: approve ${a.job.id}\n거절: reject ${a.job.id}\n취소: cancel ${a.job.id}\n`);
+      a.reviewAnnounced=true;
+    }
+  }
   async register() {
     if (!await this.#policyCurrent()) fail('LOCAL_POLICY_CHANGED');
     await this.#api('/api/agent/financial/register', { workerId:this.#workerId, tasks:this.#config.tasks.map(publicTask) });
@@ -191,6 +187,7 @@ export class FinancialWorker {
         this.#adapter.cancelPending(); await this.#report(a,'UNCERTAIN','RECOVERY_REQUIRED'); return;
       }
       if (Date.now() > a.approvalExpires) { this.#adapter.cancelPending(); await this.#report(a,'BLOCKED','LOCAL_CHECK_FAILED'); }
+      else this.#reviewInstructions(a);
       return;
     }
     const received = (await this.#api('/api/agent/financial/next', {workerId:this.#workerId})).job;
@@ -220,16 +217,15 @@ export class FinancialWorker {
       if (FINANCE_FINAL.has(a.job.state)) { this.#adapter.cancelPending(); return; }
       if (a.plan.status === 'AWAITING_APPROVAL') {
         a.phase='review'; a.approvalExpires=Date.now()+this.#coreConfig.approval_ttl_ms;
-        if(await this.#report(a,'PC_REVIEW_REQUIRED','PC_CHECK_REQUIRED'))
-          this.#out(`로컬 최종 승인: approve ${received.id}\n거절: reject ${received.id}\n취소: cancel ${received.id}\n`);
+        if(await this.#report(a,'PC_REVIEW_REQUIRED','PC_CHECK_REQUIRED'))this.#reviewInstructions(a);
       } else {
         const state = ['ACTION_REQUIRED','CLARIFICATION_REQUIRED'].includes(a.plan.status) ? 'WAITING_FOR_INFORMATION' : a.plan.status === 'READY' ? 'REVIEW_COMPLETED' : a.plan.status === 'BLOCKED' ? 'BLOCKED' : 'FAILED';
         const code = {WAITING_FOR_INFORMATION:'PC_INFORMATION_REQUIRED',REVIEW_COMPLETED:a.plan.reason==='ALREADY_SATISFIED'?'NO_CHANGE_REQUIRED':'PC_REVIEWED',BLOCKED:'LOCAL_CHECK_FAILED',FAILED:'LOCAL_OPERATION_FAILED'}[state];
         await this.#report(a,state,code,false,a.plan.review_complete===true && state==='REVIEW_COMPLETED');
       }
     } catch (e) {
-      this.#adapter.cancelPending();
       if (a.outbox) throw e; // An ACK failure only retries its metadata report.
+      this.#adapter.cancelPending();
       await this.#observe(a);
       if (!FINANCE_FINAL.has(a.job.state)) await this.#report(a,e.code==='JOURNAL_CONFLICT'?'BLOCKED':'FAILED',e.code==='JOURNAL_CONFLICT'?'LOCAL_CHECK_FAILED':'LOCAL_OPERATION_FAILED');
     }

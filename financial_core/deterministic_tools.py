@@ -1,7 +1,7 @@
 """Literal registered statements only; search scores are never a verdict."""
 import difflib
 import re
-from .doc_parser import normalize, normalized_with_offsets, validate_common
+from .doc_parser import normalize, validate_common
 from .schemas import CoreError, canonical, fields, require, sha, HASH
 
 
@@ -31,15 +31,33 @@ class EvidenceSearcher:
         return sorted(candidates, key=lambda p: (-p["score"], p["reference"]["doc_id"], p["reference"]["para_id"]))
 
 
+def statement_sentences(raw):
+    """Choose boundaries in the original text, before compatibility expansion."""
+    start = 0
+    dots = ".．"
+    for index, char in enumerate(raw):
+        if char not in ".．!?。！？\r\n":
+            continue
+        if char in dots:
+            # Neither an actual dot run nor a normalized decimal creates a
+            # boundary. A single …/‥/vertical ellipsis is not a separator at all.
+            before = raw[index - 1] if index else ""
+            after = raw[index + 1] if index + 1 < len(raw) else ""
+            digit = normalize(after)
+            if (before and before in dots) or (after and after in dots) or (digit and digit[0].isdecimal()):
+                continue
+        yield raw[start:index]
+        start = index + 1
+    yield raw[start:]
+
+
 def statement_states(raw, rule):
     positive = {normalize(s).rstrip(".!?。") for s in rule["positive_statements"]}
     negative = {normalize(s).rstrip(".!?。") for s in rule["negative_statements"]}
     states = []
-    # Segment the same NFKC/casefold view used for literal rule comparison;
-    # citations still reference the unchanged raw paragraph. A period before
-    # a digit belongs to a decimal/version (including .5), never a boundary.
-    normalized_raw = normalized_with_offsets(raw)[0]
-    for sentence in re.split(r"\.(?!\d)|[!?。\r\n]+", normalized_raw):
+    # Normalize only AFTER original sentence boundaries have been chosen.
+    # NFKC must not turn … into three separators and discard its condition.
+    for sentence in statement_sentences(raw):
         if not sentence.strip() or not relevant(sentence, rule):
             continue
         normalized = normalize(sentence)

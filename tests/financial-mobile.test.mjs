@@ -5,11 +5,12 @@ import os from 'node:os';
 import { once } from 'node:events';
 import { request as httpRequest } from 'node:http';
 import { randomUUID, createHash } from 'node:crypto';
-import { mkdir, mkdtemp, cp, writeFile, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, cp, writeFile, readFile, readdir, rm, link, lstat } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { createControlServer } from '../lib/control.mjs';
 import { FinancialWorker, financialTransport } from '../financial-documents/remote-worker.mjs';
 import { publicFinanceJob } from '../lib/financial-contract.mjs';
+import { boundedRead } from '../financial-documents/files.mjs';
 
 const tokens={userToken:'u'.repeat(40),agentToken:'a'.repeat(40),gatewayToken:'g'.repeat(40)};
 const python=process.env.DIANA_TEST_PYTHON || path.join(os.homedir(),'.cache/codex-runtimes/codex-primary-runtime/dependencies/python',process.platform==='win32'?'python.exe':'bin/python');
@@ -134,6 +135,64 @@ test('lost review ACK followed by cancellation clears the outbox and lets the ne
   const f=await fixture(t);await f.worker.tick();const j=await f.create();f.drop('PC_REVIEW_REQUIRED');await assert.rejects(f.worker.tick());
   await f.phone('/api/financial/jobs/'+j.id+'/cancel',{method:'POST',body:{}});const next=await f.create('convert');
   await f.worker.tick();await f.worker.tick();assert.equal((await f.get(j.id)).state,'CANCELLED');assert.equal((await f.get(next.id)).state,'PC_REVIEW_REQUIRED');assert.equal((await f.files()).length,0);
+});
+
+test('lost review ACK preserves the same local plan and allows explicit approval after retry',async t=>{
+  const f=await fixture(t);await f.worker.tick();const j=await f.create();f.drop('PC_REVIEW_REQUIRED');await assert.rejects(f.worker.tick());
+  assert.equal((await f.get(j.id)).state,'PC_REVIEW_REQUIRED');assert.equal((await f.files()).length,0);
+  await assert.rejects(f.worker.localCommand('approve',j.id)); // report is still unacknowledged
+  const previews=f.consoleOutput.filter(s=>s.includes('"plan_hash"')).length;
+  await f.worker.tick();
+  assert.equal(f.consoleOutput.filter(s=>s.includes('로컬 최종 승인: approve '+j.id)).length,1);
+  await f.worker.tick();assert.equal(f.consoleOutput.filter(s=>s.includes('로컬 최종 승인: approve '+j.id)).length,1);
+  await f.worker.localCommand('approve',j.id);
+  assert.equal((await f.get(j.id)).state,'LOCAL_SAVE_COMPLETED');assert.equal((await f.files()).length,1);assert.equal(f.saveStarts,1);
+  assert.equal(f.consoleOutput.filter(s=>s.includes('"plan_hash"')).length,previews+1); // original preview plus execute result, no prepare replay
+  const reports=f.wire.filter(w=>w.request&&JSON.parse(w.request).state==='PC_REVIEW_REQUIRED');assert.equal(reports.length,2);assert.equal(reports[0].request,reports[1].request);
+});
+
+test('dead worker lock recovery resumes after link succeeded but unlink was interrupted',async t=>{
+  const f=await fixture(t);await f.worker.close();
+  const previous={pid:2147483647,workerId:randomUUID()};
+  assert.throws(()=>process.kill(previous.pid,0),{code:'ESRCH'});
+  const lock=path.join(f.state,'worker.lock'),archive=path.join(f.state,'abandoned-'+previous.workerId+'.lock');
+  const bytes=Buffer.from(JSON.stringify(previous));await writeFile(lock,bytes,{flag:'wx'});await link(lock,archive);
+  assert.equal((await lstat(lock)).nlink,2);
+  await assert.rejects(boundedRead(lock,4096),{code:'FILE_DENIED'}); // document reader remains strict
+  await f.restartWorker();assert.deepEqual(await readFile(archive),bytes);assert.equal((await lstat(archive)).nlink,1);
+  const current=JSON.parse(await readFile(lock,'utf8'));assert.equal(current.pid,process.pid);assert.notEqual(current.workerId,previous.workerId);
+  await f.worker.tick();
+});
+
+for(const scenario of ['dead-single','archive-only','live-pair','wrong-pair','unaccounted-pair','extra-link','archive-conflict'])test('worker lock recovery handles '+scenario+' without replacing unrelated files',async t=>{
+  const f=await fixture(t);await f.worker.close();const previous={pid:scenario==='live-pair'?process.pid:2147483647,workerId:randomUUID()};
+  const lock=path.join(f.state,'worker.lock'),archive=path.join(f.state,'abandoned-'+previous.workerId+'.lock'),other=path.join(f.state,'unrelated.json');
+  const bytes=Buffer.from(JSON.stringify(previous)),canary=Buffer.from('PRESERVE_UNRELATED_LOCK_ARCHIVE');
+  if(scenario==='archive-only')await writeFile(archive,bytes,{flag:'wx'});
+  else await writeFile(lock,bytes,{flag:'wx'});
+  if(scenario==='live-pair'||scenario==='extra-link')await link(lock,archive);
+  if(scenario==='wrong-pair')await link(lock,path.join(f.state,'abandoned-'+randomUUID()+'.lock'));
+  if(scenario==='unaccounted-pair'||scenario==='extra-link')await link(lock,other);
+  if(scenario==='archive-conflict')await writeFile(archive,canary,{flag:'wx'});
+  if(['dead-single','archive-only'].includes(scenario)){
+    await f.restartWorker();assert.deepEqual(await readFile(archive),bytes);assert.equal(JSON.parse(await readFile(lock,'utf8')).pid,process.pid);
+  }else{
+    await assert.rejects(f.restartWorker(),{code:scenario==='live-pair'?'WORKER_ALREADY_RUNNING':'WORKER_LOCK_UNCERTAIN'});
+    assert.deepEqual(await readFile(lock),bytes);
+    if(scenario==='archive-conflict')assert.deepEqual(await readFile(archive),canary);
+    if(scenario==='unaccounted-pair'||scenario==='extra-link')assert.deepEqual(await readFile(other),bytes);
+  }
+});
+
+for(const change of ['source','policy','expiry'])test('a recovered review ACK still rejects '+change+' invalidation',async t=>{
+  const f=await fixture(t,{ttl:change==='expiry'?200:300_000});await f.worker.tick();const j=await f.create();f.drop('PC_REVIEW_REQUIRED');await assert.rejects(f.worker.tick());
+  await f.worker.tick();
+  if(change==='source')await writeFile(path.join(f.input,'review.md'),'Changed after lost ACK');
+  if(change==='policy')await writeFile(f.coreConfig,JSON.stringify({...f.core,write_roles:[]}));
+  if(change==='expiry')await new Promise(r=>setTimeout(r,220));
+  try{await f.worker.localCommand('approve',j.id);}catch{}
+  try{await f.worker.tick();}catch{}
+  assert.equal((await f.get(j.id)).state,'BLOCKED');assert.equal((await f.files()).length,0);assert.equal(f.saveStarts,0);
 });
 
 for(const mutation of ['source','policy','expiry'])test('local '+mutation+' change invalidates pending approval without save',async t=>{

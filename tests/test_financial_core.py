@@ -39,6 +39,28 @@ def change_doc(payload, key, content):
 
 
 class FinancialCoreTests(unittest.TestCase):
+    def test_ellipsis_normalization_cannot_turn_registered_negation_positive(self):
+        positive = "LPAC participation right exists."
+        for punctuation in ("…", "‥", "...", "．．．", "︙"):
+            negative = "LPAC participation right exists" + punctuation + " if manager agrees."
+            for wrapper in ("{}", "Unrelated sentence. {}", "{} Additional unrelated sentence."):
+                with self.subTest(punctuation=punctuation, wrapper=wrapper):
+                    payload = fixture()
+                    guide = json.loads(payload["guideline"]["content"])
+                    guide["rules"] = [guide["rules"][2]]
+                    guide["rules"][0]["positive_statements"] = [positive]
+                    guide["rules"][0]["negative_statements"] = [negative]
+                    change_doc(payload, "guideline", canonical(guide))
+                    content = wrapper.format(negative)
+                    change_doc(payload, "review_doc", content)
+                    payload["source_docs"] = [doc("S9", "Unrelated material.")]
+                    result = handle(payload)
+                    self.assertEqual(result["items"][0]["status"], "NEEDS_CONFIRMATION")
+                    self.assertFalse(result["review_complete"])
+                    self.assertEqual(result["items"][0]["review_references"][0]["quote"], content)
+                    change_doc(payload, "review_doc", positive)
+                    self.assertTrue(handle(payload)["review_complete"])
+
     def test_decimal_negative_statement_cannot_match_its_positive_prefix(self):
         for value in ("1.5", "1.50", "1.005", ".5", "-1.5", "１．５", "1.⁵"):
             for suffix in ("", " Additional unrelated sentence."):
