@@ -1,0 +1,105 @@
+# 금융 문서 앱 연결 검증 결과 — 2026-10-27
+
+로컬 구현과 검증 결과다. 최초 검증 당시에는 운영 Render 배포, Git push, APK 업로드, 실기기 설치를 수행하지 않았다. 이후 사용자 요청으로 APK 한 개를 DIANA에 전달했고 금융 기능 소스는 별도 브랜치에 커밋하도록 정리했다. 운영 주소 `https://diana-pzw3.onrender.com` 및 기존 페어링 구조를 유지한다. 운영에서 새 모드가 동작한다고 보고하는 문서가 아니다.
+
+## 구현 결과
+
+Android ≡ 메뉴에 ‘금융 문서 작업’을 추가했다. PC 등록 작업 → 검토/보완/변환 → 허용 형식 → 요청 확인 → 상태 갱신 → 저장 전 취소를 지원한다. 화면에 ‘문서 내용 확인과 최종 승인은 PC에서 진행합니다’를 표시하며 결과 파일 열기/공유/다운로드/최종 승인 기능은 없다. 금융 상태는 기존 다운로드 캐시에 합치지 않는다. 요청 ID/본문/공개 서버·휴대폰 식별자의 binding만 별도 재시도 설정에 저장한다.
+
+서버는 기존 인증·페어링·영속 settings 어댑터를 사용하며 `finance:v1:` 네임스페이스로 일반 jobs와 분리한다. 허용 필드/상태 코드와 전체 실행 절차는 [financial-mobile.md](financial-mobile.md)에 있다. 공개 응답을 개별 필드로 구성하며 코어 객체를 서버에 전달하지 않는다.
+
+최초 연결은 기존 FinancialDocuments와 Python 코어를 수정 없이 재사용했다. 이후 PR #11 리뷰 수정에서 원문 기준 문장 경계·소수점·말줄임표 보존과 질문/미등록 주변 조건의 보수적인 판정을 보완했다. 한 인스턴스/한 활성 계획, 로컬 TTY 승인, 저장 시작 CAS, 실제 execute·재읽기 확인, 영속 메타데이터 outbox를 연결했다. 기존 일반 에이전트는 수정/재시작하지 않았다.
+
+`scripts/financial-dev.mjs`를 실제 테스트용 TTY에서 시작해 임시 localhost 서버와 금융 대기 콘솔이 켜지는 것을 확인했고, `exit` 입력 후 종료 코드 0으로 자신이 만든 서버/worker만 종료됐다. 이 시작·종료 검사는 사용자의 문서 최종 승인 재현과는 별개다.
+
+## 실제 검증
+
+| 검사 | 결과 |
+|---|---|
+| 기존 서버·전송·페어링·push·영속 저장·코어를 포함한 Node 회귀 실행 | 196개 통과, 실패/스킵 0 |
+| 최종 금융 연결 전용 Node 실행 | 추가 리뷰 수정 후 50개 통과; 어댑터 24개·별도 프로세스 잠금 4개와 함께 78개 통과; 전체 검사와 중복 포함, 합산하지 않음 |
+| PR 소스의 전체 Node 회귀 실행 | 추가 리뷰 수정 후 413개 통과, 실패/스킵 0 |
+| Python 금융 코어 | 추가 리뷰 수정 후 24개 통과 |
+| 기존 금융 문서 변환 왕복 | 6개 경로 VERIFIED, findings=[] |
+| Android JVM 단위 테스트 | 9개 클래스, 50개 통과, 실패/오류 0 |
+| Android debug 앱·계측 테스트 APK 빌드 | BUILD SUCCESSFUL |
+| 기존 코어·학습 소스·가상 자료·기존 데모 설정/결과 보호 표본 | 200개 중 명시적 수정 대상인 판정기/검사 2개 변경, 나머지 198개 SHA-256 동일 |
+
+Node 정상 흐름은 실제 loopback HTTP, 기존 pair-code/phone-token 인증, SQLite 파일, 기존 Python 코어를 사용했다. 가상 보완 요청을 prepare한 시점에는 확정 출력 파일이 없고, 테스트용 로컬 승인 후에만 파일이 하나 생성됐다. 재읽기 결과에 보완 내용과 미해결 LPAC 안내가 존재하며, 앱용 상태는 LOCAL_SAVE_COMPLETED/saved=true/reviewComplete=false였다. 하네스 승인은 사용자 직접 승인으로 계산하지 않는다.
+
+승인 대기 중 후속 작업은 QUEUED를 유지했다. 다른 휴대폰의 조회/취소, 휴대폰의 agent API, agent/gateway의 모바일 API, 다른 worker/generation/revision, 서버 PC 귀속 변경을 이용한 접근을 거부했다. confirmed/token/role/owner/device/문서 경로 등의 필드, 중복 JSON 키, 미등록 작업/형식, 원격 승인·실행 경로도 거부했다.
+
+완료 ACK 유실 후 서버를 재시작하고 동일 보고를 재전송해도 저장 파일과 실행 게이트는 각각 1개였다. 저장 시작 ACK가 모호하면 execute를 재개하지 않고 UNCERTAIN이 됐다. 승인 대기 ACK 유실 후 취소된 경우에도 outbox가 현재 CANCELLED 상태를 받아들이고 후속 작업으로 넘어갔다. 원문·정책·승인 만료 변경은 저장을 막았고, PC 재시작은 기존 승인을 복구하지 않았다. 저장 시작 직후 실제 HTTP 취소 요청은 LOCAL_SAVING을 반환했고 최종 실제 저장 결과를 유지했다. 출력 경로를 미리 점유한 I/O 장애에서는 기존 파일을 덮어쓰지 않고 UNCERTAIN/saved=false를 반환했다. 기존 어댑터 테스트의 부분 쓰기·재읽기·claim/감사 기록 실패 검사도 통과했다.
+
+정상 흐름의 실제 HTTP 요청/응답과 서버 settings 기록을 수집해 가상 본문 canary, 로컬 문서/근거/지침/항목 ID, 실제 로컬 경로/파일명, 인용, expected_body/output_content/unified_diff/plan_hash/approval_id, 콘솔 계획에 있던 64자리 해시들이 없는지 검사했다. 의도적인 금지 필드 주입은 localhost 부정 테스트로만 보냈으며 응답과 영속 기록에 canary가 남지 않았다. 일반 jobs/agent 큐는 비어 있고 금융 ID의 일반 download/artifact/file 접근은 거부됐다. 원문 canary와 상세 계획은 PC 전용 출력에서만 확인했다.
+
+## Android 산출물
+
+- 버전: 0.3.7, versionCode 10, package kr.nightdesk.phone.
+- Gradle 원본: `C:\work\diana\android-app\app\build\outputs\apk\debug\app-debug.apk`.
+- 기존 설치와 같은 인증서로 로컬 재서명한 APK: `C:\work\diana\.local\financial-mobile-verification\DIANA-0.3.7-finance.apk`.
+- APK 크기: 4,128,230 bytes.
+- APK SHA-256: `bc62c0a81162d1fadeab93f95f5677530c89470c0f2d72940ed689fa7806c7ed`.
+- 인증서 SHA-256: `9e9e61c36d0657e0cfe86b5f542b634e723c050664f6c0102281e9e7287877b9`.
+- 서명·정렬·원본 payload 보존 검증 통과. 기존 `앱-설치/DIANA-debug.apk`는 교체하지 않았다.
+- JVM 결과: `android-app/app/build/test-results/testDebugUnitTest/`.
+- 계측 APK: `android-app/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk`.
+
+공식 JDK 17, Gradle 8.11.1, Android SDK 기본 API 35를 작업 폴더에 내려받아 체크섬을 확인하고 로컬 빌드했다. platform-tools/에뮬레이터가 설치되지 않은 경고가 있지만 단위 테스트·두 APK 빌드는 성공했다. **계측 테스트는 컴파일만 했고 실행하지 않았다.** Android 실화면·실제 SharedPreferences 저장 내용·실기기 상태 갱신은 아직 실행 검증하지 않았다. 이 부분을 소스 계약 검사나 JVM 테스트와 혼동하지 않는다.
+
+왕복 보고서: `C:\work\diana\.local\financial-roundtrip\run-RnAhmB\report.json`. 기존 기준 파일과 감사/승인 기록은 변경하지 않았다. 보호 표본 결과: `.local/financial-mobile-verification/protection-result.json`.
+
+## 이번 변경 파일
+
+- 서버: `lib/control.mjs`에 모듈 연결, 새 `lib/financial-contract.mjs`, `lib/financial-control.mjs`.
+- PC: 새 `financial-documents/remote-worker.mjs`, `worker-cli.mjs`.
+- 실행: `scripts/init-financial-mobile-demo.mjs`, `scripts/financial-dev.mjs`, package.json에 finance 실행/검사 명령 3개 추가.
+- Android: MainActivity.java 메뉴·화면·별도 상태 폴링, 새 FinanceRequests.java/FinanceState.java, app/build.gradle의 버전 갱신.
+- 검사: `tests/financial-mobile.test.mjs`, Android FinanceStateTest.java/FinanceContractTest.java.
+- 문서: `docs/financial-mobile.md`, 이 보고서.
+
+처음부터 존재한 미커밋/미추적 변경은 보존했다. 위 목록은 이번 작업 범위이며 git diff 전체를 이번 작업으로 간주하지 않는다. 학습 코드/데이터/체크포인트/선택 프로필/active manifest를 편집하지 않았고 학습·모델·독립 시험을 실행하지 않았다. 초기에 실패한 이번 Node 테스트 프로세스만 정확한 PID와 실행 명령을 확인해 정리했으며 기존 에이전트나 학습 프로세스를 종료하지 않았다. OS 서비스/자동 시작/방화벽도 변경하지 않았다.
+
+## 사용자가 다음에 수행할 일
+
+커밋 후보는 GitHub main 원본과 금융 기능에 필요한 소스·가상 fixture만 조합한 별도 폴더에서 검증했다. 이 폴더의 전체 Node 테스트 375개가 통과했으며 학습·독립 시험은 포함하지 않았다. package.json은 기존 main에 금융 명령 3개만 추가한 버전으로 구성했다. 금융 코어와 그 파일 정책 의존성은 main에 없어서 실행에 필요한 기존 소스도 함께 포함한다. 학습 코드·데이터·모델·로컬 설정·감사 기록·사용자 문서·APK는 커밋 대상에서 제외한다.
+
+1. [실행 안내](financial-mobile.md)의 새 가상 자료 설정 생성 후 로컬 개발 콘솔을 실행한다. 이번에 만든 예시는 `.local/financial-mobile-demo-b196890e-5cae-4cf0-86c3-aca799885c9e/worker.json`이다.
+2. 별도 에뮬레이터/테스트 앱 연결로 금융 작업을 요청하고 PC 콘솔에서 직접 상세 확인·approve 입력을 재현한다. 기존 운영 휴대폰 연결은 불필요하게 초기화하지 않는다.
+3. 운영 적용을 결정하면 기존 Render 서비스에 `lib/control.mjs`의 금융 연결, 새 금융 계약/제어 모듈, 의존하는 `financial-documents/strict-json.mjs`를 반영해야 한다. 다른 작업의 미커밋 변경까지 일괄 배포하지 않는다. 신규 DB 테이블·외부 서비스는 필요 없다.
+4. PC에는 기존 금융 코어와 전용 worker, 검토한 로컬 등록 설정이 필요하다. 서버를 계속 운영해야 하며 서버 배포만으로 PC worker가 켜지지는 않는다.
+5. 서버 반영 후 새 APK 설치와 실제 화면·취소·상태 갱신을 확인한다. 새 금융 API가 없는 서버에서는 앱이 미지원 안내를 표시하며 일반 전송으로 우회하지 않는다.
+
+운영 배포·PC 운영 worker 연결·실기기 검사·실제 Supabase 재시작에 대한 금융 모드 종합 검사는 미실행이다. 기존 Supabase 어댑터 회귀 검사는 가짜 Postgres 풀로 실행했으며 실제 서비스의 보장으로 과장하지 않는다. OS 전체 격리나 금융 규정 준수도 이번 검증 범위가 아니다.
+
+## PR #11 병합 전 리뷰 수정
+
+`4d44c935`에서 지적된 세 문제를 실제 실패하는 테스트로 먼저 재현하고 수정했다.
+
+- 취소: 부분 HTTP 본문을 보내고 남은 부분은 저장 시작 이후에 전송하는 검사에서 CANCELLED 덮어쓰기를 재현했다. 취소 본문 수신 후 refresh와 최신 owned 조회를 수행하고 상태 확인/갱신 사이에 await를 두지 않는다. 이제 LOCAL_SAVING을 유지하고 실제 저장 완료 보고도 성공한다. 저장 완료·만료를 가로지르는 지연 취소도 현재 상태를 반환한다.
+- 상태 폴더/journal: readRoots/outputRoot와 같은 위치·하위·상위 폴더 및 설정 파일을 포함하는 상태 폴더를 mkdir/lock 생성 전에 거부한다. 새 journal은 배타적으로 만든 JSONL 파일에만 추가 기록한다. 기존 `.json`/`.jsonl`을 차단 근거로 사용하면서도 바이트 그대로 보존하고, 실행 중 journal 내용 변경은 승인과 저장 시작을 차단한다. 확인되지 않은 파일을 실패 보고로 교체하지 않는다.
+- 문장 분리: 원문 인용을 바꾸지 않고 기존 NFKC/casefold 뷰에서 숫자 앞의 마침표를 보존한다. 등록된 부정 문장 `Management fee in percent: 1.5.`는 긍정 문장 `Management fee in percent: 1.`의 앞부분으로 채택되지 않는다. 소수 여러 자리·선행 소수점·음수·전각/호환 숫자와 후속 문장도 확인했으며 부정은 NEEDS_CONFIRMATION/review_complete=false, 등록된 긍정은 SATISFIED를 유지한다.
+
+최종 검사는 PR 원본과 수정 파일만 조합한 폴더의 Node 387개, 금융 전용 28개, Python 22개 모두 통과했다. 이 수치는 서로 합산하지 않는다. 기존 문서 왕복 6개 경로도 `VERIFIED`, findings=[]이며 보고서는 `.local/financial-roundtrip/run-aKpuKC/report.json`이다. 7개 변경 파일의 diff 공백 검사도 통과했다.
+
+기존 보호 표본 200개 중 변경은 이번 요청에서 명시적으로 허용한 `financial_core/deterministic_tools.py`와 그 회귀 검사 `tests/test_financial_core.py` 두 파일뿐이다. 나머지 198개는 동일했다. 학습·모델·독립 시험·기존 문서·기존 감사/승인 기록·운영 서버에는 변경을 가하지 않았다. 이번 수정에는 Android 소스나 APK 변경이 없어 기존 Android 결과를 재실행한 것으로 표시하지 않는다. 실기기 검증과 운영 배포·PR 병합은 하지 않았다.
+
+## a05fc798 추가 리뷰 수정과 기획안 대조
+
+- 말줄임표: 원문에서 문장 경계를 선택한 뒤 조각을 정규화한다. `…`, `‥`, ASCII/전각 마침표 연속, 세로 말줄임표를 포함한 등록 부정 문장이 긍정 앞부분으로 잘리지 않는다. 기존 소수·전각/호환 숫자 검사와 원문 인용 보존도 유지한다.
+- 검토 상태 ACK: 재시도할 outbox가 남아 있으면 prepare catch에서 유효한 계획을 폐기하지 않는다. 동일 상태 보고가 확인된 뒤 로컬 승인 안내를 한 번 표시하며, 실제 승인 입력 후 정상 저장이 된다. ACK 전 승인 금지·취소·만료·원문/정책 변경의 무효화는 유지한다.
+- 잠금 복구: 전용 `worker-lock.mjs`가 상태 폴더의 정확한 worker.lock/abandoned-UUID.lock 쌍·같은 파일·정확히 두 링크·죽은 PID를 확인해 중단된 보관을 재개한다. 일반 문서 reader의 nlink=1 제한은 바꾸지 않았다. 활성 PID·낯선/추가 링크·보관 이름 충돌은 보존하고 거부한다.
+
+전체 Node 399개, 금융 통합 40개, Python 23개와 기존 문서 왕복 6개(VERIFIED, findings=[])를 확인했다. 서로 중복된 수치를 합산하거나 기획안의 독립 시험 점수로 환산하지 않는다. 새 왕복 보고서는 `.local/financial-roundtrip/run-DvTwXJ/report.json`이다. 원본 기획안 PDF는 읽기·페이지 렌더링만 수행했다.
+
+기획안과의 대조는 [financial-proposal-alignment.md](financial-proposal-alignment.md)에 정리했다. 핵심 코어/PC 승인·내부 저장·내용 반출 제한은 방향이 일치한다. 자체 모델의 금융 요청 해석, 독립적인 새 검토서 작성, Pyodide 공통 데모, 조직별 정책 확장과 독립 180+20 검증은 후속 범위다. 모바일/Render 관리 통신은 존재하며 기획안의 오프라인 코어/브라우저 데모와 구분해야 한다. 이번 작업에서 학습·모델·독립 시험·운영 배포·실기기 검증·PDF 수정은 수행하지 않았다.
+
+## 2b1dea21 추가 리뷰 수정과 경계별 자체 검토
+
+- 질문·조건·부정: 물음표를 의미 정보로 보존하며 정규화된 물음표가 있는 근거는 확정 긍정으로 채택하지 않는다. 영문/한국어 × 검토서/원문 × 16개 사례의 64개 하위 사례를 추가했다. 선택된 근거 문단의 미등록 주변 문장도 버리지 않고 추가 확인으로 처리한다. CRLF 인용 검사는 등록 진술 자체의 줄바꿈으로 유지하며, 미등록 주변 조건은 별도 행렬에서 검사한다.
+- 통신 단계: register/next/observe의 요청 전 장애·서버 처리 후 응답 유실, 연속 조회 실패, 실제 준비 실패와 오류 조회 실패를 검사했다. `preparing`/`preparation_failed`를 명시적으로 마무리하므로 복구 후 승인 대기 또는 실패/차단으로 진행하고 후속 큐가 열린다. 준비 중 취소·만료·원문 변경에서도 자동 실행이나 저장은 없다. 기존 검토/게이트/완료 ACK 검사를 유지했다.
+- 동시 재시작: 두 실제 자식 프로세스의 unlink 직전 중단점을 사용해 기존 버전의 중복 획득을 재현했다. 수정 후 SQLite 조정 트랜잭션을 worker 전체 수명과 소유 파일 해제까지 유지해 한 소유자만 허용했다. 6개 프로세스 동시 시작, lease 해제 없이 프로세스 종료 후 재시작, 낯선 조정 파일 보존 검사도 통과했다. 빈/불완전한 초기 조정 DB는 자동 교체하지 않고 시작을 거부한다.
+
+최종 수정 소스와 정확한 PR 부모 트리를 조합한 격리 폴더에서 Node 413/413, Python 24/24가 통과했다. 금융 연결 50개 + 어댑터 24개 + 별도 프로세스 잠금 4개의 78/78은 위 전체 Node 검사에 포함된다. 기존 문서 변환 왕복도 6개 VERIFIED, findings=[]이며 새 보고서는 `.local/financial-roundtrip/run-XxEypQ/report.json`이다. 10개 변경 파일의 공백 검사와 환경 변수/비밀키 포함 여부 검사도 통과했다. 보호 표본의 의도된 두 파일 외 198개는 동일하다.
+
+검토 범위와 제한은 [경계별 검토표](financial-review-matrix.md)에 정리했다. 등록 진술 기반의 보수적인 코어이며 자유로운 금융 언어 이해를 검증한 것은 아니다. Android 소스/APK를 변경하지 않았고, 모델/학습/독립 평가/실기기 실행/PR 병합/운영 배포는 하지 않았다.
