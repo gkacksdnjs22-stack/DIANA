@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using System.IO;
 using Diana.Desktop;
 class NativeTests {
     [DllImport("shell32.dll",SetLastError=true)]static extern IntPtr CommandLineToArgvW([MarshalAs(UnmanagedType.LPWStr)]string command,out int count);
@@ -18,6 +19,22 @@ class NativeTests {
         Check(WorkerSession.Parse("{\"type\":\"job\",\"state\":\"SECRET\"}")==null,"invalid state");
         Check(WorkerSession.Parse("{\"type\":\"error\",\"code\":\"SECRET\"}")==null,"invalid error");
         Check(!Settings.LocalPath(@"\\server\file"),"UNC path");Check(!Settings.LocalPath("relative.json"),"relative path");
-        Console.WriteLine("Native launcher checks passed: quoting, loopback URLs, protocol projection, local paths.");return 0;
+        string fixture=Path.Combine(Path.GetTempPath(),"diana-profile-test-"+Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(fixture);
+        try {
+            string oldRoot=Path.Combine(fixture,"old"),nextRoot=Path.Combine(fixture,"new"),shared=Path.Combine(fixture,"shared","desktop.json");
+            Directory.CreateDirectory(oldRoot);Directory.CreateDirectory(nextRoot);
+            string config=Path.Combine(fixture,"worker.json"),env=Path.Combine(fixture,"connection.env");
+            File.WriteAllText(config,"{}");File.WriteAllText(env,"AGENT_TOKEN=FAKE_TEST_ONLY");
+            var value=new Settings {ConfigPath=config,EnvFile=env,DocumentRoot=fixture,ApiBaseUrl="http://127.0.0.1:12345",AutoOpen=false};
+            string portable=Path.Combine(oldRoot,".local","desktop.json");value.Save(portable);value.Save(shared);
+            Check(Settings.DefaultFile(oldRoot,shared)==portable,"portable settings take priority");
+            string selected=Settings.DefaultFile(nextRoot,shared);Check(selected==shared,"new app version uses shared profile");
+            var restored=Settings.Read(selected);Check(restored.ConfigPath==config&&restored.EnvFile==env&&!restored.AutoOpen,"existing paths and preference retained");
+            string json=File.ReadAllText(shared);Check(!json.Contains("FAKE_TEST_ONLY"),"connection secret is not copied into profile");
+            File.WriteAllText(portable,"invalid");bool rejected=false;try { Settings.Read(Settings.DefaultFile(oldRoot,shared)); } catch { rejected=true; }
+            Check(rejected,"invalid explicit portable profile never switches to a different connection");
+        } finally { Directory.Delete(fixture,true); }
+        Console.WriteLine("Native launcher checks passed: quoting, loopback URLs, protocol projection, local paths, cross-version profile reuse, profile priority and fail-closed validation.");return 0;
     }
 }

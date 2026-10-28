@@ -8,8 +8,8 @@ import {promisify} from 'node:util';
 const exec=promisify(execFile),project=fileURLToPath(new URL('../',import.meta.url));
 export const desktopSources=Object.freeze([
   'financial-desktop/settings.mjs','financial-desktop/worker.mjs',
-  'financial-documents/adapter.mjs','financial-documents/files.mjs','financial-documents/operation.mjs','financial-documents/python.mjs','financial-documents/strict-json.mjs','financial-documents/saved-review.mjs','financial-documents/remote-worker.mjs','financial-documents/worker-lock.mjs','financial-documents/review-viewer.mjs',
-  'financial-documents/review-ui/index.html','financial-documents/review-ui/review.js','financial-documents/review-ui/recheck-view.mjs','financial-documents/review-ui/review.css','financial-documents/review-ui/diana-icon.png',
+  'financial-documents/adapter.mjs','financial-documents/files.mjs','financial-documents/operation.mjs','financial-documents/python.mjs','financial-documents/strict-json.mjs','financial-documents/saved-review.mjs','financial-documents/remote-worker.mjs','financial-documents/worker-lock.mjs','financial-documents/review-viewer.mjs','financial-documents/local-registration.mjs',
+  'financial-documents/review-ui/index.html','financial-documents/review-ui/review.js','financial-documents/review-ui/registration.mjs','financial-documents/review-ui/recheck-view.mjs','financial-documents/review-ui/review.css','financial-documents/review-ui/diana-icon.png',
   'financial-documents/fixtures/fund-a/review.md','financial-documents/fixtures/fund-a/due-diligence.txt','financial-documents/fixtures/fund-a/guideline.json',
   'financial_core/__init__.py','financial_core/schemas.py','financial_core/doc_parser.py','financial_core/deterministic_tools.py','financial_core/state_planner.py','financial_core/interface.py',
   'local-ai/files.mjs','local-ai/provider.mjs','personal-ai/documents/files.mjs','lib/financial-contract.mjs','scripts/init-financial-mobile-demo.mjs'
@@ -35,7 +35,7 @@ export async function buildDesktop({python,node=process.execPath,outputParent=pa
   const buildRoot=path.join(outputParent,new Date().toISOString().replace(/[:.]/gu,'-')+'-'+randomUUID().slice(0,8)),root=path.join(buildRoot,'DIANA-PC');
   await mkdir(root,{recursive:true});
   for(const relative of desktopSources){const source=path.join(project,relative);await regular(source);const target=path.join(root,'app',relative);await mkdir(path.dirname(target),{recursive:true});await copyFile(source,target);}
-  await writeFile(path.join(root,'app/package.json'),JSON.stringify({name:'diana-financial-desktop',version:'0.1.0',private:true,type:'module'}));
+  await writeFile(path.join(root,'app/package.json'),JSON.stringify({name:'diana-financial-desktop',version:'0.2.1',private:true,type:'module'}));
   await mkdir(path.join(root,'LICENSES'));await copyFile(path.join(project,'financial-desktop/README.txt'),path.join(root,'사용방법.txt'));
   await mkdir(path.join(root,'runtime/node'),{recursive:true});await copyFile(node,path.join(root,'runtime/node/node.exe'));
   await copyFile(path.join(project,'financial-desktop/licenses/Node-24.22.1.txt'),path.join(root,'LICENSES/Node.txt'));
@@ -59,10 +59,10 @@ export async function buildDesktop({python,node=process.execPath,outputParent=pa
   const entries=[];
   async function walk(directory){for(const item of await readdir(directory,{withFileTypes:true})){const full=path.join(directory,item.name);if(item.isDirectory())await walk(full);else{await regular(full);const bytes=await readFile(full);entries.push({path:path.relative(root,full).replaceAll('\\','/'),bytes:bytes.length,sha256:hash(bytes)});}}}
   await walk(root);entries.sort((a,b)=>a.path.localeCompare(b.path));
-  const manifest={schema_version:1,product:'DIANA PC',version:'0.1.0',platform:'win-x64',node:nodeVersion,python:version,sources:desktopSources,files:entries};
+  const manifest={schema_version:1,product:'DIANA PC',version:'0.2.1',platform:'win-x64',node:nodeVersion,python:version,sources:desktopSources,files:entries};
   await writeFile(path.join(root,'manifest.json'),JSON.stringify(manifest,null,2)+'\n');
   // Archive only the manifest whitelist captured BEFORE any personalized profile.
-  const release=path.join(buildRoot,'DIANA-PC-0.1.0-win-x64.zip');
+  const release=path.join(buildRoot,'DIANA-PC-0.2.1-win-x64.zip');
   const zipRelease="import os,sys,json,zipfile;root,out=sys.argv[1:];manifest=json.load(open(os.path.join(root,'manifest.json'),encoding='utf-8'));z=zipfile.ZipFile(out,'x',zipfile.ZIP_DEFLATED)\nfor item in manifest['files']+[{'path':'manifest.json'}]:z.write(os.path.join(root,item['path']),'DIANA-PC/'+item['path'])\nz.close()";
   await exec(python,['-I','-B','-c',zipRelease,root,release],{env:minimalEnv(),windowsHide:true,timeout:120000});
   const result={root,release,releaseSha256:hash(await readFile(release)),releaseBytes:(await lstat(release)).size,files:entries.length,python:version};

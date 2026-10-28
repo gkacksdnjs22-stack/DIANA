@@ -2,10 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {PassThrough} from 'node:stream';
-import {mkdir,mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+import {pathToFileURL} from 'node:url';
+import {mkdir,mkdtemp,writeFile,readFile,rm,link,symlink} from 'node:fs/promises';
 import {desktopSettings,desktopEnvironment,loadDesktopSettings} from '../financial-desktop/settings.mjs';
 import {runDesktop,desktopEvent,desktopError} from '../financial-desktop/worker.mjs';
 import {desktopSources} from '../scripts/build-financial-desktop.mjs';
+import {boundedRead} from '../financial-documents/files.mjs';
 
 const settings=()=>({schema_version:1,configPath:path.resolve('sample-documents/worker.json'),envFile:path.resolve('.env'),documentRoot:path.resolve('sample-documents'),apiBaseUrl:'https://diana-pzw3.onrender.com',autoOpen:false});
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return{promise,resolve};};
@@ -27,6 +31,54 @@ test('desktop reads only agent credential and never evaluates env runtime inject
 test('desktop profile is inert bounded JSON, including duplicate-key rejection',async t=>{
   const root=await fixture(t),file=path.join(root,'desktop.json');await writeFile(file,JSON.stringify(settings()));assert.equal((await loadDesktopSettings(file)).autoOpen,false);
   await writeFile(file,JSON.stringify(settings()).replace('"schema_version":1','"schema_version":1,"schema_version":1'));await assert.rejects(()=>loadDesktopSettings(file));
+});
+
+test('shared AppData profile loads without opening AppData to document readers',async t=>{
+  const root=await fixture(t),directory=path.join(root,'AppData/Local/DIANA/financial-desktop');
+  await mkdir(directory,{recursive:true});const filename=path.join(directory,'desktop.json');
+  await writeFile(filename,JSON.stringify(settings()));
+  assert.deepEqual(await loadDesktopSettings(filename),desktopSettings(settings()));
+  await assert.rejects(()=>boundedRead(filename),{code:'document_path_denied'});
+});
+
+test('explicit profile still rejects invalid bytes, oversized files, hardlinks and junction parents',async t=>{
+  const root=await fixture(t),filename=path.join(root,'desktop.json');
+  for(const bytes of [Buffer.alloc(0),Buffer.alloc(16385,32),Buffer.from([0xff]),Buffer.from('{"private":"PRIVATE_CANARY"}')]){
+    await writeFile(filename,bytes);
+    await assert.rejects(()=>loadDesktopSettings(filename),error=>error.code==='DESKTOP_SETTINGS_INVALID'&&!error.message.includes('PRIVATE_CANARY'));
+  }
+  await writeFile(filename,JSON.stringify(settings()));
+  const linked=path.join(root,'linked.json');await link(filename,linked);
+  await assert.rejects(()=>loadDesktopSettings(linked),{code:'DESKTOP_SETTINGS_INVALID'});
+  await rm(linked);
+  const original=path.join(root,'real');await mkdir(original);await writeFile(path.join(original,'desktop.json'),JSON.stringify(settings()));
+  const junction=path.join(root,'redirected');await symlink(original,junction,process.platform==='win32'?'junction':'dir');
+  await assert.rejects(()=>loadDesktopSettings(path.join(junction,'desktop.json')),{code:'DESKTOP_SETTINGS_INVALID'});
+});
+
+test('explicit profile pins an OS-redirected path and rejects a changed redirect target',async t=>{
+  const root=await fixture(t),logicalDir=path.join(root,'AppData/Local/DIANA/financial-desktop');await mkdir(logicalDir,{recursive:true});
+  const logical=path.join(logicalDir,'desktop.json'),physical=path.join(root,'physical.json'),other=path.join(root,'other.json'),value=settings();
+  await writeFile(physical,JSON.stringify(value));await writeFile(other,JSON.stringify(value));
+  const script=String.raw`
+    import assert from 'node:assert/strict';import path from 'node:path';import {mock} from 'node:test';
+    const fs=await import('node:fs/promises');const [mode,logical,physical,other,loader,expected]=process.argv.slice(1);
+    let target=physical,reads=0,closed=0;
+    const exports=Object.fromEntries(Object.entries(fs).filter(([key])=>key!=='default'));
+    mock.module('node:fs/promises',{namedExports:{...exports,
+      lstat:(name,...args)=>fs.lstat(path.resolve(name)===logical?target:name,...args),
+      realpath:name=>fs.realpath(path.resolve(name)===logical?target:name),
+      open:async(name,flags)=>{
+        assert.equal(name,physical);const handle=await fs.open(name,flags);
+        return{stat:()=>handle.stat({bigint:true}),read:async(...args)=>{const result=await handle.read(...args);if(mode==='changed'&&reads++===0)target=other;return result;},close:async()=>{closed++;await handle.close();}};
+      }
+    }});
+    const {loadDesktopSettings,desktopSettings}=await import(loader);
+    if(mode==='stable')assert.deepEqual(await loadDesktopSettings(logical),desktopSettings(JSON.parse(expected)));
+    else await assert.rejects(()=>loadDesktopSettings(logical),{code:'DESKTOP_SETTINGS_INVALID'});
+    assert.equal(closed,1);
+  `;
+  for(const mode of ['stable','changed'])await promisify(execFile)(process.execPath,['--no-warnings','--experimental-test-module-mocks','--input-type=module','-e',script,mode,logical,physical,other,pathToFileURL(path.resolve('financial-desktop/settings.mjs')).href,JSON.stringify(value)],{windowsHide:true,timeout:10000});
 });
 test('native status projection cannot carry document bodies, paths, tokens or hashes',()=>{
   const secret={body:'PRIVATE_ORIGINAL',before:'PRIVATE_EVIDENCE',approvalToken:'PRIVATE_APPROVAL',plan_hash:'PRIVATE_HASH',outputFile:'PRIVATE_PATH'};

@@ -6,10 +6,10 @@ import {strictJSON,keys} from './strict-json.mjs';
 import {UUID} from '../lib/financial-contract.mjs';
 import {reviewFailure} from './saved-review.mjs';
 
-const assets=new Map([['/',['index.html','text/html; charset=utf-8']],['/review.js',['review.js','text/javascript; charset=utf-8']],['/recheck-view.mjs',['recheck-view.mjs','text/javascript; charset=utf-8']],['/review.css',['review.css','text/css; charset=utf-8']],['/diana-icon.png',['diana-icon.png','image/png']]]);
+const assets=new Map([['/',['index.html','text/html; charset=utf-8']],['/review.js',['review.js','text/javascript; charset=utf-8']],['/registration.mjs',['registration.mjs','text/javascript; charset=utf-8']],['/recheck-view.mjs',['recheck-view.mjs','text/javascript; charset=utf-8']],['/review.css',['review.css','text/css; charset=utf-8']],['/diana-icon.png',['diana-icon.png','image/png']]]);
 
 /** PC loopback UI. Relay credentials never authorize local decisions. */
-export async function createReviewViewer({onCommand=null,onRecheck=null}={}){
+export async function createReviewViewer({onCommand=null,onRecheck=null,onReadCatalog=null,onRegister=null}={}){
   const token=randomBytes(32).toString('hex'),jobs=new Map(),busy=new Set();
   let connection={connected:false,checkedAt:null},origin;
   const files=new Map(await Promise.all([...assets].map(async([route,[file,type]])=>[route,{type,bytes:await readFile(new URL('./review-ui/'+file,import.meta.url))}])));
@@ -22,10 +22,28 @@ export async function createReviewViewer({onCommand=null,onRecheck=null}={}){
     let route;try{route=new URL(req.url,origin);}catch{return finish(400,'INVALID_REQUEST');}if(route.search)return finish(404,'NOT_FOUND');
     if(req.method==='GET'&&files.has(route.pathname)){const f=files.get(route.pathname);return finish(200,f.bytes,f.type);}
     const action=req.method==='POST'&&route.pathname==='/api/local-action';
-    if(!action&&!(req.method==='GET'&&route.pathname==='/api/view'))return finish(req.method==='GET'?404:405,'NOT_FOUND');
+    const catalog=req.method==='GET'&&route.pathname==='/api/local-catalog',registration=req.method==='POST'&&/^\/api\/local-catalog\/(documents|tasks)$/u.test(route.pathname);
+    if(!action&&!catalog&&!registration&&!(req.method==='GET'&&route.pathname==='/api/view'))return finish(req.method==='GET'?404:405,'NOT_FOUND');
     const actual=Buffer.from(req.headers.authorization||''),expected=Buffer.from('Bearer '+token);
     if(actual.length!==expected.length||!timingSafeEqual(actual,expected))return finish(401,'LOCAL_SESSION_REQUIRED');
-    if(!action)return finish(200,JSON.stringify({connection,capabilities:{approve:typeof onCommand==='function',recheck:typeof onRecheck==='function'},jobs:[...jobs.values()].reverse().map(j=>({...j,busy:busy.has(j.job?.id)}))}),'application/json; charset=utf-8');
+    const registrationEnabled=typeof onReadCatalog==='function'&&typeof onRegister==='function';
+    if(catalog||registration){
+      if(!registrationEnabled)return finish(403,'LOCAL_REGISTRATION_UNAVAILABLE');
+      if(registration&&(req.headers.origin!==origin||!/^application\/json(?:;\s*charset=utf-8)?$/iu.test(req.headers['content-type']||'')))return finish(403,'LOCAL_ORIGIN_REQUIRED');
+      void(async()=>{
+        try{
+          if(catalog)return finish(200,JSON.stringify(await onReadCatalog()),'application/json; charset=utf-8');
+          let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>1_600_000)throw Object.assign(Error(),{code:'REGISTRATION_INVALID'});chunks.push(chunk);}
+          const body=strictJSON(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks)));
+          const result=await onRegister(route.pathname.endsWith('/documents')?'document':'task',body);
+          finish(200,JSON.stringify(result),'application/json; charset=utf-8');
+        }catch(error){
+          const allowed=new Set(['REGISTRATION_BUSY','REGISTRATION_CHANGED','REGISTRATION_CONFLICT','REGISTRATION_INVALID','REGISTRATION_DOCUMENT_INVALID','REGISTRATION_GUIDELINE_INVALID','REGISTRATION_TASK_INVALID','REGISTRATION_REVIEW_INVALID','REGISTRATION_STORAGE_CHANGED','REGISTRATION_BOUNDARY_CHANGED','REGISTRATION_LIMIT','LOCAL_POLICY_CHANGED','DESKTOP_STOPPING']);
+          const code=allowed.has(error?.code)?error.code:'REGISTRATION_FAILED';finish(['REGISTRATION_BUSY','REGISTRATION_CHANGED','REGISTRATION_CONFLICT','LOCAL_POLICY_CHANGED','DESKTOP_STOPPING'].includes(code)?409:400,JSON.stringify({ok:false,code}),'application/json; charset=utf-8');
+        }
+      })().catch(()=>{if(!res.headersSent&&!res.destroyed)finish(400,'REGISTRATION_FAILED');});return;
+    }
+    if(!action)return finish(200,JSON.stringify({connection,capabilities:{approve:typeof onCommand==='function',recheck:typeof onRecheck==='function',...(registrationEnabled?{registration:true}:{})},jobs:[...jobs.values()].reverse().map(j=>({...j,busy:busy.has(j.job?.id)}))}),'application/json; charset=utf-8');
     // Every state-changing request needs an actual same-origin JSON fetch as
     // well as the process-local secret. Check state AFTER receiving its body.
     if(req.headers.origin!==origin||!/^application\/json(?:;\s*charset=utf-8)?$/iu.test(req.headers['content-type']||''))return finish(403,'LOCAL_ORIGIN_REQUIRED');

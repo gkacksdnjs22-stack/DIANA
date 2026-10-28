@@ -4,12 +4,14 @@
 <aside class="sidebar">
   <div class="brand"><img class="brand-icon" src="/diana-icon.png" alt="" width="48" height="48"><div>DIANA<small>LOCAL WORKSPACE</small></div></div>
   <div class="workspace-label">금융 문서 작업 <span>PC 전용</span></div>
+  <button id="registration-open" class="registration-nav" hidden>문서 · 작업 등록 <span>＋</span></button>
   <div class="queue-heading">최근 요청 <span id="job-count">0</span></div>
   <nav id="jobs" aria-label="최근 금융 요청"><p class="muted">모바일에서 요청하면 여기에 표시돼요.</p></nav>
   <div class="local-note"><span class="shield" aria-hidden="true">◇</span><strong>문서는 이 PC 안에</strong><p>원문·근거·수정안·결과 파일은 로컬 검토 화면에서만 확인합니다.</p><small>현재 실행 세션의 최근 8건</small></div>
 </aside>
 <main>
   <header class="topbar"><div class="breadcrumb">DIANA <span>/</span> 금융 문서 검토</div><div id="connection" class="connection"><i></i><span>연결 확인 중</span></div></header>
+  <div id="review-workspace">
   <section id="empty" class="empty"><img class="empty-icon" src="/diana-icon.png" alt="DIANA" width="150" height="150"><div class="eyebrow">YOUR PC, YOUR DOCUMENTS</div><h1>검토할 문서를 기다리고 있어요.</h1><p>휴대폰 DIANA에서 금융 문서 작업을 요청해 주세요.<br>검토 내용과 수정안이 이 화면에 도착합니다.</p><div class="flow"><span>모바일 요청</span><b>→</b><span>PC 검토 · 승인</span><b>→</b><span>저장 · 재읽기</span></div><p id="session-help" class="muted"></p></section>
   <div id="detail" hidden>
     <section class="heading"><div><div class="eyebrow">DOCUMENT REVIEW</div><h1 id="title"></h1><p id="subtitle"></p></div><span id="state" class="state"></span></section>
@@ -26,6 +28,37 @@
     </section>
     <footer><span id="request-id"></span><span>승인·저장본 재검토는 이 PC 안에서만 처리합니다</span></footer>
   </div>
+  </div>
+  <section id="registration-workspace" class="registration-workspace" hidden>
+    <div class="heading"><div><div class="eyebrow">YOUR PC, YOUR DOCUMENTS</div><h1>문서와 작업을 연결하세요.</h1><p>문서는 이 PC에 등록하고, 휴대폰에는 작업 목록만 표시해요.</p></div><button id="review-open" class="secondary registration-back">검토 화면으로</button></div>
+    <div class="registration-status"><span id="catalog-published">등록 정보를 확인하고 있어요.</span><button id="catalog-refresh" class="text-button">새로고침</button></div>
+    <p id="registration-message" role="status" aria-live="polite"></p>
+    <div class="registration-grid">
+      <section class="registration-panel"><div class="section-intro"><div class="eyebrow">01 · PC DOCUMENTS</div><h2>문서 등록</h2><p>선택한 파일을 PC 전용 폴더에 복사해요. 원본 파일은 수정하지 않아요.</p></div>
+        <form id="register-document" class="registration-form">
+          <label for="registration-file">파일 선택 <small>TXT · MD · JSON / UTF-8 / 최대 256KB</small></label><input id="registration-file" type="file" accept=".txt,.md,.json" required>
+          <div class="field-pair"><div><label for="registration-kind">문서 용도</label><select id="registration-kind"><option value="target">검토할 문서</option><option value="source">근거 자료</option><option value="guideline">검토 지침 (JSON)</option></select></div><div><label for="registration-classification">문서 구분</label><select id="registration-classification"><option value="internal">내부 문서</option><option value="synthetic">개발용 가상 자료</option></select></div></div>
+          <div class="field-pair"><div><label for="registration-doc-id">문서 코드</label><input id="registration-doc-id" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" placeholder="예: DD_B"></div><div><label for="registration-version">버전</label><input id="registration-version" required maxlength="64" value="1" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}"></div></div>
+          <p class="registration-hint">문서 코드는 지침의 근거 자료 코드와 맞춰 주세요. 지침은 기존 rules 형식의 JSON을 사용해요.</p>
+          <button id="document-register-submit" type="submit" class="registration-primary">이 PC에 문서 등록</button>
+        </form>
+      </section>
+      <section class="registration-panel"><div class="section-intro"><div class="eyebrow">02 · MOBILE TASKS</div><h2>작업 등록</h2><p>작업 이름과 가능한 동작·저장 형식만 모바일에 전달해요.</p></div>
+        <form id="register-task" class="registration-form">
+          <label for="registration-task-label">휴대폰에 표시할 작업 이름</label><input id="registration-task-label" maxlength="40" required placeholder="예: 이번 달 출자 검토" pattern="[A-Za-z0-9가-힣 ()_-]{1,40}">
+          <label for="registration-target">검토할 문서</label><select id="registration-target" required></select>
+          <fieldset><legend>근거 자료</legend><div id="registration-sources" class="registration-choices"></div></fieldset>
+          <label for="registration-guideline">검토 지침</label><select id="registration-guideline" required></select>
+          <fieldset><legend>보완할 항목 <small>보완 동작을 사용할 때 선택</small></legend><div id="registration-items" class="registration-choices"></div></fieldset>
+          <fieldset><legend>모바일에서 요청할 동작</legend><div class="registration-choices"><label><input type="checkbox" name="registration-action" value="checklist_review" checked>검토</label><label><input type="checkbox" name="registration-action" value="patch">보완</label><label><input type="checkbox" name="registration-action" value="convert">변환</label></div></fieldset>
+          <fieldset><legend>저장 형식</legend><div class="registration-choices"><label><input type="checkbox" name="registration-format" value="md" checked>MD</label><label><input type="checkbox" name="registration-format" value="txt" checked>TXT</label><label><input type="checkbox" name="registration-format" value="json" checked>JSON</label></div></fieldset>
+          <button id="task-register-submit" type="submit" class="registration-primary">작업 등록 · 모바일 목록에 반영</button>
+        </form>
+      </section>
+    </div>
+    <section class="registration-panel registration-catalog"><div class="section-intro"><h2>이 PC의 등록 문서</h2><p>파일 이름과 문서 코드는 PC 화면에서만 확인해요.</p></div><div id="registration-documents"></div></section>
+    <section class="registration-panel registration-catalog"><div class="section-intro"><h2>모바일에 표시할 작업</h2><p>검토·승인 중에는 문서와 작업을 새로 등록할 수 없어요. 작업을 마친 뒤 등록해 주세요.</p></div><div id="registration-tasks"></div></section>
+  </section>
 </main><div id="toast" role="status" aria-live="polite" hidden></div>
 <dialog id="decision-dialog" aria-labelledby="decision-title"><div class="eyebrow">PC LOCAL DECISION</div><h2 id="decision-title"></h2><p id="decision-summary"></p><p id="decision-warning"></p><div class="dialog-actions"><button id="decision-close" class="secondary">돌아가기</button><button id="decision-confirm">승인하고 저장</button></div></dialog>
 </body></html>
