@@ -105,6 +105,23 @@ jobs:
           set -euo pipefail
           mkdir -p android-app/app/build/ui-verification
           trap 'adb pull /sdcard/Android/data/kr.nightdesk.phone/files/ui-screenshots android-app/app/build/ui-verification/ >/dev/null 2>&1 || true; adb logcat -d -s AndroidRuntime:E TestRunner:I > android-app/app/build/ui-verification/android-test-log.txt || true' EXIT
+          # sys.boot_completed can precede the services used by svc/pm.
+          # Keep network isolation mandatory, but wait for those services first.
+          services_ready=false
+          for attempt in $(seq 1 60); do
+            if adb shell service check package | grep -q ': found' &&
+               adb shell service check phone | grep -q ': found' &&
+               adb shell service check wifi | grep -q ': found'; then
+              services_ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$services_ready" != true ]; then
+            echo 'Required emulator services did not become ready.' >&2
+            adb shell service list
+            exit 1
+          fi
           adb shell svc wifi disable
           adb shell svc data disable
           adb install -r android-app/app/build/outputs/apk/debug/app-debug.apk
