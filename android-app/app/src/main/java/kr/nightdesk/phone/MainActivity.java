@@ -72,7 +72,8 @@ public final class MainActivity extends Activity {
     private ScrollView scroll;
     private PopupWindow menuPopup;
     private TextView status, pushStatus;
-    private EditText urlField, codeField, requestQueryField, requestEditField;
+    private EditText urlField, codeField, requestQueryField, requestEditField, requestChatField;
+    private String requestChatKey="";
     private Button pairButton, syncButton, folderButton, disconnectButton, uploadPickButton, uploadSendButton, uploadCancelButton, requestSubmitButton, requestDiscardButton;
     private CheckBox autoReceive, folderCopy;
     private JSONArray displayedJobs=new JSONArray();
@@ -84,7 +85,7 @@ public final class MainActivity extends Activity {
     private final SharedPreferences.OnSharedPreferenceChangeListener settingsChanged=(preferences,key)->{
         // These preferences belong to file sync/settings, not the financial
         // status screen. A sync heartbeat must not replace its scroll view.
-        if(!resumed||selectedTab==FINANCE)return;
+        if(!resumed||requestPage())return;
         if("push_status".equals(key)||"last_sync".equals(key)||"last_error".equals(key)||"export_error".equals(key)||"export_tree".equals(key)||"latest_receive_v1".equals(key))queueRender();
     };
 
@@ -101,6 +102,7 @@ public final class MainActivity extends Activity {
             detailScroll=state.getInt("detailScroll",0);int[] positions=state.getIntArray("pageScroll");
             if(positions!=null)System.arraycopy(positions,0,pageScroll,oldTabs?1:0,Math.min(positions.length,oldTabs?4:6));
         }
+        if(selectedTab==FINANCE)selectedTab=SEND;
         secureStore=new SecureStore(this);
         foregroundRefresh=new ForegroundRefresh(new ForegroundRefresh.Scheduler(){
             @Override public void post(Runnable task,long delay){main.postDelayed(task,delay);}
@@ -124,7 +126,7 @@ public final class MainActivity extends Activity {
         getSharedPreferences("settings",0).registerOnSharedPreferenceChangeListener(settingsChanged);
         getPreferences(0).registerOnSharedPreferenceChangeListener(settingsChanged);
         PushSupport.initialize(this);if(!busy)draw();if(foregroundRefresh!=null)foregroundRefresh.start();
-        if(selectedTab==FINANCE)financeRefresh.start();
+        if(requestPage())financeRefresh.start();
     }
     @Override protected void onPause(){
         rememberViewState();resumed=false;dismissMenu();
@@ -156,18 +158,19 @@ public final class MainActivity extends Activity {
     }
     private void rememberViewState(){
         if(urlField!=null)urlDraft=urlField.getText().toString();if(codeField!=null)codeDraft=codeField.getText().toString();
+        if(requestChatField!=null&&!requestChatKey.isEmpty())getPreferences(0).edit().putString(requestChatKey,requestChatField.getText().toString()).apply();
         if(requestQueryField!=null){requestQueryDraft=requestQueryField.getText().toString();requestEditDraft=requestEditField==null?"":requestEditField.getText().toString();getPreferences(0).edit().putString("pc_query_draft",requestQueryDraft).putString("pc_edit_draft",requestEditDraft).apply();}
         if(scroll!=null){if(renderedDetailId.isEmpty())pageScroll[renderedTab]=scroll.getScrollY();else detailScroll=scroll.getScrollY();}
     }
     private void queueRender(){
         if(renderQueued)return;renderQueued=true;main.post(()->{renderQueued=false;if(resumed&&!busy&&alive())renderAutomatically();});
     }
-    private boolean editingRequestWithKeyboard(){View focus=getCurrentFocus();return selectedTab==SEND&&detailId.isEmpty()&&focus!=null&&focus.hasFocus()&&(focus==requestQueryField||focus==requestEditField)&&imeVisible;}
+    private boolean editingRequestWithKeyboard(){View focus=getCurrentFocus();return selectedTab==SEND&&detailId.isEmpty()&&focus!=null&&focus.hasFocus()&&(focus==requestQueryField||focus==requestEditField||focus==requestChatField)&&imeVisible;}
     private void renderAutomatically(){if(editingRequestWithKeyboard()){deferredInputRender=true;return;}draw();}
     private void resumeDeferredInputRender(){if(deferredInputRender&&!editingRequestWithKeyboard())queueRender();}
     private void resetViews(){
         financeScreen=null;
-        root=null;recentJobs=null;pageContent=null;scroll=null;status=null;pushStatus=null;urlField=null;codeField=null;requestQueryField=null;requestEditField=null;
+        root=null;recentJobs=null;pageContent=null;scroll=null;status=null;pushStatus=null;urlField=null;codeField=null;requestQueryField=null;requestEditField=null;requestChatField=null;requestChatKey="";
         pairButton=null;syncButton=null;folderButton=null;disconnectButton=null;uploadPickButton=null;uploadSendButton=null;uploadCancelButton=null;requestSubmitButton=null;requestDiscardButton=null;autoReceive=null;folderCopy=null;
     }
     private void draw(){
@@ -212,16 +215,17 @@ public final class MainActivity extends Activity {
     private void showMenu(View anchor){
         if(busy||!alive())return;if(menuPopup!=null&&menuPopup.isShowing()){dismissMenu();return;}
         LinearLayout drawer=column();drawer.setTag("app_drawer");drawer.setPadding(dp(12),dp(10),dp(12),dp(12));drawer.setBackground(techPanel(0xff1b2c46,0xff0b1527,0xff405779,false));drawer.addView(label("메뉴",17,TEXT,true));divider(drawer);
-        String[] titles={"홈","보관 파일","PC에 요청하기","최근 작업","설정","금융 문서 작업"};String[] tags={"menu_home","menu_files","menu_pc_sync","menu_recent","menu_settings","menu_finance"};
-        int[] icons={R.drawable.ic_ui_home,R.drawable.ic_ui_folder,R.drawable.ic_ui_refresh,R.drawable.ic_ui_inbox,R.drawable.ic_ui_settings,R.drawable.ic_ui_file};
-        for(int index=0;index<6;index++){
+        String[] titles={"홈","보관 파일","PC에 요청하기","최근 작업","설정"};String[] tags={"menu_home","menu_files","menu_pc_sync","menu_recent","menu_settings"};
+        int[] icons={R.drawable.ic_ui_home,R.drawable.ic_ui_folder,R.drawable.ic_ui_refresh,R.drawable.ic_ui_inbox,R.drawable.ic_ui_settings};
+        for(int index=0;index<titles.length;index++){
             final int tab=index;boolean active=selectedTab==index;LinearLayout item=row();item.setGravity(Gravity.CENTER_VERTICAL);item.setPadding(dp(12),dp(10),dp(12),dp(10));item.setMinimumHeight(dp(50));item.setTag(tags[index]);item.setContentDescription(titles[index]);item.setSelected(active);item.setFocusable(true);item.setBackground(ripple(active?0xff132d38:SURFACE,12,0));
             ImageView symbol=icon(icons[index],active?CYAN:MUTED);symbol.setPadding(dp(7),dp(7),dp(7),dp(7));symbol.setBackground(shape(active?0xff16434b:0xff14233b,10,active?0xff2c6973:0xff293c59));item.addView(symbol,new LinearLayout.LayoutParams(dp(34),dp(34)));TextView title=label(titles[index],15,active?CYAN:TEXT,active);LinearLayout.LayoutParams titleParams=new LinearLayout.LayoutParams(0,-2,1);titleParams.leftMargin=dp(12);item.addView(title,titleParams);item.setOnClickListener(v->navigate(tab));drawer.addView(item,new LinearLayout.LayoutParams(-1,-2));
         }
         int width=Math.min(dp(280),getResources().getDisplayMetrics().widthPixels-dp(28));PopupWindow popup=new PopupWindow(drawer,width,-2,true);menuPopup=popup;popup.setOutsideTouchable(true);popup.setBackgroundDrawable(shape(SURFACE,20,BORDER));popup.setElevation(dp(16));popup.setOnDismissListener(()->{if(menuPopup==popup)menuPopup=null;if(drawerRefreshPending){drawerRefreshPending=false;if(resumed)queueRender();}});popup.showAsDropDown(anchor,0,dp(8));
     }
     private void dismissMenu(){PopupWindow popup=menuPopup;if(popup!=null)popup.dismiss();}
-    private void navigate(int tab){if(busy)return;dismissMenu();rememberViewState();selectedTab=tab;detailId="";draw();if(financeRefresh!=null){if(tab==FINANCE){financeRefresh.start();financeRefresh.refresh();}else financeRefresh.stop();}}
+    private boolean requestPage(){return selectedTab==SEND||selectedTab==FINANCE;}
+    private void navigate(int tab){if(tab==FINANCE)tab=SEND;if(busy)return;dismissMenu();rememberViewState();selectedTab=tab;detailId="";draw();if(financeRefresh!=null){if(tab==SEND){financeRefresh.start();financeRefresh.refresh();}else financeRefresh.stop();}}
     private void drawConnected(JSONObject session)throws Exception{
         JSONArray cached=SyncEngine.cachedJobs(this);displayedJobs=sameSession(displayedSession,session)?mergeJobStatuses(cached,displayedJobs):cached;displayedSession=session;
         String[] tags={"screen_home","screen_files","screen_pc_sync","screen_recent","screen_settings","screen_finance"};pageContent.setTag(tags[selectedTab]);
@@ -229,7 +233,7 @@ public final class MainActivity extends Activity {
     }
     private void drawFinance(JSONObject session)throws Exception{
         financeScreen=new FinanceScreen();
-        title(pageContent,"금융 문서 작업","문서 내용 확인과 최종 승인은 PC에서 진행합니다.");
+        section(pageContent,"등록 문서 검토","PC에서 등록한 문서의 검토·보완·변환을 요청해요.");
         LinearLayout notice=card(pageContent);notice.addView(label("원문·근거·수정안·Diff는 PC에서 확인",15,TEXT,true));notice.addView(label("결과 파일은 PC 내부에 저장하며 휴대폰으로 전달하지 않습니다. 작업 요청과 최소 상태 정보는 기존 서버를 통해 전달됩니다.",13,MUTED,false));
         financeScreen.message=label(financeMessage,13,CYAN,false);notice.addView(financeScreen.message);Button refresh=button(notice,"상태 새로 확인",false);refresh.setTag("finance_refresh");refresh.setEnabled(!busy);refresh.setOnClickListener(v->financeRefresh.refresh());
         JSONObject pending;try{pending=FinanceRequests.pending(this);}catch(Exception damaged){pending=new JSONObject();}
@@ -253,15 +257,15 @@ public final class MainActivity extends Activity {
         parent.addView(row,index);
     }
     private void bindFinance(JSONObject session)throws Exception{
-        FinanceScreen screen=financeScreen;if(screen==null||selectedTab!=FINANCE)return;
+        FinanceScreen screen=financeScreen;if(screen==null||!requestPage())return;
         textIfChanged(screen.message,financeMessage);
         if(!sameSession(financeSession,session)||financeData==null)return;
         if(screen.tasks==null){
             LinearLayout heading=row();heading.setGravity(Gravity.CENTER_VERTICAL);heading.setPadding(0,dp(16),0,dp(2));heading.addView(label("PC 등록 작업",17,TEXT,true),new LinearLayout.LayoutParams(0,-2,1));
             screen.online=label("",13,PURPLE,true);heading.addView(screen.online);screen.body.addView(heading);
             screen.seen=label("",12,MUTED,false);screen.body.addView(screen.seen);
-            screen.emptyTasks=label("PC 금융 콘솔을 실행해 공개할 작업을 등록해 주세요.",14,MUTED,false);screen.body.addView(screen.emptyTasks);
-            screen.tasks=column();screen.body.addView(screen.tasks);section(screen.body,"금융 작업 상태","");screen.jobs=column();screen.body.addView(screen.jobs);
+            screen.emptyTasks=label("PC 프로그램에서 문서와 작업을 등록해 주세요.",14,MUTED,false);screen.body.addView(screen.emptyTasks);
+            screen.tasks=column();screen.body.addView(screen.tasks);section(screen.body,"문서 작업 상태","");screen.jobs=column();screen.body.addView(screen.jobs);
         }
         JSONObject catalog=financeData.getJSONObject("catalog");
         textIfChanged(screen.online,catalog.getBoolean("online")?"PC 연결됨":"PC 오프라인·연결 지연");
@@ -293,13 +297,13 @@ public final class MainActivity extends Activity {
         java.util.Iterator<Map.Entry<String,FinanceJobRow>> jobRows=screen.jobRows.entrySet().iterator();while(jobRows.hasNext()){Map.Entry<String,FinanceJobRow> entry=jobRows.next();if(!jobIds.contains(entry.getKey())){screen.jobs.removeView(entry.getValue().view);jobRows.remove();}}
     }
     private void applyFinanceStatuses(JSONObject session,JSONObject data){
-        try{if(!alive()||selectedTab!=FINANCE||!sameSession(session,secureStore.load()))return;
-            financeData=data;financeSession=session;financeMessage=data.getJSONObject("catalog").getBoolean("online")?"PC 금융 콘솔 연결됨":"PC 오프라인 또는 연결 지연 · 요청은 대기열에 보관됩니다";bindFinance(session);
+        try{if(!alive()||!requestPage()||!sameSession(session,secureStore.load()))return;
+            financeData=data;financeSession=session;financeMessage=data.getJSONObject("catalog").getBoolean("online")?"PC 문서 작업 연결됨":"PC 오프라인 또는 연결 지연 · 요청은 대기열에 보관됩니다";bindFinance(session);
         }catch(Exception ignored){/* Retain the last authenticated screen. */}
     }
     private void financeChoose(JSONObject session,JSONObject task){
         try{JSONArray actions=task.getJSONArray("actions");String[] labels=new String[actions.length()];for(int i=0;i<labels.length;i++)labels[i]=FinanceState.action(actions.getString(i));
-            new AlertDialog.Builder(this).setTitle("작업 선택").setItems(labels,(d,index)->{try{String action=actions.getString(index);JSONArray formats=task.getJSONArray("formats");String[] names=new String[formats.length()];for(int i=0;i<names.length;i++)names[i]=formats.getString(i);new AlertDialog.Builder(this).setTitle("PC 저장 형식").setItems(names,(f,n)->new AlertDialog.Builder(this).setTitle("금융 작업 요청 확인").setMessage(task.optString("label")+" · "+FinanceState.action(action)+" · "+names[n]+"\n문서 내용 확인과 최종 승인은 PC에서 진행합니다.").setNegativeButton("닫기",null).setPositiveButton("요청",(x,w)->financeSubmit(session,task.optString("id"),action,names[n],false)).show()).show();}catch(Exception ignored){}}).show();
+            new AlertDialog.Builder(this).setTitle("작업 선택").setItems(labels,(d,index)->{try{String action=actions.getString(index);JSONArray formats=task.getJSONArray("formats");String[] names=new String[formats.length()];for(int i=0;i<names.length;i++)names[i]=formats.getString(i);new AlertDialog.Builder(this).setTitle("PC 저장 형식").setItems(names,(f,n)->new AlertDialog.Builder(this).setTitle("문서 작업 요청 확인").setMessage(task.optString("label")+" · "+FinanceState.action(action)+" · "+names[n]+"\n문서 내용 확인과 최종 승인은 PC에서 진행합니다.").setNegativeButton("닫기",null).setPositiveButton("요청",(x,w)->financeSubmit(session,task.optString("id"),action,names[n],false)).show()).show();}catch(Exception ignored){}}).show();
         }catch(Exception e){showStatus("등록 작업을 다시 확인해 주세요.",true);}
     }
     private void financeSubmit(JSONObject session,String taskId,String action,String format,boolean retry){
@@ -311,7 +315,7 @@ public final class MainActivity extends Activity {
     private void financeFinish(JSONObject session,String text){main.post(()->{if(!alive())return;busy=false;try{if(sameSession(session,secureStore.load()))financeMessage=text;}catch(Exception ignored){}draw();financeRefresh.refresh();});}
     private void readFinanceStatuses(ForegroundRefresh.Completion completion){
         final JSONObject session;try{session=secureStore.load();}catch(Exception e){completion.finish(false,true,null);return;}if(session==null){completion.finish(false,false,null);return;}
-        try{worker.execute(()->{try{JSONObject data=FinanceRequests.fetch(session);main.post(()->completion.finish(true,false,()->applyFinanceStatuses(session,data)));}catch(Exception e){main.post(()->completion.finish(true,true,()->{try{if(alive()&&selectedTab==FINANCE&&sameSession(session,secureStore.load())){financeMessage=FinanceRequests.error(e);if(financeScreen!=null)textIfChanged(financeScreen.message,financeMessage);}}catch(Exception ignored){}}));}});}catch(RejectedExecutionException e){completion.finish(false,true,null);}
+        try{worker.execute(()->{try{JSONObject data=FinanceRequests.fetch(session);main.post(()->completion.finish(true,false,()->applyFinanceStatuses(session,data)));}catch(Exception e){main.post(()->completion.finish(true,true,()->{try{if(alive()&&requestPage()&&sameSession(session,secureStore.load())){financeMessage=FinanceRequests.error(e);if(financeScreen!=null)textIfChanged(financeScreen.message,financeMessage);}}catch(Exception ignored){}}));}});}catch(RejectedExecutionException e){completion.finish(false,true,null);}
     }
     private void drawPairing(boolean unreadable){
         title(pageContent,"내 PC와 연결하기","파일을 주고받을 PC를 한 번 연결해 주세요.");
@@ -431,8 +435,10 @@ public final class MainActivity extends Activity {
             if(canSelect){String action="download".equals(delivery)?"이 파일로 진행하고 휴대폰으로 받기":"both".equals(delivery)?"이 파일로 진행 · 이메일과 휴대폰":"이 파일로 진행 · 이메일로 보내기";Button choose=button(card,action,true);choose.setTag("select_candidate_"+candidate.optString("id"));choose.setEnabled(!busy);choose.setOnClickListener(v->confirmPcCandidate(job,candidate));}
         }
     }
-    private void drawPcRequest(JSONObject session){
-        title(pageContent,"PC에 요청하기","PC에서 파일을 찾고, 수정한 결과를 휴대폰으로 받아요.");
+    private void drawPcRequest(JSONObject session)throws Exception{
+        title(pageContent,"PC에 요청하기","문서 작업과 파일 보내기를 한 곳에서 이용해요.");
+        drawConversationDraft(session);
+        section(pageContent,"지금 사용할 수 있는 작업","파일 찾기·수정 요청과 등록 문서 검토를 바로 이용할 수 있어요.");
         LinearLayout card=card(pageContent);card.addView(label("어떤 문서가 필요한가요?",18,TEXT,true));card.addView(label("찾을 내용을 보내면 PC가 문서 후보를 찾아요. 최근 작업에서 받을 문서를 선택해 주세요.",13,MUTED,false));
         PcRequests.Pending pending=null;boolean unreadable=false;
         try{pending=PcRequests.load(this);}catch(Exception error){unreadable=true;card.addView(label("대기 중인 요청을 읽지 못했습니다. 최근 작업을 먼저 확인한 뒤 새 요청을 작성해 주세요.",13,ERROR,false));}
@@ -447,6 +453,31 @@ public final class MainActivity extends Activity {
         Button history=button(pageContent,"최근 작업 확인",false);history.setOnClickListener(v->navigate(RECENT));
         Button transfer=button(pageContent,showPhoneUpload?"휴대폰 파일 보내기 접기":"휴대폰 파일 보내기",false);transfer.setOnClickListener(v->{if(busy)return;rememberViewState();showPhoneUpload=!showPhoneUpload;draw();});
         if(showPhoneUpload)drawUpload(session);
+        drawFinance(session);
+    }
+    private void drawConversationDraft(JSONObject session)throws Exception{
+        requestChatKey=PcChatDraft.preferenceKey(session.getString("baseUrl"),session.getString("phoneId"));
+        String draft=getPreferences(0).getString(requestChatKey,"");
+        LinearLayout chat=column();chat.setTag("pc_chat_composer");chat.setPadding(dp(18),dp(18),dp(18),dp(18));
+        chat.setBackground(techPanel(0xff1c304b,0xff101b30,0xff466380,true));chat.setElevation(dp(7));
+        LinearLayout.LayoutParams panel=new LinearLayout.LayoutParams(-1,-2);panel.topMargin=dp(10);panel.bottomMargin=dp(18);pageContent.addView(chat,panel);
+        LinearLayout heading=row();heading.setGravity(Gravity.CENTER_VERTICAL);heading.addView(label("DIANA 대화",18,TEXT,true),new LinearLayout.LayoutParams(0,-2,1));heading.addView(label("AI 연결 준비 중",12,PURPLE,true));chat.addView(heading);
+        TextView assistant=label("어떤 문서 작업을 하고 싶은지 적어 주세요. 지금은 이 휴대폰에 초안으로 보관할 수 있어요.",14,TEXT,false);
+        assistant.setPadding(dp(14),dp(12),dp(14),dp(12));assistant.setBackground(shape(0xff1b2946,16,0xff354a70));
+        LinearLayout.LayoutParams reply=new LinearLayout.LayoutParams(-1,-2);reply.topMargin=dp(14);reply.rightMargin=dp(22);chat.addView(assistant,reply);
+        TextView saved=label(draft,14,TEXT,false);saved.setTag("pc_chat_draft_bubble");saved.setPadding(dp(14),dp(12),dp(14),dp(12));saved.setBackground(shape(0xff16414a,16,0xff328b91));saved.setTextIsSelectable(true);saved.setVisibility(draft.isEmpty()?View.GONE:View.VISIBLE);
+        LinearLayout.LayoutParams bubble=new LinearLayout.LayoutParams(-1,-2);bubble.topMargin=dp(12);bubble.leftMargin=dp(22);chat.addView(saved,bubble);
+        requestChatField=field(chat,"예: 이 검토서를 실사 자료와 지침에 맞춰 검토해 줘",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        requestChatField.setTag("pc_chat_input");requestChatField.setSingleLine(false);requestChatField.setHorizontallyScrolling(false);requestChatField.setMinLines(3);requestChatField.setMaxLines(6);requestChatField.setGravity(Gravity.TOP|Gravity.START);
+        requestChatField.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(PcChatDraft.MAX_LENGTH)});requestChatField.setText(draft);requestChatField.setEnabled(!busy);
+        TextView note=label("초안은 휴대폰에만 보관됩니다. PC 전송과 AI 실행은 연결 후 사용할 수 있어요.",12,MUTED,false);note.setTag("pc_chat_notice");chat.addView(note);
+        Button keep=button(chat,"대화 초안 보관",false);keep.setTag("pc_chat_keep");keep.setEnabled(!busy);
+        keep.setOnClickListener(v->{try{
+            String text=PcChatDraft.text(requestChatField.getText().toString());
+            if(!getPreferences(0).edit().putString(requestChatKey,text).commit())throw new java.io.IOException();
+            textIfChanged(saved,text);saved.setVisibility(View.VISIBLE);textIfChanged(note,"이 휴대폰에 초안을 보관했어요. PC에 전송하거나 작업을 실행하지 않았어요.");
+        }catch(PcRequests.RequestException error){textIfChanged(note,error.getMessage());}catch(Exception error){textIfChanged(note,"초안을 보관하지 못했어요. 저장 공간을 확인해 주세요.");}});
+        Button send=button(chat,"AI 연결 후 요청 가능",true);send.setTag("pc_chat_send");send.setEnabled(false);
     }
     private void drawUpload(JSONObject session){
         section(pageContent,"휴대폰 파일 보내기","");LinearLayout card=card(pageContent);
@@ -521,7 +552,7 @@ public final class MainActivity extends Activity {
         try{worker.execute(()->{try{JSONArray remote=Api.request(session,"/api/jobs",null).getJSONArray("jobs");boolean pending=false;for(int i=0;i<remote.length();i++){JSONObject job=remote.optJSONObject(i);if(job==null)continue;String state=job.optString("state");boolean upload="upload".equals(job.optString("kind"));if(upload?("waiting_pc".equals(state)||"receiving_pc".equals(state)):("waiting_pc".equals(state)||"searching".equals(state)||"ready_to_send".equals(state)||"sending".equals(state)))pending=true;}final boolean waiting=pending;main.post(()->{if(alive())completion.finish(waiting,false,()->applyJobStatuses(session,remote));});}catch(Exception error){main.post(()->{if(alive())completion.finish(false,true,null);});}});}catch(RejectedExecutionException ignored){completion.finish(false,false,null);}
     }
     private void applyJobStatuses(JSONObject session,JSONArray remote){
-        try{if(!alive()||!sameSession(session,secureStore.load()))return;JSONArray combined=mergeJobStatuses(displayedJobs,remote);if(combined.toString().equals(displayedJobs.toString()))return;displayedJobs=combined;if(!busy&&(selectedTab==SEND||selectedTab==RECENT))renderAutomatically();}catch(Exception ignored){/* Keep the last authenticated visible state. */}
+        try{if(!alive()||!sameSession(session,secureStore.load()))return;JSONArray combined=mergeJobStatuses(displayedJobs,remote);if(combined.toString().equals(displayedJobs.toString()))return;displayedJobs=combined;if(!busy&&selectedTab==RECENT)renderAutomatically();}catch(Exception ignored){/* Keep the last authenticated visible state. */}
     }
     private static JSONArray mergeJobStatuses(JSONArray base,JSONArray observed){
         java.util.Map<String,JSONObject> changes=new java.util.LinkedHashMap<>();for(int i=0;i<observed.length();i++){JSONObject job=observed.optJSONObject(i);if(job!=null)changes.put(job.optString("id"),job);}
