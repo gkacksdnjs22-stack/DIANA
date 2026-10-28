@@ -497,6 +497,12 @@ public final class MobileUiScreenshotTest {
         scenario.onActivity(activity -> {
             ScrollView page = findScroll(activity.getWindow().getDecorView());
             assertNotNull("A long page must remain scrollable", page);
+            if (page.findViewWithTag("pc_chat_composer") != null) {
+                View focused = activity.getCurrentFocus();
+                if (focused != null) focused.clearFocus();
+                page.setFocusableInTouchMode(true);
+                page.requestFocus();
+            }
             page.scrollTo(0, 0);
         });
     }

@@ -78,6 +78,12 @@ public final class FinanceUiRefreshTest {
             for(String tag:new String[]{"menu_home","menu_files","menu_pc_sync","menu_recent","menu_settings"})assertNotNull(menu.findViewWithTag(tag));
             assertNull(menu.findViewWithTag("menu_finance"));
             popup.dismiss();
+            for(String heading:new String[]{"지금 사용할 수 있는 작업","등록 문서 검토"}){
+                java.util.ArrayList<View> matches=new java.util.ArrayList<>();
+                activity.findViewById(android.R.id.content).findViewsWithText(matches,heading,View.FIND_VIEWS_WITH_TEXT);
+                assertEquals(1,matches.size());
+                assertTrue("Request heading must not collapse into a vertical column",((TextView)matches.get(0)).getLineCount()<=2);
+            }
         }catch(Exception error){throw new AssertionError(error);}});
     }
     @Test public void conversationDraftSurvivesRecreationWithoutCreatingARequest()throws Exception{

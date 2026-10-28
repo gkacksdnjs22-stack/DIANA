@@ -233,7 +233,8 @@ public final class MainActivity extends Activity {
     }
     private void drawFinance(JSONObject session)throws Exception{
         financeScreen=new FinanceScreen();
-        section(pageContent,"등록 문서 검토","PC에서 등록한 문서의 검토·보완·변환을 요청해요.");
+        section(pageContent,"등록 문서 검토","");
+        pageContent.addView(label("PC에서 등록한 문서의 검토·보완·변환을 요청해요.",13,MUTED,false));
         LinearLayout notice=card(pageContent);notice.addView(label("원문·근거·수정안·Diff는 PC에서 확인",15,TEXT,true));notice.addView(label("결과 파일은 PC 내부에 저장하며 휴대폰으로 전달하지 않습니다. 작업 요청과 최소 상태 정보는 기존 서버를 통해 전달됩니다.",13,MUTED,false));
         financeScreen.message=label(financeMessage,13,CYAN,false);notice.addView(financeScreen.message);Button refresh=button(notice,"상태 새로 확인",false);refresh.setTag("finance_refresh");refresh.setEnabled(!busy);refresh.setOnClickListener(v->financeRefresh.refresh());
         JSONObject pending;try{pending=FinanceRequests.pending(this);}catch(Exception damaged){pending=new JSONObject();}
@@ -438,7 +439,8 @@ public final class MainActivity extends Activity {
     private void drawPcRequest(JSONObject session)throws Exception{
         title(pageContent,"PC에 요청하기","문서 작업과 파일 보내기를 한 곳에서 이용해요.");
         drawConversationDraft(session);
-        section(pageContent,"지금 사용할 수 있는 작업","파일 찾기·수정 요청과 등록 문서 검토를 바로 이용할 수 있어요.");
+        section(pageContent,"지금 사용할 수 있는 작업","");
+        pageContent.addView(label("파일 찾기·수정 요청과 등록 문서 검토를 바로 이용할 수 있어요.",13,MUTED,false));
         LinearLayout card=card(pageContent);card.addView(label("어떤 문서가 필요한가요?",18,TEXT,true));card.addView(label("찾을 내용을 보내면 PC가 문서 후보를 찾아요. 최근 작업에서 받을 문서를 선택해 주세요.",13,MUTED,false));
         PcRequests.Pending pending=null;boolean unreadable=false;
         try{pending=PcRequests.load(this);}catch(Exception error){unreadable=true;card.addView(label("대기 중인 요청을 읽지 못했습니다. 최근 작업을 먼저 확인한 뒤 새 요청을 작성해 주세요.",13,ERROR,false));}
