@@ -1,8 +1,8 @@
 import path from 'node:path';
+import {constants} from 'node:fs';
 import {open,lstat,realpath} from 'node:fs/promises';
 import {parseEnv} from 'node:util';
 import {strictJSON,keys,fail} from '../financial-documents/strict-json.mjs';
-import {boundedRead} from '../financial-documents/files.mjs';
 
 export function desktopSettings(value){
   keys(value,['schema_version','configPath','envFile','documentRoot','apiBaseUrl','autoOpen']);
@@ -33,4 +33,45 @@ export async function desktopEnvironment(filename,apiBaseUrl){
   }finally{await handle.close();}
 }
 
-export async function loadDesktopSettings(filename){return desktopSettings(strictJSON((await boundedRead(filename,16384)).content));}
+// The launcher explicitly selects this inert profile, including its shared
+// LocalAppData location. Document scanning deliberately forbids AppData; do not
+// relax that policy to read a launcher-owned configuration file.
+async function profileParent(filename){
+  const parent=path.dirname(filename),root=path.parse(parent).root;
+  if(filename.startsWith('\\\\'))fail('DESKTOP_SETTINGS_INVALID');
+  let current=root;
+  for(const part of parent.slice(root.length).split(path.sep).filter(Boolean)){
+    current=path.join(current,part);
+    const stat=await lstat(current);
+    if(!stat.isDirectory()||stat.isSymbolicLink())fail('DESKTOP_SETTINGS_INVALID');
+  }
+}
+const profileStat=stat=>stat.isFile()&&!stat.isSymbolicLink()&&stat.nlink===1n&&stat.size>=1n&&stat.size<=16384n;
+const sameProfile=(a,b)=>['dev','ino','size','mtimeNs','ctimeNs','nlink'].every(key=>a[key]===b[key]);
+export async function loadDesktopSettings(filename){
+  let handle;
+  try{
+    filename=path.resolve(filename);
+    await profileParent(filename);
+    const named=await lstat(filename,{bigint:true});
+    if(!profileStat(named))fail('DESKTOP_SETTINGS_INVALID');
+    // A packaged Windows process can have AppData redirected by the OS
+    // without a symlink. Pin its physical target, validate both ancestor
+    // chains, and require both names to keep identifying the opened file.
+    const resolved=await realpath(filename);
+    await profileParent(resolved);
+    const physical=await lstat(resolved,{bigint:true});
+    if(!profileStat(physical)||!sameProfile(named,physical))fail('DESKTOP_SETTINGS_INVALID');
+    handle=await open(resolved,constants.O_RDONLY|(constants.O_NOFOLLOW||0));
+    const before=await handle.stat({bigint:true});
+    if(!profileStat(before)||!sameProfile(named,before))fail('DESKTOP_SETTINGS_INVALID');
+    const bytes=Buffer.alloc(Number(before.size)+1);let count=0;
+    while(count<bytes.length){const result=await handle.read(bytes,count,bytes.length-count,count);if(!result.bytesRead)break;count+=result.bytesRead;}
+    const after=await handle.stat({bigint:true}),current=await lstat(filename,{bigint:true}),physicalAfter=await lstat(resolved,{bigint:true});
+    if(!profileStat(after)||!profileStat(current)||!profileStat(physicalAfter)||!sameProfile(before,after)||!sameProfile(after,current)||!sameProfile(after,physicalAfter)||count!==Number(before.size)||await realpath(filename)!==resolved||await realpath(resolved)!==resolved)fail('DESKTOP_SETTINGS_INVALID');
+    await profileParent(filename);await profileParent(resolved);
+    const content=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes.subarray(0,count));
+    return desktopSettings(strictJSON(content));
+  }catch{fail('DESKTOP_SETTINGS_INVALID');}
+  finally{await handle?.close();}
+}
