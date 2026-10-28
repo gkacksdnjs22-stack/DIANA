@@ -21,6 +21,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowInsets;
@@ -43,6 +44,10 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -60,6 +65,7 @@ public final class MainActivity extends Activity {
     private JSONObject financeData, financeSession;
     private String financeMessage="상태를 확인하고 있습니다…";
     private ForegroundRefresh financeRefresh;
+    private FinanceScreen financeScreen;
     private ForegroundRefresh foregroundRefresh;
     private SecureStore secureStore;
     private LinearLayout root, recentJobs, pageContent;
@@ -76,7 +82,9 @@ public final class MainActivity extends Activity {
     private int selectedTab=HOME, renderedTab=HOME, visibleSaved=15, visibleRecent=30, detailScroll;
     private String detailId="", renderedDetailId="", urlDraft="", codeDraft="", requestQueryDraft="", requestEditDraft="", statusMessage="";
     private final SharedPreferences.OnSharedPreferenceChangeListener settingsChanged=(preferences,key)->{
-        if(!resumed)return;
+        // These preferences belong to file sync/settings, not the financial
+        // status screen. A sync heartbeat must not replace its scroll view.
+        if(!resumed||selectedTab==FINANCE)return;
         if("push_status".equals(key)||"last_sync".equals(key)||"last_error".equals(key)||"export_error".equals(key)||"export_tree".equals(key)||"latest_receive_v1".equals(key))queueRender();
     };
 
@@ -158,6 +166,7 @@ public final class MainActivity extends Activity {
     private void renderAutomatically(){if(editingRequestWithKeyboard()){deferredInputRender=true;return;}draw();}
     private void resumeDeferredInputRender(){if(deferredInputRender&&!editingRequestWithKeyboard())queueRender();}
     private void resetViews(){
+        financeScreen=null;
         root=null;recentJobs=null;pageContent=null;scroll=null;status=null;pushStatus=null;urlField=null;codeField=null;requestQueryField=null;requestEditField=null;
         pairButton=null;syncButton=null;folderButton=null;disconnectButton=null;uploadPickButton=null;uploadSendButton=null;uploadCancelButton=null;requestSubmitButton=null;requestDiscardButton=null;autoReceive=null;folderCopy=null;
     }
@@ -219,25 +228,74 @@ public final class MainActivity extends Activity {
         if(selectedTab==HOME)drawHome();else if(selectedTab==FILES)drawFiles();else if(selectedTab==SEND)drawPcRequest(session);else if(selectedTab==RECENT){recentJobs=column();pageContent.addView(recentJobs);drawRecentJobs();}else if(selectedTab==FINANCE)drawFinance(session);else drawSettings(session);
     }
     private void drawFinance(JSONObject session)throws Exception{
+        financeScreen=new FinanceScreen();
         title(pageContent,"금융 문서 작업","문서 내용 확인과 최종 승인은 PC에서 진행합니다.");
         LinearLayout notice=card(pageContent);notice.addView(label("원문·근거·수정안·Diff는 PC에서 확인",15,TEXT,true));notice.addView(label("결과 파일은 PC 내부에 저장하며 휴대폰으로 전달하지 않습니다. 작업 요청과 최소 상태 정보는 기존 서버를 통해 전달됩니다.",13,MUTED,false));
-        notice.addView(label(financeMessage,13,CYAN,false));Button refresh=button(notice,"상태 새로 확인",false);refresh.setTag("finance_refresh");refresh.setEnabled(!busy);refresh.setOnClickListener(v->financeRefresh.refresh());
+        financeScreen.message=label(financeMessage,13,CYAN,false);notice.addView(financeScreen.message);Button refresh=button(notice,"상태 새로 확인",false);refresh.setTag("finance_refresh");refresh.setEnabled(!busy);refresh.setOnClickListener(v->financeRefresh.refresh());
         JSONObject pending;try{pending=FinanceRequests.pending(this);}catch(Exception damaged){pending=new JSONObject();}
         if(pending!=null){LinearLayout retry=card(pageContent);retry.addView(label("접수 여부를 확인할 요청이 있습니다",15,TEXT,true));Button b=button(retry,"같은 요청으로 재시도",true);b.setEnabled(!busy);b.setOnClickListener(v->financeSubmit(session,null,null,null,true));Button clear=button(retry,"이 기기의 재시도 기록 정리",false);clear.setEnabled(!busy);clear.setOnClickListener(v->new AlertDialog.Builder(this).setMessage("서버에 접수된 작업은 취소되지 않습니다. 목록에서 상태를 먼저 확인해 주세요.").setNegativeButton("유지",null).setPositiveButton("기록 정리",(d,w)->{try{FinanceRequests.discard(this);draw();}catch(Exception e){showStatus("기록을 정리하지 못했습니다.",true);}}).show());}
+        financeScreen.body=column();pageContent.addView(financeScreen.body);bindFinance(session);
+    }
+    /** Polling retains the shell, scroll view, rows and active dialogs. */
+    private static final class FinanceScreen {
+        TextView message,online,seen,emptyTasks;
+        LinearLayout body,tasks,jobs;
+        final Map<String,Button> taskRows=new LinkedHashMap<>();
+        final Map<String,FinanceJobRow> jobRows=new LinkedHashMap<>();
+    }
+    private static final class FinanceJobRow {
+        LinearLayout view;TextView action,state,updated,storage;Button cancel;
+    }
+    private static void textIfChanged(TextView view,String text){if(!TextUtils.equals(view.getText(),text))view.setText(text);}
+    private static void placeRow(LinearLayout parent,View row,int index){
+        if(parent.getChildAt(index)==row)return;
+        if(row.getParent()==parent)parent.removeView(row);
+        parent.addView(row,index);
+    }
+    private void bindFinance(JSONObject session)throws Exception{
+        FinanceScreen screen=financeScreen;if(screen==null||selectedTab!=FINANCE)return;
+        textIfChanged(screen.message,financeMessage);
         if(!sameSession(financeSession,session)||financeData==null)return;
-        JSONObject catalog=financeData.getJSONObject("catalog");boolean online=catalog.getBoolean("online");
-        section(pageContent,"PC 등록 작업",online?"PC 연결됨":"PC 오프라인·연결 지연");pageContent.addView(label("마지막 PC 연결  "+time(catalog.optString("updatedAt","")),12,MUTED,false));
-        JSONArray tasks=catalog.getJSONArray("tasks");
-        if(tasks.length()==0)pageContent.addView(label("PC 금융 콘솔을 실행해 공개할 작업을 등록해 주세요.",14,MUTED,false));
-        for(int i=0;i<tasks.length();i++){JSONObject task=tasks.getJSONObject(i);Button choose=button(pageContent,task.getString("label"),false);choose.setTag("finance_task_"+task.getString("id"));choose.setEnabled(!busy);choose.setOnClickListener(v->financeChoose(session,task));}
-        section(pageContent,"금융 작업 상태","");JSONArray jobs=financeData.getJSONArray("jobs");
-        for(int i=0;i<jobs.length();i++){
-            JSONObject j=jobs.getJSONObject(i);LinearLayout c=card(pageContent);c.setTag("finance_job_"+j.getString("id"));
-            c.addView(label(FinanceState.action(j.getString("action"))+" · "+j.getString("format").toUpperCase(Locale.ROOT),16,TEXT,true));c.addView(label(FinanceState.label(j.getString("state")),14,CYAN,true));
-            c.addView(label("요청 번호  "+j.getString("id")+"\n갱신  "+time(j.getString("updatedAt")),12,MUTED,false));
-            c.addView(label("PC 저장 확인: "+(j.getBoolean("saved")?"완료":"미확인")+"\n전체 검토: "+(j.getBoolean("reviewComplete")?"충족 확인":"미완료 또는 추가 확인 필요"),13,MUTED,false));
-            if(FinanceState.cancellable(j.getString("state"))){Button cancel=button(c,"저장 시작 전 취소 요청",false);cancel.setTag("finance_cancel");cancel.setEnabled(!busy);cancel.setOnClickListener(v->new AlertDialog.Builder(this).setMessage("이 요청을 취소할까요? 이미 저장이 시작됐다면 실제 상태가 표시됩니다.").setNegativeButton("유지",null).setPositiveButton("취소 요청",(d,w)->financeCancel(session,j.optString("id"))).show());}
+        if(screen.tasks==null){
+            LinearLayout heading=row();heading.setGravity(Gravity.CENTER_VERTICAL);heading.setPadding(0,dp(16),0,dp(2));heading.addView(label("PC 등록 작업",17,TEXT,true),new LinearLayout.LayoutParams(0,-2,1));
+            screen.online=label("",13,PURPLE,true);heading.addView(screen.online);screen.body.addView(heading);
+            screen.seen=label("",12,MUTED,false);screen.body.addView(screen.seen);
+            screen.emptyTasks=label("PC 금융 콘솔을 실행해 공개할 작업을 등록해 주세요.",14,MUTED,false);screen.body.addView(screen.emptyTasks);
+            screen.tasks=column();screen.body.addView(screen.tasks);section(screen.body,"금융 작업 상태","");screen.jobs=column();screen.body.addView(screen.jobs);
         }
+        JSONObject catalog=financeData.getJSONObject("catalog");
+        textIfChanged(screen.online,catalog.getBoolean("online")?"PC 연결됨":"PC 오프라인·연결 지연");
+        textIfChanged(screen.seen,"마지막 PC 연결  "+time(catalog.optString("updatedAt","")));
+        JSONArray tasks=catalog.getJSONArray("tasks");screen.emptyTasks.setVisibility(tasks.length()==0?View.VISIBLE:View.GONE);
+        Set<String> taskIds=new HashSet<>();
+        for(int i=0;i<tasks.length();i++){
+            JSONObject task=tasks.getJSONObject(i);String id=task.getString("id");taskIds.add(id);Button choose=screen.taskRows.get(id);
+            if(choose==null){choose=button(screen.tasks,"",false);choose.setTag("finance_task_"+id);screen.taskRows.put(id,choose);}
+            textIfChanged(choose,task.getString("label"));choose.setEnabled(!busy);choose.setOnClickListener(v->financeChoose(session,task));placeRow(screen.tasks,choose,i);
+        }
+        java.util.Iterator<Map.Entry<String,Button>> taskRows=screen.taskRows.entrySet().iterator();while(taskRows.hasNext()){Map.Entry<String,Button> entry=taskRows.next();if(!taskIds.contains(entry.getKey())){screen.tasks.removeView(entry.getValue());taskRows.remove();}}
+        JSONArray jobs=financeData.getJSONArray("jobs");Set<String> jobIds=new HashSet<>();
+        for(int i=0;i<jobs.length();i++){
+            JSONObject job=jobs.getJSONObject(i);String id=job.getString("id");jobIds.add(id);FinanceJobRow item=screen.jobRows.get(id);
+            if(item==null){
+                item=new FinanceJobRow();item.view=card(screen.jobs);item.view.setTag("finance_job_"+id);
+                item.action=label("",16,TEXT,true);item.state=label("",14,CYAN,true);item.updated=label("",12,MUTED,false);item.storage=label("",13,MUTED,false);
+                item.view.addView(item.action);item.view.addView(item.state);item.view.addView(item.updated);item.view.addView(item.storage);
+                item.cancel=button(item.view,"저장 시작 전 취소 요청",false);item.cancel.setTag("finance_cancel");
+                item.cancel.setOnClickListener(v->new AlertDialog.Builder(this).setMessage("이 요청을 취소할까요? 이미 저장이 시작됐다면 실제 상태가 표시됩니다.").setNegativeButton("유지",null).setPositiveButton("취소 요청",(d,w)->financeCancel(session,id)).show());screen.jobRows.put(id,item);
+            }
+            textIfChanged(item.action,FinanceState.action(job.getString("action"))+" · "+job.getString("format").toUpperCase(Locale.ROOT));
+            textIfChanged(item.state,FinanceState.label(job.getString("state")));
+            textIfChanged(item.updated,"요청 번호  "+id+"\n갱신  "+time(job.getString("updatedAt")));
+            textIfChanged(item.storage,"PC 저장 확인: "+(job.getBoolean("saved")?"완료":"미확인")+"\n전체 검토: "+(job.getBoolean("reviewComplete")?"충족 확인":"미완료 또는 추가 확인 필요"));
+            item.cancel.setVisibility(FinanceState.cancellable(job.getString("state"))?View.VISIBLE:View.GONE);item.cancel.setEnabled(!busy);placeRow(screen.jobs,item.view,i);
+        }
+        java.util.Iterator<Map.Entry<String,FinanceJobRow>> jobRows=screen.jobRows.entrySet().iterator();while(jobRows.hasNext()){Map.Entry<String,FinanceJobRow> entry=jobRows.next();if(!jobIds.contains(entry.getKey())){screen.jobs.removeView(entry.getValue().view);jobRows.remove();}}
+    }
+    private void applyFinanceStatuses(JSONObject session,JSONObject data){
+        try{if(!alive()||selectedTab!=FINANCE||!sameSession(session,secureStore.load()))return;
+            financeData=data;financeSession=session;financeMessage=data.getJSONObject("catalog").getBoolean("online")?"PC 금융 콘솔 연결됨":"PC 오프라인 또는 연결 지연 · 요청은 대기열에 보관됩니다";bindFinance(session);
+        }catch(Exception ignored){/* Retain the last authenticated screen. */}
     }
     private void financeChoose(JSONObject session,JSONObject task){
         try{JSONArray actions=task.getJSONArray("actions");String[] labels=new String[actions.length()];for(int i=0;i<labels.length;i++)labels[i]=FinanceState.action(actions.getString(i));
@@ -253,7 +311,7 @@ public final class MainActivity extends Activity {
     private void financeFinish(JSONObject session,String text){main.post(()->{if(!alive())return;busy=false;try{if(sameSession(session,secureStore.load()))financeMessage=text;}catch(Exception ignored){}draw();financeRefresh.refresh();});}
     private void readFinanceStatuses(ForegroundRefresh.Completion completion){
         final JSONObject session;try{session=secureStore.load();}catch(Exception e){completion.finish(false,true,null);return;}if(session==null){completion.finish(false,false,null);return;}
-        try{worker.execute(()->{try{JSONObject data=FinanceRequests.fetch(session);main.post(()->completion.finish(true,false,()->{try{if(alive()&&selectedTab==FINANCE&&sameSession(session,secureStore.load())){financeData=data;financeSession=session;financeMessage=data.getJSONObject("catalog").getBoolean("online")?"PC 금융 콘솔 연결됨":"PC 오프라인 또는 연결 지연 · 요청은 대기열에 보관됩니다";draw();}}catch(Exception ignored){}}));}catch(Exception e){main.post(()->completion.finish(true,true,()->{try{if(alive()&&sameSession(session,secureStore.load())){financeMessage=FinanceRequests.error(e);draw();}}catch(Exception ignored){}}));}});}catch(RejectedExecutionException e){completion.finish(false,true,null);}
+        try{worker.execute(()->{try{JSONObject data=FinanceRequests.fetch(session);main.post(()->completion.finish(true,false,()->applyFinanceStatuses(session,data)));}catch(Exception e){main.post(()->completion.finish(true,true,()->{try{if(alive()&&selectedTab==FINANCE&&sameSession(session,secureStore.load())){financeMessage=FinanceRequests.error(e);if(financeScreen!=null)textIfChanged(financeScreen.message,financeMessage);}}catch(Exception ignored){}}));}});}catch(RejectedExecutionException e){completion.finish(false,true,null);}
     }
     private void drawPairing(boolean unreadable){
         title(pageContent,"내 PC와 연결하기","파일을 주고받을 PC를 한 번 연결해 주세요.");

@@ -14,12 +14,21 @@ using System.Windows.Forms;
 
 [assembly: System.Reflection.AssemblyTitle("DIANA PC")]
 [assembly: System.Reflection.AssemblyProduct("DIANA PC Financial Review")]
-[assembly: System.Reflection.AssemblyVersion("0.1.0.0")]
+[assembly: System.Reflection.AssemblyVersion("0.2.1.0")]
 
 namespace Diana.Desktop {
     public sealed class Settings {
         public string ConfigPath, EnvFile, DocumentRoot, ApiBaseUrl;
         public bool AutoOpen = true;
+        public static string SharedFile {
+            get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"DIANA","financial-desktop","desktop.json"); }
+        }
+        public static string DefaultFile(string root,string sharedFile) {
+            // An explicit portable profile wins. Otherwise reuse the last
+            // successfully connected profile across extracted app versions.
+            string portable=Path.Combine(root,".local","desktop.json");
+            return File.Exists(portable)?portable:sharedFile;
+        }
         public static bool LocalPath(string value) {
             return !String.IsNullOrWhiteSpace(value) && Path.IsPathRooted(value) &&
                 Regex.IsMatch(value, @"^[A-Za-z]:[\\/]") && !Regex.IsMatch(value, @"[\x00-\x1f]");
@@ -162,16 +171,16 @@ namespace Diana.Desktop {
     }
 
     public sealed class LauncherForm : Form {
-        private readonly string root, settingsFile;
+        private readonly string root, settingsFile, sharedProfile;
         private readonly WorkerSession worker=new WorkerSession();
         private Settings settings;
         private string viewUrl;
-        private bool stopping, closing, hadError;
+        private bool stopping, closing, hadError, profileRemembered;
         private readonly Label status=new Label(), note=new Label(), recent=new Label(), profile=new Label();
         private readonly ListBox history=new ListBox();
         private readonly ActionButton open=new ActionButton("검토 화면 열기",true), start=new ActionButton("연결 시작",false), stop=new ActionButton("연결 종료",false), configure=new ActionButton("연결 설정",false);
-        public LauncherForm(string baseDirectory,string profileFile) {
-            root=baseDirectory; settingsFile=profileFile; Text="DIANA · PC 금융 문서 검토"; ClientSize=new Size(760,596); MinimumSize=Size;
+        public LauncherForm(string baseDirectory,string profileFile,string rememberFile=null) {
+            root=baseDirectory; settingsFile=profileFile; sharedProfile=rememberFile; Text="DIANA · PC 금융 문서 검토"; ClientSize=new Size(760,596); MinimumSize=Size;
             AutoScaleMode=AutoScaleMode.Dpi; StartPosition=FormStartPosition.CenterScreen; Font=new Font("맑은 고딕",10);
             BackColor=Color.FromArgb(10,18,32); ForeColor=Color.FromArgb(224,234,246);
             using(var iconStream=typeof(LauncherForm).Assembly.GetManifestResourceStream("diana.ico"))if(iconStream!=null)Icon=new Icon(iconStream);
@@ -190,24 +199,25 @@ namespace Diana.Desktop {
             history.SetBounds(32,389,696,110); history.BackColor=Color.FromArgb(16,28,46); history.ForeColor=Color.FromArgb(185,204,224); history.BorderStyle=BorderStyle.FixedSingle; history.IntegralHeight=false; history.TabStop=false; history.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right; Controls.Add(history);
             profile.SetBounds(34,516,690,26); profile.ForeColor=Color.FromArgb(130,151,178); profile.AutoEllipsis=true; Controls.Add(profile);
             Controls.Add(new Label { Text="원문 · 근거 · 수정안 · 결과 파일은 이 PC에서만 확인해요.", Left=34,Top=554,Width=695,Height=25,ForeColor=Color.FromArgb(101,210,208) });
-            open.Click+=delegate { OpenReview(); }; start.Click+=delegate { StartWorker(); }; stop.Click+=delegate { StopWorker(); }; configure.Click+=delegate { Configure(); };
+            open.Click+=delegate { OpenReview(); }; start.Click+=delegate { StartWorker(); }; stop.Click+=delegate { StopWorker(); }; configure.Click+=delegate { if(Configure())StartWorker(); };
             worker.Message+=data=>Dispatch(()=>OnMessage(data)); worker.Exited+=code=>Dispatch(()=>OnExited(code));
             try { settings=Settings.Read(settingsFile); } catch { settings=null; }
-            SetState("연결을 기다리고 있어요.","PC 설정을 연결하면 모바일에서 요청한 작업을 받을 수 있어요.",false); ControlsState();
+            SetState("연결을 기다리고 있어요.",settings==null?"처음 한 번만 연결 설정을 저장하면 다음 실행부터 자동 연결돼요.":"기억한 PC 설정으로 자동 연결을 시작해요.",false); ControlsState();
             Shown+=delegate { if(settings!=null)StartWorker(); }; FormClosing+=OnClosing;
         }
         private void Dispatch(Action action) { if(!IsDisposed && IsHandleCreated)try { BeginInvoke(action); } catch(InvalidOperationException) { } }
         private void AddHistory(string text) { history.Items.Insert(0,DateTime.Now.ToString("HH:mm:ss")+"   "+text); while(history.Items.Count>40)history.Items.RemoveAt(history.Items.Count-1); }
         private void SetState(string title,string detail,bool connected) { status.Text=title; status.ForeColor=connected?Color.FromArgb(101,225,215):Color.FromArgb(223,232,246); note.Text=detail; }
         private void ControlsState() { open.Enabled=worker.Running && viewUrl!=null && !stopping; start.Enabled=!worker.Running; stop.Enabled=worker.Running && !stopping; configure.Enabled=!worker.Running; profile.Text=settings==null?"아직 연결한 PC 설정이 없어요.":"작업 설정  ·  "+settings.ConfigPath; }
-        private void Configure() {
+        private bool Configure() {
             using(var dialog=new SettingsDialog(settings))if(dialog.ShowDialog(this)==DialogResult.OK) {
-                try { dialog.Value.Save(settingsFile); settings=dialog.Value; AddHistory("PC 연결 설정을 저장했어요."); ControlsState(); }
+                try { dialog.Value.Save(settingsFile); settings=dialog.Value; profileRemembered=false; AddHistory("PC 연결 설정을 저장했어요."); ControlsState(); return true; }
                 catch { MessageBox.Show(this,"실행 폴더에 설정을 저장할 수 없어요. 쓰기 가능한 폴더에 압축을 풀어 주세요.","설정 저장 확인"); }
             }
+            return false;
         }
         private void StartWorker() {
-            if(worker.Running)return; if(settings==null) { Configure(); if(settings==null)return; }
+            if(worker.Running)return; if(settings==null && !Configure())return;
             try { settings.Validate(); stopping=false; hadError=false; viewUrl=null; worker.Start(root,settingsFile); SetState("PC 연결을 준비하고 있어요.","등록한 작업과 로컬 정책을 확인하고 있어요.",false); AddHistory("연결을 시작했어요."); }
             catch { SetState("연결을 시작하지 못했어요.","연결 설정과 압축을 푼 실행 파일을 확인해 주세요.",false); AddHistory("시작 실패 · 연결 설정을 확인해 주세요."); }
             ControlsState();
@@ -227,6 +237,11 @@ namespace Diana.Desktop {
             if(type=="ready" && !stopping) { viewUrl=(string)data["url"]; AddHistory("PC 검토 화면을 준비했어요."); ControlsState(); if(settings.AutoOpen)OpenReview(); }
             if(type=="connection" && !stopping) {
                 bool connected=(bool)data["connected"]; string title=connected?"모바일 요청을 받을 준비가 됐어요.":"서버에 다시 연결하고 있어요.";
+                if(connected && !profileRemembered && sharedProfile!=null) {
+                    profileRemembered=true;
+                    try { if(!String.Equals(Path.GetFullPath(settingsFile),Path.GetFullPath(sharedProfile),StringComparison.OrdinalIgnoreCase))settings.Save(sharedProfile); AddHistory("이 PC의 연결 설정을 기억했어요. 다음 실행부터 자동 연결돼요."); }
+                    catch { AddHistory("공통 설정을 저장하지 못했어요. 현재 실행 폴더에서는 자동 연결돼요."); }
+                }
                 if(status.Text!=title)AddHistory(connected?"중계 서버에 연결됐어요.":"연결이 끊겼어요. 자동으로 다시 시도해요.");
                 SetState(title,connected?"검토 화면에서 원문과 근거를 확인하고 승인할 수 있어요.":"검토 화면은 PC에 유지돼요. 네트워크와 서버 상태를 확인해 주세요.",connected);
             }
@@ -263,10 +278,11 @@ namespace Diana.Desktop {
         [STAThread] public static int Main(string[] args) {
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
             string root=AppDomain.CurrentDomain.BaseDirectory;
-            string settings=Path.Combine(root,".local","desktop.json");
+            string shared=Settings.SharedFile,settings=Settings.DefaultFile(root,shared);
             if(args.Length!=0) {
                 if(args.Length!=2 || args[0]!="--settings" || !Settings.LocalPath(args[1]))return 2;
                 settings=Path.GetFullPath(args[1]);
+                shared=null; // Explicit test/operator profiles never replace the default PC connection.
             }
             bool owns=false;
             using(var mutex=new Mutex(false,"Local\\DIANA.FinancialDesktop.v1"))
@@ -274,7 +290,7 @@ namespace Diana.Desktop {
                 try { owns=mutex.WaitOne(0); } catch(AbandonedMutexException) { owns=true; }
                 if(!owns) { activate.Set(); return 0; }
                 try {
-                    using(var form=new LauncherForm(root,settings)) {
+                    using(var form=new LauncherForm(root,settings,shared)) {
                         var registration=ThreadPool.RegisterWaitForSingleObject(activate,delegate { if(form.IsHandleCreated&&!form.IsDisposed)try { form.BeginInvoke(new Action(form.BringForward)); } catch(InvalidOperationException) { } },null,-1,false);
                         try { Application.Run(form); } finally { registration.Unregister(null); }
                     }

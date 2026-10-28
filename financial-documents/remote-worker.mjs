@@ -52,8 +52,8 @@ export function financialTransport(env = process.env, fetchImpl = fetch) {
 }
 
 export class FinancialWorker {
-  #configPath; #configHash; #config; #coreConfig; #coreHash; #adapter; #policy; #api; #out; #onEvent; #detailOutput; #active = null; #lock; #stateRoot; #workerId = randomUUID(); #chain = Promise.resolve();
-  static async create({ configPath, api, output = () => {}, onEvent = () => {}, detailOutput = true, documentRoot = path.resolve('sample-documents') }) {
+  #configPath; #configHash; #config; #coreConfig; #coreHash; #adapter; #policy; #api; #out; #onEvent; #detailOutput; #active = null; #lock; #stateRoot; #workerId = randomUUID(); #chain = Promise.resolve(); #documentRoot; #originBindings; #presentedIds=new Set(); #closing=false;
+  static async #configured({ configPath, api, output = () => {}, onEvent = () => {}, detailOutput = true, documentRoot = path.resolve('sample-documents') }) {
     const w = new FinancialWorker(); w.#configPath = path.resolve(configPath); w.#api = api; w.#out = output; w.#onEvent = onEvent; w.#detailOutput = detailOutput;
     const raw = await boundedRead(w.#configPath, 100_000); w.#configHash = raw.hash; const c = strictJSON(raw.content);
     keys(c, ['schema_version','coreConfig','stateDir','tasks']);
@@ -70,7 +70,7 @@ export class FinancialWorker {
     await stateBoundary(w.#stateRoot,w.#coreConfig,[c.coreConfig,w.#configPath]);
     // Fail closed if the ordinary document catalog could reach finance inputs/outputs/state/config.
     // Check real roots too; symlinks/alternate spelling cannot evade this overlap check.
-    const generic = await realpath(path.resolve(documentRoot));
+    const generic = await realpath(path.resolve(documentRoot));w.#documentRoot=generic;
     await mkdir(c.stateDir, {recursive:true, mode:0o700}); await checkedDirectory(c.stateDir);
     for (const p of [...w.#coreConfig.readRoots, w.#coreConfig.outputRoot, c.stateDir]) {
       const real = await realpath(p);
@@ -84,6 +84,11 @@ export class FinancialWorker {
       }
     }
     w.#policy = await createFilePolicy(w.#coreConfig.readRoots, w.#coreConfig.outputRoot);
+    w.#originBindings=[[w.#configPath,w.#configHash],[c.coreConfig,w.#coreHash]];
+    return w;
+  }
+  static async create(options) {
+    const w=await FinancialWorker.#configured(options),c=w.#config;
     // Lifetime coordinator lease + O_EXCL: one local approval owner, including
     // stale-file recovery and release.
     w.#lock=await acquireWorkerLock(c.stateDir,{pid:process.pid,workerId:w.#workerId});
@@ -91,7 +96,32 @@ export class FinancialWorker {
     return w;
   }
   serial(action) { const p = this.#chain.then(action); this.#chain = p.catch(() => {}); return p; }
+  registrationBase(){return structuredClone({configPath:this.#configPath,configHash:this.#configHash,config:this.#config,core:this.#coreConfig,coreHash:this.#coreHash,documentRoot:this.#documentRoot});}
+  /** PC registrar only. No browser-supplied path reaches this method. Preserve
+   * the worker lease/identity and every existing task, role and document. */
+  async withRegistration(action){return this.serial(async()=>{
+    if(this.#closing)fail('DESKTOP_STOPPING');
+    if(!await this.#policyCurrent())fail('LOCAL_POLICY_CHANGED');
+    if(this.#active&&(!FINANCE_FINAL.has(this.#active.job.state)||this.#active.outbox))fail('REGISTRATION_BUSY');
+    if(this.#active){await this.#closeJournal(this.#active);this.#active=null;this.#adapter.cancelPending();}
+    return action(async(configPath,commit)=>{
+      const events=[],next=await FinancialWorker.#configured({configPath,api:this.#api,output:this.#out,onEvent:event=>events.push(event),detailOutput:this.#detailOutput,documentRoot:this.#documentRoot});
+      if(next.#stateRoot!==this.#stateRoot)fail('REGISTRATION_BOUNDARY_CHANGED');
+      for(const key of ['principal','role','python','write_roles','approval_ttl_ms','outputRoot'])if(JSON.stringify(next.#coreConfig[key])!==JSON.stringify(this.#coreConfig[key]))fail('REGISTRATION_BOUNDARY_CHANGED');
+      for(const key of ['readRoots','documents'])if(this.#coreConfig[key].some((entry,index)=>JSON.stringify(entry)!==JSON.stringify(next.#coreConfig[key][index])))fail('REGISTRATION_BOUNDARY_CHANGED');
+      if(this.#config.tasks.some((task,index)=>JSON.stringify(task)!==JSON.stringify(next.#config.tasks[index])))fail('REGISTRATION_BOUNDARY_CHANGED');
+      await next.#restoreSaved();
+      if(!await this.#policyCurrent())fail('LOCAL_POLICY_CHANGED');
+      if(!await next.#policyCurrent())fail('REGISTRATION_STORAGE_CHANGED');
+      if(this.#closing)fail('DESKTOP_STOPPING');
+      await commit();
+      this.#configPath=next.#configPath;this.#configHash=next.#configHash;this.#config=next.#config;this.#coreConfig=next.#coreConfig;this.#coreHash=next.#coreHash;this.#adapter=next.#adapter;this.#policy=next.#policy;
+      const alreadyPresented=new Set(this.#presentedIds);
+      for(const event of events)if(!alreadyPresented.has(event.job?.id||event.requestId))this.#emit(event.type,Object.fromEntries(Object.entries(event).filter(([key])=>key!=='type')));
+    });
+  });}
   #emit(type,data) {
+    const id=data.job?.id||data.requestId;if(typeof id==='string')this.#presentedIds.add(id);
     // Local presentation only. Never hand the renderer a live executable plan.
     try { this.#onEvent(structuredClone({type,...data})); } catch {}
   }
@@ -129,6 +159,7 @@ export class FinancialWorker {
     }catch(error){this.#emit('recheck',{requestId:id,recheck:{...reviewFailure(error),checkedAt:new Date().toISOString()}});throw error;}
   });}
   async #policyCurrent() {
+    for(const [filename,hash]of this.#originBindings)if((await boundedRead(filename,100_000)).hash!==hash)return false;
     return (await boundedRead(this.#configPath,100_000)).hash === this.#configHash && (await boundedRead(this.#config.coreConfig,100_000)).hash === this.#coreHash;
   }
   async #journal(a) {
@@ -314,6 +345,7 @@ export class FinancialWorker {
     await this.#report(a,saved?'LOCAL_SAVE_COMPLETED':'UNCERTAIN',saved?'PC_SAVED':'RECOVERY_REQUIRED',saved,saved && result.review_complete===true);
   }); }
   async close() {
+    this.#closing=true;
     await this.#chain; this.#adapter.cancelPending();
     await this.#closeJournal(this.#active);
     if (this.#lock) { const lease=this.#lock;this.#lock=null;await lease.close(); }
