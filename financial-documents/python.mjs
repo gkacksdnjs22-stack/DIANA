@@ -12,7 +12,7 @@ export async function verifiedPython(executable) {
   if (typeof executable !== 'string' || !path.isAbsolute(executable) || executable.startsWith('\\\\') || !/^python(?:3(?:\.\d+)?)?(?:\.exe)?$/iu.test(path.basename(executable))) fail('PYTHON_PATH_INVALID');
   const resolved = await realpath(executable); const stat = await lstat(executable);
   if (resolved !== path.resolve(executable) || !stat.isFile() || stat.isSymbolicLink()) fail('PYTHON_PATH_INVALID');
-  const { stdout } = await promisify(execFile)(resolved, ['-I', '-B', '-c', 'import sys;print(sys.executable);print(sys.version_info.major)'], {
+  const { stdout } = await promisify(execFile)(resolved, ['-I', '-B', '-X', 'utf8', '-c', 'import sys;print(sys.executable);print(sys.version_info.major)'], {
     shell: false, windowsHide: true, timeout: 10_000, maxBuffer: 4096, env: {},
   });
   const lines = stdout.trim().split(/\r?\n/u);
