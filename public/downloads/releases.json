@@ -240,10 +240,10 @@
     ]
   },
   "windows": {
-    "version": "0.3.5",
+    "version": "0.3.6",
     "platform": "win-x64",
-    "path": "/downloads/DIANA-PC-0.3.5-win-x64.zip",
-    "bytes": 59418984,
-    "sha256": "00dec6b5561bdf5e2c7d71148c0c4eee70184d947770b1629c28ddf05fd96d7c"
+    "path": "/downloads/DIANA-PC-0.3.6-win-x64.zip",
+    "bytes": 59419147,
+    "sha256": "d8b57e24a4357fa63070c9b5c6bd87c0c1d537b8f7b7cf98380f25499e4c7ddf"
   }
 }

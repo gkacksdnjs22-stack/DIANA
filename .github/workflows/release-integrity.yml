@@ -12,6 +12,8 @@ on:
       - 'scripts/build-financial-desktop.mjs'
       - 'tests/release-packages.test.mjs'
       - 'tests/helpers/release-zip.mjs'
+      - 'tests/financial-ai-preview-view.test.mjs'
+      - 'tests/helpers/ai-preview-dom.mjs'
       - '.github/workflows/release-integrity.yml'
   pull_request:
   workflow_dispatch:
@@ -27,4 +29,4 @@ jobs:
         with:
           node-version: '24.22.1'
       - name: Check published versions and packaged sources
-        run: node --test tests/release-packages.test.mjs
+        run: node --test tests/release-packages.test.mjs tests/financial-ai-preview-view.test.mjs

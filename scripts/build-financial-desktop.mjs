@@ -6,7 +6,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 
 const exec=promisify(execFile),project=fileURLToPath(new URL('../',import.meta.url));
-const desktopVersion='0.3.5';
+const desktopVersion='0.3.6';
 export const desktopSources=Object.freeze([
   'financial-documents/corrections.mjs','financial-documents/correction-rules.mjs','financial-documents/review-ui/corrections.mjs','financial-documents/review-ui/annotation-spans.mjs','financial-documents/check-correction-bundle.py','experiments/financial-review/evaluation-intake-v1/core.mjs','experiments/financial-review/evaluation-intake-v1/schema.mjs',
   'financial-documents/ai-preview.mjs','financial-documents/review-ui/ai-preview.mjs','experiments/financial-review/contract.mjs',

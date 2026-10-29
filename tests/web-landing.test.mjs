@@ -77,7 +77,7 @@ test('Windows ZIP streams exact verified bytes and HEAD metadata without a PC jo
   const head = await fetch(url + path, { method: 'HEAD' });
   assert.equal(head.status, 200);
   assert.equal(head.headers.get('content-type'), 'application/zip');
-  assert.equal(head.headers.get('content-disposition'), 'attachment; filename="DIANA-PC-0.3.5-win-x64.zip"');
+  assert.equal(head.headers.get('content-disposition'), 'attachment; filename="'+path.split('/').at(-1)+'"');
   assert.equal(head.headers.get('content-length'), String(bytes));
   assert.equal((await head.arrayBuffer()).byteLength, 0);
   const download = await fetch(url + path);

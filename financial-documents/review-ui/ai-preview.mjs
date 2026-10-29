@@ -46,6 +46,22 @@ export function mountAiPreview({api,getInput,getConfirmation,onApply,invalidateC
   }catch(e){if(at===gate.capture())status('실제 추론을 완료하지 못했습니다: '+(e.code||'연결 오류')+'. 다른 모델이나 가짜 제안으로 대체하지 않습니다.');}
   finally{running=false;$('ai-cancel').hidden=true;$('ai-infer').disabled=!$('ai-enabled').checked;}
  };
- $('ai-apply').onclick=async()=>{const x=getInput(),r=current;if(!r||!x)return;const draft=suggestedConfirmation(r,x.documents);if(!draft)return;try{await api({action:'ai-apply',predictionId:r.predictionId,recordId:x.recordId,request:x.request,confirmedFormat:x.confirmedFormat,contextHash:x.contextHash});onApply(draft);invalidateConfirmation();await api({action:'ai-note',recordId:x.recordId,predictionId:r.predictionId,phase:'applied',request:x.request,confirmation:getConfirmation()});$('ai-apply').hidden=true;status('선택란에 초안만 적용했습니다. 확인·수정 후 기록을 저장하고, 상세에서 별도로 검토 시작을 눌러 주세요.');}catch(e){changed();status('제안이 만료됐거나 입력이 바뀌었습니다. 수동 선택을 확인해 주세요.');}};
+ $('ai-apply').onclick=async()=>{
+  const x=getInput(),r=current,at=gate.capture();if(!r||!x)return;
+  const draft=suggestedConfirmation(r,x.documents);if(!draft)return;
+  const isCurrent=()=>at===gate.capture()&&current===r;
+  try{
+   await api({action:'ai-apply',predictionId:r.predictionId,recordId:x.recordId,request:x.request,confirmedFormat:x.confirmedFormat,contextHash:x.contextHash});
+   // Manual edits, mode changes and resets also invalidate in-flight applies.
+   if(!isCurrent())return;
+   onApply(draft);invalidateConfirmation();
+   await api({action:'ai-note',recordId:x.recordId,predictionId:r.predictionId,phase:'applied',request:x.request,confirmation:getConfirmation()});
+   if(!isCurrent())return;
+   $('ai-apply').hidden=true;status('선택란에 초안만 적용했습니다. 확인·수정 후 기록을 저장하고, 상세에서 별도로 검토 시작을 눌러 주세요.');
+  }catch(e){
+   if(!isCurrent())return;
+   changed();status('제안이 만료됐거나 입력이 바뀌었습니다. 수동 선택을 확인해 주세요.');
+  }
+ };
  return{changed,reset(){cancel();latestId=null;$('ai-enabled').checked=false;$('ai-infer').disabled=true;status('');},setVisible(value){el.hidden=!value;}};
 }
