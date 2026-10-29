@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0c1423">
+  <meta name="description" content="DIANA PC 금융 문서 검토 화면을 가상 자료로 체험하세요. 수정 전후, 근거 확인, 승인과 저장본 재검토 흐름을 살펴봅니다.">
+  <title>DIANA — PC 검토 화면 DEMO</title>
+  <link rel="icon" href="/diana-logo.png" type="image/png">
+  <link rel="stylesheet" href="/demo/pc.css">
+  <link rel="stylesheet" href="/demo/demo.css">
+  <script type="module" src="/demo/demo.mjs"></script>
+</head>
+<body>
+<a class="skip-link" href="#main">검토 화면으로 건너뛰기</a>
+<aside class="sidebar">
+  <a class="brand" href="/" aria-label="DIANA 홈"><img class="brand-icon" src="/diana-logo.png" alt="" width="48" height="48"><div>DIANA<small>WEB DEMO</small></div></a>
+  <div class="workspace-label">금융 문서 작업 <span>가상 자료</span></div>
+  <div class="queue-heading">체험할 작업 <span>1</span></div>
+  <nav id="jobs" aria-label="데모 작업"><button id="sample-job" class="selected" aria-current="page"><strong>가상 검토서 보완</strong><span>해외 바이아웃 펀드 A</span><small>근거 대조 · 보완 · 재검토</small></button></nav>
+  <div class="demo-sidebar-actions"><button id="reset" class="secondary">처음부터 체험하기 <span aria-hidden="true">↻</span></button><a href="/#download">실제 PC 앱 다운로드 <span aria-hidden="true">↗</span></a></div>
+  <div class="local-note"><span class="shield" aria-hidden="true">◇</span><strong>실제 문서는 내 PC에서</strong><p>이 화면에는 공개용 가상 자료만 있습니다. 실제 문서 검토·승인·저장은 Windows 앱에서 진행하세요.</p><small>이 데모는 PC나 서버의 작업을 실행하지 않습니다.</small></div>
+</aside>
+<main id="main">
+  <header class="topbar"><div class="breadcrumb">DIANA <span>/</span> PC 금융 문서 검토</div><a class="demo-home" href="/">소개 페이지 ↗</a></header>
+  <div class="demo-banner"><span class="demo-label">INTERACTIVE DEMO</span><div><strong>PC 앱 화면을 가상 자료로 체험해 보세요.</strong><p>정해진 예시로 검토·승인 흐름을 보여줍니다. 실제 AI 분석이나 PC 파일 저장은 실행되지 않으며, 새로고침하면 초기화됩니다.</p></div></div>
+  <section class="heading"><div><div class="eyebrow">DOCUMENT REVIEW</div><h1>가상 검토서 보완</h1><p>해외 바이아웃 펀드 A · KEY_MAN 조항 보완 · Markdown</p></div><span id="state" class="state">가상 승인 대기</span></section>
+  <p class="summary-caption">첫 검토 요약 · 원문과 근거를 비교한 뒤 가상 수정안을 승인해 보세요.</p>
+  <section class="metrics" aria-label="첫 검토 요약"><div><span>확인된 항목</span><strong>1</strong><small>검토서에 명시된 내용</small></div><div><span>근거 있는 보완</span><strong>1</strong><small>실사 자료에서 찾은 근거</small></div><div><span>추가 확인</span><strong>1</strong><small>근거가 없는 항목</small></div><div><span>가상 저장</span><strong id="saved">대기</strong><small>브라우저 메모리에서 체험</small></div></section>
+  <section class="approval"><div><span class="eyebrow">APPROVAL WALKTHROUGH</span><h2 id="approval-title">근거가 있는 조항을 보완할 수 있어요.</h2><p id="approval-note">실사 자료의 핵심 운용역 이탈 조항을 검토서에 추가합니다. LP 자문위원회 참여권은 근거가 없어 추가 확인으로 남습니다.</p></div><div class="approval-action"><div class="decision-buttons"><button id="approve-open">가상 수정안 승인 <span aria-hidden="true">↗</span></button><button id="reject-open" class="secondary">거절</button></div><small>실제 문서·파일에는 영향을 주지 않아요</small></div></section>
+  <section class="workbench">
+    <div class="tabbar" role="tablist" aria-label="검토 내용">
+      <button role="tab" id="tab-diff" aria-controls="panel-diff" aria-selected="true" data-tab="diff">수정 전후</button>
+      <button role="tab" id="tab-checklist" aria-controls="panel-checklist" aria-selected="false" tabindex="-1" data-tab="checklist">항목별 검토</button>
+      <button role="tab" id="tab-sources" aria-controls="panel-sources" aria-selected="false" tabindex="-1" data-tab="sources">원문 · 근거</button>
+      <button role="tab" id="tab-result" aria-controls="panel-result" aria-selected="false" tabindex="-1" data-tab="result">가상 저장 결과</button>
+      <button role="tab" id="tab-recheck" aria-controls="panel-recheck" aria-selected="false" tabindex="-1" data-tab="recheck">저장본 재검토</button>
+    </div>
+    <div id="panel-diff" role="tabpanel" aria-labelledby="tab-diff" tabindex="0"><div class="document-toolbar"><span>가상 검토서의 수정 전후를 비교합니다.</span><button id="toggle-diff" class="text-button" aria-expanded="false" aria-controls="diff-lines">변경 줄 보기</button></div><div class="comparison"><article><div class="doc-heading"><span class="dot before"></span>수정 전 <small>샘플 원문</small></div><pre id="before"></pre></article><article><div class="doc-heading"><span class="dot after"></span>수정 후 <small>근거가 있는 내용만 보완</small></div><pre id="after"></pre></article></div><pre id="diff-lines" class="diff-lines" hidden></pre></div>
+    <div id="panel-checklist" role="tabpanel" aria-labelledby="tab-checklist" tabindex="0" hidden><div class="section-intro"><h2>항목별 판단과 근거</h2><p>예시에는 충족·근거 있는 보완·근거 부족 항목이 하나씩 있습니다.</p></div><div id="checklist"></div></div>
+    <div id="panel-sources" role="tabpanel" aria-labelledby="tab-sources" tabindex="0" hidden><div class="source-toolbar"><label for="source-select">가상 자료</label><select id="source-select"><option value="target">검토할 문서 · 검토서</option><option value="evidence">근거 자료 · 실사 자료</option><option value="guideline">검토 지침 · 예시</option></select><span>공개 데모용 샘플</span></div><pre id="source-content" class="source-content"></pre></div>
+    <div id="panel-result" role="tabpanel" aria-labelledby="tab-result" tabindex="0" hidden><div class="section-intro"><h2 id="result-title">가상 저장 전입니다.</h2><p id="result-note">수정 전후와 근거를 확인한 뒤 ‘가상 수정안 승인’을 눌러 주세요.</p><button id="review-saved" class="review-saved" disabled>가상 저장본 다시 검토</button></div><div id="file-section" class="file-section" hidden><label>가상 결과 파일</label><code>DIANA-demo-fund-review.md</code><button id="download-result" class="text-button">가상 결과 파일 다운로드 ↗</button></div><div id="result-unresolved" class="result-unresolved"></div><pre id="result-content" class="source-content"></pre></div>
+    <div id="panel-recheck" role="tabpanel" aria-labelledby="tab-recheck" tabindex="0" hidden><div class="section-intro"><h2 id="recheck-title">가상 저장본을 다시 검토해 보세요.</h2><p id="recheck-note">가상 승인 후 ‘가상 저장 결과’에서 재검토를 누르면 보완 항목의 변화를 확인할 수 있어요.</p></div><div id="recheck-items"></div><pre id="recheck-body" class="source-content"></pre></div>
+  </section>
+  <footer><span>PUBLIC SYNTHETIC EXAMPLE · 실제 금융 자료가 아닙니다</span><span>PC 앱과 같은 검토 화면 구성 · 브라우저 내 모의 동작</span></footer>
+  <noscript><p class="demo-banner">데모의 탭과 승인 체험에는 JavaScript가 필요합니다. <a href="/">소개 페이지로 돌아가기</a></p></noscript>
+</main>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+<dialog id="decision-dialog" aria-labelledby="decision-title" aria-describedby="decision-summary"><div class="eyebrow">DEMO DECISION</div><h2 id="decision-title"></h2><p id="decision-summary"></p><p id="decision-warning">브라우저 메모리의 가상 결과만 바뀝니다. 실제 PC 파일은 저장되지 않습니다.</p><label id="confirmation-label" class="demo-confirmation"><input id="decision-check" type="checkbox">가상 원문·근거·수정 내용을 확인했습니다.</label><div class="dialog-actions"><button id="decision-close" class="secondary">돌아가기</button><button id="decision-confirm" disabled>승인하고 가상 저장</button></div></dialog>
+</body>
+</html>

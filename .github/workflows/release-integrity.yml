@@ -3,6 +3,9 @@ on:
   push:
     paths:
       - 'public/**'
+      - 'lib/control.mjs'
+      - 'tests/web-landing.test.mjs'
+      - 'tests/web-demo.test.mjs'
       - 'android-app/**'
       - 'financial-desktop/**'
       - 'financial-documents/**'
@@ -30,3 +33,7 @@ jobs:
           node-version: '24.22.1'
       - name: Check published versions and packaged sources
         run: node --test tests/release-packages.test.mjs tests/financial-ai-preview-view.test.mjs
+      - name: Install web test dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Check public pages and protected API boundaries
+        run: node --test tests/web-landing.test.mjs tests/web-demo.test.mjs

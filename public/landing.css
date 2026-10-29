@@ -37,6 +37,12 @@ nav a:hover { color: var(--cyan); }
 nav .nav-download { padding: 11px 17px; border: 1px solid #3b5366; border-radius: 6px; color: var(--cyan); display: flex; gap: 18px; align-items: center; }
 .hero { display: grid; grid-template-columns: 1.13fr 1fr; align-items: center; min-height: 620px; padding-block: 42px 50px; gap: 15px; }
 .hero-copy { z-index: 1; }
+.product-badge { display:inline-flex;align-items:center;gap:12px;padding:8px 11px;margin-bottom:18px;border:1px solid #8365b755;border-radius:4px;background:linear-gradient(110deg,#19333b80,#30244080);color:#c6eef2;font-size:11px;letter-spacing:.01em; }
+.product-badge span { color:#ac9bd3;font-size:9px;border-left:1px solid #77618a66;padding-left:10px; }
+.nav-demo { color:var(--purple);font-weight:700;letter-spacing:.06em; }
+.hero-demo-link { display:inline-flex;align-items:center;gap:14px;color:#ced6ec;font-size:11px;margin-top:23px; }
+.hero-demo-link span { color:var(--purple);font-size:10px; }
+.hero-demo-link:hover { color:var(--cyan); }
 .eyebrow { font-size: 10px; letter-spacing: .18em; font-weight: 600; line-height: 1.7; color: var(--cyan); display: flex; align-items: center; gap: 9px; }
 .status-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 12px #68eee38c; flex-shrink: 0; }
 h1 { font-size: clamp(42px,4.55vw,64px); line-height: 1.32; letter-spacing: -.065em; font-weight: 730; margin-block: 24px; }
@@ -238,7 +244,10 @@ summary::-webkit-details-marker { display: none; }
   .brand > span:first-of-type { font-size: 19px; }
   .brand { gap: 7px; }
   nav { gap: 0; }
-  nav > a:not(.nav-download) { display: none; }
+  nav > a:not(.nav-download):not(.nav-demo) { display: none; }
+  nav .nav-demo { font-size:10px;margin-right:12px; }
+  .product-badge { font-size:10px; }
+  .hero-demo-link { justify-content:center;gap:10px;flex-wrap:wrap; }
   nav .nav-download { padding: 10px 12px; font-size: 10px; gap: 13px; }
   .hero { grid-template-columns: 1fr; padding-block: 47px 29px; min-height: 0; gap: 13px; overflow: hidden; }
   .hero-copy { text-align: center; }
