@@ -1,0 +1,30 @@
+name: DIANA download integrity
+on:
+  push:
+    paths:
+      - 'public/**'
+      - 'android-app/**'
+      - 'financial-desktop/**'
+      - 'financial-documents/**'
+      - 'financial_core/**'
+      - 'experiments/financial-review/contract.mjs'
+      - 'experiments/financial-review/evaluation-intake-v1/**'
+      - 'scripts/build-financial-desktop.mjs'
+      - 'tests/release-packages.test.mjs'
+      - 'tests/helpers/release-zip.mjs'
+      - '.github/workflows/release-integrity.yml'
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify-downloads:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+      - name: Check published versions and packaged sources
+        run: node --test tests/release-packages.test.mjs

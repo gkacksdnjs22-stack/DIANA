@@ -1,38 +1,45 @@
-# DIANA 소개 및 Android 다운로드 페이지
+# DIANA 소개 및 Android·Windows 다운로드
 
-기존 Render 서비스의 `/`를 소개·설치 안내 페이지로 교체한다. 앱과 PC의 서버 주소, 인증, 중계 API, DB·Storage·Firebase 설정은 유지한다. 이 변경은 로컬에서 검증했으며 운영 배포를 수행하지 않았다.
+기존 Render 서비스의 `/`는 소개·설치 안내 페이지다. 기존 웹 작업 화면은 `/console`에서 제공하며, 앱과 PC의 서버 주소·인증·중계 API·DB·Storage·Firebase 설정은 유지한다. 운영 서버 배포는 수행하지 않았다.
 
-## 공개 경로
+## 공개 다운로드
 
-| 경로 | 제공 내용 |
-| --- | --- |
-| `/` | DIANA 소개, 사용 흐름, Android 설치 안내, FAQ |
-| `/landing.css` | 네이비·청록·보라 색상의 반응형 스타일 |
-| `/diana-logo.png` | 기존 앱의 로고 원본 |
-| `/downloads/DIANA-0.3.9.apk` | 직접 내려받을 수 있는 서명된 Android APK |
-| `/console` | 교체 전의 웹 연결·파일 요청 화면 |
-| `/app.js`, `/style.css` | 기존 웹 작업 화면의 스크립트와 스타일 |
+| 대상 | 파일 | 버전 | 크기 |
+| --- | --- | --- | --- |
+| Android 8.0 이상 | `/downloads/DIANA-0.3.9.apk` | 0.3.9 / versionCode 12 | 4,226,534바이트 |
+| Windows 10·11 x64, .NET Framework 4.8 | `/downloads/DIANA-PC-0.3.5-win-x64.zip` | PC 0.3.5 | 59,418,984바이트 |
 
-정적 경로는 명시적인 허용 목록이며 임의 폴더나 파일을 제공하지 않는다. 공개 APK는 로그인 없이 받을 수 있고 `Content-Disposition: attachment`로 파일명을 지정한다. GET은 파일을, HEAD는 같은 길이·유형의 헤더만 반환한다. 페이지는 외부 폰트·분석 도구·스크립트를 로드하지 않으며 토큰을 요구하거나 작업을 생성하지 않는다. 기존 CSP와 API의 인증·Origin 검사를 유지한다.
+Android SHA-256: `3535ec96209c2af6c0d081b5c00ac5335e630b5b6e746f701d99d50001672c00`
 
-## 배포 APK
+Windows SHA-256: `00dec6b5561bdf5e2c7d71148c0c4eee70184d947770b1629c28ddf05fd96d7c`
 
-- Android 0.3.9, versionCode 12, `kr.nightdesk.phone`
-- Android 8.0 이상 (minSdk 26)
-- 4,226,534바이트
-- SHA-256: `3535ec96209c2af6c0d081b5c00ac5335e630b5b6e746f701d99d50001672c00`
-- 서명 인증서 SHA-256: `9e9e61c36d0657e0cfe86b5f542b634e723c050664f6c0102281e9e7287877b9`
+`/downloads/releases.json`에 버전·크기·해시와 Android 소스 파일 해시를 기록한다. 다운로드는 고정된 공개 경로만 허용하며 GET은 스트리밍하고 HEAD는 유형·길이·파일명 헤더만 반환한다. 임의 경로나 사용자 파일을 공개하지 않는다. 기존 CSP·인증·Origin 검사를 유지한다. 페이지에 토큰 입력·작업 생성·외부 폰트·분석 도구·외부 스크립트는 없다.
 
-휴대폰에 DIANA로 전달한 최종 서명본과 같은 바이트다. 비공개 저장소의 GitHub Actions artifact에 방문자가 접근할 필요 없이 서비스가 파일을 제공한다. 배포 소스에 `public/downloads/DIANA-0.3.9.apk`를 포함해야 한다. APK를 업데이트할 때는 기존 서명으로 검증한 새 파일을 추가하고, 허용 경로·홈페이지 버전 및 설치 정보·다운로드 검사 해시를 함께 갱신한다. 이전 버전 경로를 다른 바이트로 바꾸지 않는다. 서명키·환경 파일은 공개 폴더에 두지 않는다.
+## Android 소스와 배포본 대응
 
-## 현재 기능 안내
+공개 APK를 만든 `ea595cba04fd9ca3deb0987245f4fc067a3d33aa`의 통합 요청 화면·대화 초안·관련 검사·Gradle 버전·CI 설정을 함께 반영한다. 숫자만 올리는 방식이 아니다. 앱 소스로 재빌드한 APK의 서명 정보를 제외한 애플리케이션 파일 136개가 기존 공개 APK와 일치함을 확인했다.
 
-0.3.9의 대화 입력은 휴대폰 내부 초안 보관 단계이며 로컬 AI 연결은 학습·성능 검증 후 진행한다. 페이지에 이를 명시한다. 등록 문서 검토·보완·변환의 원문·근거·Diff·결과 파일·최종 승인은 PC에 유지하고, 요청과 최소 상태만 중계한다. 일반 파일 전송은 서버의 임시 보관을 이용하므로 모든 파일이 PC에만 남는다고 설명하지 않는다.
+배포 APK는 기존과 같은 서명 인증서 SHA-256 `9e9e61c36d0657e0cfe86b5f542b634e723c050664f6c0102281e9e7287877b9`를 사용한다. CI의 기본 debug APK는 검증용이며 실제 업데이트 배포에는 기존 서명키를 사용해야 한다. 개인 서명키와 비밀번호는 저장소·공개 폴더에 넣지 않는다.
 
-## 확인 및 운영 반영
+## Windows 소스와 배포본 대응
 
-`node --test tests/web-landing.test.mjs tests/control.test.mjs tests/financial-mobile.test.mjs tests/incoming-control.test.mjs tests/delivery-control.test.mjs tests/push-control.test.mjs tests/push-dispatcher.test.mjs tests/firebase-push.test.mjs`
+사용 중인 PC 0.3.5의 앱 소스 57개와 native C# 실행기·빌드 도구·사용 안내·관련 검사를 반영한다. 그 소스로 새 Windows ZIP을 빌드했다. ZIP의 `manifest.json`에는 307개 구성 파일의 해시와 native 실행기·빌드 스크립트·아이콘을 포함한 `build_inputs` 해시가 있다. 테스트는 각 구성 파일과 패키지 내 소스가 저장소와 일치하는지 확인한다.
 
-로컬 HTTP 연결이 허용된 환경에서 실행한다. 공개 링크·APK 실제 바이트 및 HEAD·기존 웹 화면·API 인증을 확인하며, 실제 사용자 연결이나 운영 요청은 사용하지 않는다. 브라우저에서는 데스크톱과 작은 휴대폰 화면의 줄바꿈·가로 넘침·설치 안내와 FAQ 펼침을 확인한다.
+ZIP 전체를 쓰기 가능한 폴더에 압축 해제한 뒤 `DIANA-PC/DIANA.exe`를 실행한다. EXE만 다른 곳으로 옮기지 않는다. Node·Python·NumPy 실행 환경을 포함한다. 처음 사용하는 PC는 그 PC의 문서·권한·연결 설정이 필요하다. ZIP에 사용자 설정·연결 키·개인 문서·업무 결과는 없다. 코드 서명 전 개발용 ZIP이며 다른 PC 실기기 검증은 별도다.
 
-운영에 반영하려면 이 변경과 공개 APK·로고를 포함한 커밋을 Render에 배포해야 한다. 추가 환경변수·DB 변경·Android 재빌드는 필요하지 않다.
+PC 0.3.5에는 기존의 수동 실험용 AI 미리보기와 로컬 요청 기록·교정 기능이 포함된다. 미리보기는 별도 사용자 동작으로만 실행되며 모바일 대화 자동 해석·자동 승인·자동 학습을 뜻하지 않는다. 이번 작업은 현재 진행 중인 연구·학습 파일을 읽거나 수정하지 않는다.
+
+## 정보 경계 및 현재 기능
+
+Android 0.3.9 대화 입력은 휴대폰 내부 초안 보관이다. 모바일 대화와 실제 로컬 AI 연결은 학습·성능 검증 후 진행한다. 등록 문서 검토·보완·변환의 원문·근거·Diff·결과 파일·최종 승인은 PC에 유지하며 요청과 최소 상태만 중계한다. 일반 파일 전송은 서버 임시 보관을 이용한다.
+
+## 검증과 후속 배포
+
+- `node --test tests/release-packages.test.mjs`: APK의 실제 binary manifest와 Gradle 버전·SDK 비교, Android 소스 해시, Windows 구성 파일·빌드 입력·패키지 소스 비교. 외부 도구 없이 CI에서 실행한다.
+- 홈페이지·다운로드 및 PC 검토·승인·저장·기존 서버 회귀 검사: 250개 통과.
+- Android 단위 검사 53개와 앱·계측 APK 빌드 통과. 이 작업에서 실제 휴대폰 설치는 수행하지 않았다.
+- 브라우저에서 Android·Windows 다운로드와 설치 안내, 작은 화면의 가로 넘침 및 펼침 동작을 확인했다.
+
+공개 배포 파일을 바꾸면 해당 플랫폼의 소스·버전·서명·해시를 함께 검증하고 `releases.json` 및 안내를 갱신한다. Windows 빌드는 `node scripts/build-financial-desktop.mjs --python PYTHON_EXE_절대경로`로 수행한다. 생성된 ZIP을 먼저 검증하고 공개 다운로드에 반영한다.
+
+운영 반영에는 이 변경을 포함한 커밋의 Render 배포가 필요하다. 추가 서버 환경변수·DB 변경은 필요하지 않으며 현재 병합·배포는 수행하지 않았다.

@@ -47,6 +47,8 @@ h1 { font-size: clamp(42px,4.55vw,64px); line-height: 1.32; letter-spacing: -.06
 .button-primary { background: linear-gradient(120deg,#83f1e5,#60dfe2 70%,#84c4ee); color: #071827; border: 1px solid #a1fff1; box-shadow: 0 3px 0 #267989,0 10px 32px #42e6d91a,inset 0 1px 0 #c1fff9; }
 .button-primary:hover { transform: translateY(-2px); box-shadow: 0 5px 0 #267989,0 14px 36px #42e6d926; }
 .button-primary:active { transform: translateY(1px); }
+.button-secondary { color: #c8d3eb; border: 1px solid #60739577; background: linear-gradient(125deg,#202c42,#131d30); box-shadow: inset 0 1px 0 #ffffff0d,0 3px 0 #080c16; }
+.button-secondary:hover { border-color: var(--purple); transform: translateY(-2px); }
 .button svg { width: 18px; height: 18px; }
 .text-link { font-size: 12px; display: inline-flex; gap: 15px; align-items: center; }
 .text-link:hover { color: var(--cyan); }
@@ -108,6 +110,19 @@ h3 { font-size: 21px; letter-spacing: -.04em; font-weight: 600; line-height: 1.5
 .steps .text-link { font-size: 10px; color: var(--cyan); }
 .step-caption { font-size: 10px; color: #768aa8; }
 .download-section { padding-bottom: 80px; }
+.platform-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:26px; }
+.platform-download { padding:30px; border:1px solid #60839155; border-radius:12px; background:radial-gradient(ellipse at 0 100%,#22455540,transparent 70%),#101b2c; box-shadow:inset 0 1px 0 #ffffff0b,0 14px 40px #0003; }
+.platform-download .download-kicker { margin-bottom:24px; }
+.platform-download .download-app { margin-bottom:18px; }
+.platform-description { font-size:12px; line-height:1.9; color:var(--muted); margin-bottom:25px; }
+.windows-download { border-color:#8a78b455; background:radial-gradient(ellipse at 100% 0,#48356d40,transparent 70%),#141b2e; }
+.windows-download .download-kicker { color:#c8adff; }
+.windows-download .status-dot { background:var(--purple); box-shadow:0 0 12px #b59aff55; }
+.button-windows { background:linear-gradient(110deg,#cbb5fc,#b6bafa 65%,#9ccdec); border-color:#e1d1ff; box-shadow:0 3px 0 #6460a5,0 10px 32px #b294e91a,inset 0 1px 0 #f1eaff; }
+.button-windows:hover { box-shadow:0 5px 0 #6460a5,0 14px 36px #b294e926; }
+.install-steps { padding-left:17px; font-size:11px; line-height:2.1; color:#a7b5cd; margin:24px 0 0; }
+.install-steps strong { font-weight:600; color:#cbd6e8; }
+.download-footnote { font-size:10px; line-height:1.9; color:#8194b1; margin-top:22px; }
 .download-shell { position: relative; border: 1px solid #7a83b04d; background: radial-gradient(ellipse at 0 100%,#22455545,transparent 60%),radial-gradient(ellipse at 90% 0,#5043743d,transparent 60%),#11192b; border-radius: 15px; display: grid; grid-template-columns: 1fr 1.05fr; gap: 60px; padding: 52px 55px; box-shadow: 0 20px 60px #0003,inset 0 1px 0 #d6b5ff12; }
 .download-kicker { display: flex; align-items: center; gap: 8px; font-size: 9px; letter-spacing: .18em; color: var(--cyan); }
 .download-intro h2 { font-size: 38px; margin-top: 19px; line-height: 1.35; }
@@ -164,6 +179,10 @@ summary::-webkit-details-marker { display: none; }
   .section { padding-block: 80px; }
 }
 @media (max-width:800px) {
+  .platform-grid { grid-template-columns:1fr; }
+  .platform-download .download-app h3 { font-size:17px; }
+  .platform-download .download-app img { width:60px; height:60px; }
+  .platform-download .download-app p { font-size:10px; }
   .wrap { width: calc(100% - 48px); }
   .site-header { height: 84px; }
   nav { gap: 20px; }
@@ -206,6 +225,13 @@ summary::-webkit-details-marker { display: none; }
   .section { padding-block: 65px; }
 }
 @media (max-width:580px) {
+  .platform-download { padding:25px 20px; }
+  .platform-download .download-app h3 { font-size:15px; }
+  .platform-download .download-app img { width:50px; height:50px; }
+  .platform-download .download-app p { font-size:9px; }
+  .platform-description br { display:none; }
+  .hero-actions { width:100%; }
+  .hero-actions .button { width:min(100%,270px); }
   .wrap { width: calc(100% - 40px); }
   .site-header { height: 77px; gap: 14px; }
   .brand img { width: 35px; height: 35px; }

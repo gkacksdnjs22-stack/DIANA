@@ -1,0 +1,249 @@
+{
+  "schema_version": 1,
+  "android": {
+    "version": "0.3.9",
+    "versionCode": 12,
+    "minSdk": 26,
+    "path": "/downloads/DIANA-0.3.9.apk",
+    "bytes": 4226534,
+    "sha256": "3535ec96209c2af6c0d081b5c00ac5335e630b5b6e746f701d99d50001672c00",
+    "sourceCommit": "ea595cba04fd9ca3deb0987245f4fc067a3d33aa",
+    "sourceFiles": [
+      {
+        "path": "android-app/app/build.gradle",
+        "sha256": "2d58f4e1d7956a9481cbae851d7117a4d8009507722c9524d387cb8bd0ef09e2"
+      },
+      {
+        "path": "android-app/app/src/main/AndroidManifest.xml",
+        "sha256": "f38168b54c8bec4e89c7044d288be455712b113918bde18b8a9990257174bb39"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/Api.java",
+        "sha256": "d686987633051fbe447583470c86eeffab8e89c34d7076c47b74c9a02c84d810"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/ApkInstaller.java",
+        "sha256": "aa86089d6b20ea3844c244ace111a738f27afd414321e88234c30105f1c52964"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/FileSafety.java",
+        "sha256": "52d32d54fda9429ebc54af972db9ac0a8d2313ccc13a158efb8b3d0b7a40574f"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/FinanceRequests.java",
+        "sha256": "0a4f07bd34c03a48dd61dc3d8b963fea1d85d89a7d25fdc53a8349541946cd0d"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/FinanceState.java",
+        "sha256": "efb545ca96d4ec37eab019f5efb9d458392168f04fc3b53cf0650e182d1638fa"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/FolderCopyKey.java",
+        "sha256": "21833b39aef92c168597b2158cda2eee684ef780985796e745bacf5b00ca8bc8"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/ForegroundRefresh.java",
+        "sha256": "fb4d83e2869f2b81dc9ae02f8ea525039e095cf035f583d637b2eaa9e8ddd09f"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/MainActivity.java",
+        "sha256": "11c3167dc6c06bf7c9e568c82bb26a8988058cbd9fb052f302a2dc953f5e7aae"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/NightDeskApplication.java",
+        "sha256": "46f3de614fc0bfca5b3e0aea1ebc2284fe661a3e7fe1fa3a8a2723cba3f7162a"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/NightDeskMessagingService.java",
+        "sha256": "a0026681239c2b7ee11291ae28ebbe5ca9d8ced28bb14373e6a41ff5957c6a82"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/Notifications.java",
+        "sha256": "bac5af6d13e47c5766e89f3f5c4d296586a3ce7e21eb7c8bc6ddd26ee9a5ce7c"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/PcChatDraft.java",
+        "sha256": "cb1b1d6a5ebb1391303baf60e80c049d39c59410b3c5c459876c80fc348d5322"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/PcRequests.java",
+        "sha256": "2d3424acbb13ae72676a896d5ef2e1419cbd305e812c4d53fb6fd7255a793161"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/PushConfig.java",
+        "sha256": "d614c48266df3922266940f76fc4113590a8feb17856484862235a91fec24002"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/PushSupport.java",
+        "sha256": "d164595cea8003c562d7030d0e9479cf6b24d0943b670fbbad474e9b1e16ec52"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/RecentReceive.java",
+        "sha256": "a73d903ef2c4ae68101fea8c3b806be648d83328486d22be7b381051a572abc8"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/SecureStore.java",
+        "sha256": "681b609b7b56836663586f75a9907048d871b2ac4dc635167669b5b8f279d4a9"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/SyncEngine.java",
+        "sha256": "ba778ca2b90826cdc641c158ffe40944651ad668b53847e3b2474fdb695d652e"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/SyncGate.java",
+        "sha256": "9580a5c58526a91e7aa35beb4bbf63c4fb0761da0d4e4d0ea647a2eed8705119"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/SyncScheduler.java",
+        "sha256": "d12aa8c334a8cf58a0c43013d00530aa4470867b80f59fc11f44901482e57760"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/SyncWorker.java",
+        "sha256": "7400d78c6f4d3e3c3005d9defd44485513c3f865f2602facb49375cc24ee4afc"
+      },
+      {
+        "path": "android-app/app/src/main/java/kr/nightdesk/phone/UploadSender.java",
+        "sha256": "1039d8f7326a7cebf590c60ebef822a4b11e6e6715ae331df4653efcd18e5302"
+      },
+      {
+        "path": "android-app/app/src/main/res/drawable-nodpi/diana_launcher_foreground.png",
+        "sha256": "9f1500489b03b154a0223abdec159b3abb2982132a46ac20fb22bba6b476c7bb"
+      },
+      {
+        "path": "android-app/app/src/main/res/drawable/bg_ui_dialog.xml",
+        "sha256": "08f246d67dd2fc0993e6b4f79976a95ccd2a8e430aa292d92df5292a4c5ff722"
+      },
+      {
+        "path": "android-app/app/src/main/res/drawable/ic_diana_notification.xml",
+        "sha256": "3a84043ff8b3127c82b5acb7cbbd8dc451e4f6bde6798345f9596ae568d84c96"
+      },
+      {
+        "path": "android-app/app/src/main/res/drawable/ic_moon.xml",
+        "sha256": "e841c5060bf15acb06a8d55b86165890c44d78e152f441e7b58f6ef361db474c"
+      },
+      {
+        "path": "android-app/app/src/main/res/drawable/ic_ui_apk.xml",
+        "sha256": "9ae369f9b1fd5dbafde6431461031d07210972e149418dc933986a364fe639a2"
+      },
+      {
+        "path": "android-app/app/src/main/res/drawable/ic_ui_check.xml",
+        "sha256": "a2e24857b325029aecdfb58b9f877456423b93d80a3687e40600baae395fd98a"
+      },
+      {
+        "path": "android-app/app/src/main/res/drawable/ic_ui_chevron.xml",
+        "sha256": "3fb9cd9117ec51aa4d40e12dd1196e95383df5a2f06b8fb8f8a09b2713a50ba5"
+      },
+      {
+        "path": "android-app/app/src/main/res/drawable/ic_ui_file.xml",
+        "sha256": "a857aadd16481863e77a94982d888eb88827e1c09c1e41a2caf6538a594476a4"
+      },
+      {
+        "path": "android-app/app/src/main/res/drawable/ic_ui_folder.xml",
+        "sha256": "6963c0d3f7e7e905ccd01082285abbbd102bc7fa92d510700af7211e55420895"
+      },
+      {
+        "path": "android-app/app/src/main/res/drawable/ic_ui_home.xml",
+        "sha256": "3bf4b02d083dd092264ae63561d741eb39d2699393baefb873b3750b68df2133"
+      },
+      {
+        "path": "android-app/app/src/main/res/drawable/ic_ui_inbox.xml",
+        "sha256": "c4e70e514af328ebbcac47fe72eb1e8bdedbc075481f1b34f4de04a3fa43c7cf"
+      },
+      {
+        "path": "android-app/app/src/main/res/drawable/ic_ui_refresh.xml",
+        "sha256": "e700e1ac3562ed69f5773be73ba6c59ab525485c23693b5c486893bfa0715641"
+      },
+      {
+        "path": "android-app/app/src/main/res/drawable/ic_ui_send.xml",
+        "sha256": "92bbbdfdaec549c24e32d716cc07178bcba960c99000459985d894c3aad1eb47"
+      },
+      {
+        "path": "android-app/app/src/main/res/drawable/ic_ui_settings.xml",
+        "sha256": "e7aa18716a73d67a12ae02e131946f51e498a9dac68a29a1098f2b9b39209979"
+      },
+      {
+        "path": "android-app/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml",
+        "sha256": "c702a0342a523fc4c4211dfee19ee2c76cc935f0d0c40bbad46dc273e4d319f1"
+      },
+      {
+        "path": "android-app/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml",
+        "sha256": "c702a0342a523fc4c4211dfee19ee2c76cc935f0d0c40bbad46dc273e4d319f1"
+      },
+      {
+        "path": "android-app/app/src/main/res/mipmap-hdpi/ic_launcher_round.png",
+        "sha256": "ea7e3ac0b103cf7d84f971c995ce60dfaaaed9de90a59eb860d43522390d8f51"
+      },
+      {
+        "path": "android-app/app/src/main/res/mipmap-hdpi/ic_launcher.png",
+        "sha256": "f913d838bec1241ca09ae26b319561cf8073f2fd1b025868a297659c32a5eb6a"
+      },
+      {
+        "path": "android-app/app/src/main/res/mipmap-mdpi/ic_launcher_round.png",
+        "sha256": "8cda92e853a1039b4f60b3779e291082117c32f3e28029313ce9d353cb9dbc41"
+      },
+      {
+        "path": "android-app/app/src/main/res/mipmap-mdpi/ic_launcher.png",
+        "sha256": "19867bc2c654be43a3411a314c2ebb404bb7e58bf56d764a2827b698147e39fe"
+      },
+      {
+        "path": "android-app/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png",
+        "sha256": "763b23e9306d7fc43da0bdab06ca5f390bce30b4bf560883e5d342f3e636143c"
+      },
+      {
+        "path": "android-app/app/src/main/res/mipmap-xhdpi/ic_launcher.png",
+        "sha256": "5829a480431d904303a60e8885fef55517e589a67e69c761f7a46ada75aa0877"
+      },
+      {
+        "path": "android-app/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png",
+        "sha256": "59a3f21b5c97abcbbe6cad9dcaaa09717b11dd486149326937b12124d1d71f91"
+      },
+      {
+        "path": "android-app/app/src/main/res/mipmap-xxhdpi/ic_launcher.png",
+        "sha256": "39714d732cd938268f82cfd47861334e7d06a30371d0ca2495c577bdde51095d"
+      },
+      {
+        "path": "android-app/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png",
+        "sha256": "bf809a7a227ecd2d21fc318e33ea5ff7ffd3461d3aefa2bb903e2b5b7f9275e7"
+      },
+      {
+        "path": "android-app/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
+        "sha256": "bc2d27d3d46d368d3c45056ee147becc7c941dfcca1f6a482bf30f4d629c6b22"
+      },
+      {
+        "path": "android-app/app/src/main/res/values/launcher_colors.xml",
+        "sha256": "fc11a9297f9eb0ca03cbcff821c29589d6b29a357be69360f08fb48a29905ea5"
+      },
+      {
+        "path": "android-app/app/src/main/res/values/styles.xml",
+        "sha256": "68ab5102072d549476bc80379f388cad66a1d93892ee5684bdca49957bde6682"
+      },
+      {
+        "path": "android-app/app/src/main/res/xml/data_extraction_rules.xml",
+        "sha256": "528631bcd640996b4a43c1d68bf6912a7380e64e427641133295942e28586002"
+      },
+      {
+        "path": "android-app/app/src/main/res/xml/file_paths.xml",
+        "sha256": "fa65d66a5515b664db6e181654d16228ffa67e2a8bcc610114ed5458023f301b"
+      },
+      {
+        "path": "android-app/app/src/main/res/xml/network_security_config.xml",
+        "sha256": "7bd91344689d618bf440dd803fef5d1c05dfbd1b12ea27379625b3388aee1846"
+      },
+      {
+        "path": "android-app/build.gradle",
+        "sha256": "048ecfefe09971849fc8c9326de9d0e8af7e50e371aed980e2e1617124bb969f"
+      },
+      {
+        "path": "android-app/settings.gradle",
+        "sha256": "e39c07ba92712508f046cce96b369f0283406018baf6e74c9fd03343a8bb8b7a"
+      }
+    ]
+  },
+  "windows": {
+    "version": "0.3.5",
+    "platform": "win-x64",
+    "path": "/downloads/DIANA-PC-0.3.5-win-x64.zip",
+    "bytes": 59418984,
+    "sha256": "00dec6b5561bdf5e2c7d71148c0c4eee70184d947770b1629c28ddf05fd96d7c"
+  }
+}

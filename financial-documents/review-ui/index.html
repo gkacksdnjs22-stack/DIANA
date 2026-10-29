@@ -33,6 +33,12 @@
     <div class="heading"><div><div class="eyebrow">YOUR PC, YOUR DOCUMENTS</div><h1>문서와 작업을 연결하세요.</h1><p>문서는 이 PC에 등록하고, 휴대폰에는 작업 목록만 표시해요.</p></div><button id="review-open" class="secondary registration-back">검토 화면으로</button></div>
     <div class="registration-status"><span id="catalog-published">등록 정보를 확인하고 있어요.</span><button id="catalog-refresh" class="text-button">새로고침</button></div>
     <p id="registration-message" role="status" aria-live="polite"></p>
+    <section class="registration-panel automatic-panel"><div class="section-intro"><div class="eyebrow">QUICK CONNECT · PC ONLY</div><h2>폴더에서 알아서 연결</h2><p>폴더를 한 번 허용하면 원문·근거·지침 후보를 찾아 연결해요. 확실하지 않은 부분만 선택해 주세요.</p></div>
+      <div class="registration-form"><div class="automatic-folder-row"><button id="automatic-pick" class="registration-primary">폴더 허용하고 자동 찾기</button><select id="automatic-folder" aria-label="허용한 PC 폴더"></select><button id="automatic-scan" class="secondary registration-back">이 폴더에서 자동 찾기</button></div><p id="automatic-summary" class="registration-hint">선택한 폴더의 TXT·MD·JSON만 이 PC에서 확인해요.</p>
+        <div id="automatic-result" hidden><label for="automatic-guide">찾은 검토 지침</label><select id="automatic-guide"></select><div id="automatic-matches" class="automatic-matches"></div><div class="field-pair"><div><label for="automatic-label">휴대폰에 표시할 작업 이름</label><input id="automatic-label" maxlength="40" value="폴더 문서 검토"></div><div class="automatic-patch"><label><input id="automatic-allow-patch" type="checkbox" checked>근거 있는 보완 항목도 자동 선택</label><small>PC 검증을 통과한 항목만 보완 작업에 넣어요.</small></div></div><button id="automatic-connect" class="registration-primary">이 연결로 작업 등록</button><p class="registration-hint">검토·변환과 MD·TXT·JSON 형식으로 등록해요. 보완 가능한 항목이 있으면 보완도 추가해요. 문서 내용과 파일 경로는 PC에만 남아요.</p></div>
+      </div>
+    </section>
+    <details class="manual-registration"><summary>파일을 직접 골라서 등록하기</summary>
     <div class="registration-grid">
       <section class="registration-panel"><div class="section-intro"><div class="eyebrow">01 · PC DOCUMENTS</div><h2>문서 등록</h2><p>선택한 파일을 PC 전용 폴더에 복사해요. 원본 파일은 수정하지 않아요.</p></div>
         <form id="register-document" class="registration-form">
@@ -56,6 +62,7 @@
         </form>
       </section>
     </div>
+    </details>
     <section class="registration-panel registration-catalog"><div class="section-intro"><h2>이 PC의 등록 문서</h2><p>파일 이름과 문서 코드는 PC 화면에서만 확인해요.</p></div><div id="registration-documents"></div></section>
     <section class="registration-panel registration-catalog"><div class="section-intro"><h2>모바일에 표시할 작업</h2><p>검토·승인 중에는 문서와 작업을 새로 등록할 수 없어요. 작업을 마친 뒤 등록해 주세요.</p></div><div id="registration-tasks"></div></section>
   </section>

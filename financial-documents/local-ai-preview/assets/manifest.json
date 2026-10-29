@@ -1,0 +1,36 @@
+{
+  "model": "section28-Byte-20261031-update1100",
+  "original": ".local/financial-review-utf8-input/a9e32f82-990a-4607-bafd-bacb995a957e/20261031/Byte",
+  "baseline_source_sha256": "8c99d34ce3d6025767a248519d96bd72e5d387b9e27d7642d711c28e9ee814eb",
+  "byte_source_sha256": "5f765c0bd86cd88cb2be4d8a5e1c245d316bb10040586b360d9340fa77bf90d1",
+  "files": [
+    {
+      "path": "inference.py",
+      "sha256": "70f8580f871300c7e1681c98759a67dc88d21ba50fa452d293e2e743d8b4a543"
+    },
+    {
+      "path": "runtime/model.py",
+      "sha256": "8c99d34ce3d6025767a248519d96bd72e5d387b9e27d7642d711c28e9ee814eb"
+    },
+    {
+      "path": "runtime/byte_encoding.py",
+      "sha256": "c0bbfc16e7ef7c4a89ced5ad7e7116f4698fdc85b1060ac25810acb2a14dfd47"
+    },
+    {
+      "path": "assets/char-vocab.json",
+      "sha256": "b6a52d91b937011d3d703b47aee961fb213838afe4393cfcad3c1e5a77c1424b"
+    },
+    {
+      "path": "assets/vocab.json",
+      "sha256": "cc88546e23e763642f147ace1a462bb47eb34cb9c1fb8ebe0a708e29a45c7af6"
+    },
+    {
+      "path": "assets/model-config.json",
+      "sha256": "c9f217c9df942448631ed05c2e78ecd707a7faa7a7b7afd1524754c4d5fed5a0"
+    },
+    {
+      "path": "assets/final-update1100.npz",
+      "sha256": "1e0dbcb7777f05d49d8c142930679edecd6458f553a73c20ba8d24ef5a6823a2"
+    }
+  ]
+}

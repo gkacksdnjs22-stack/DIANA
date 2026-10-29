@@ -37,7 +37,7 @@ public final class FinanceUiRefreshTest {
         new SecureStore(context).save(session);
         scenario=ActivityScenario.launch(MainActivity.class);
         scenario.onActivity(activity->{try{
-            field("selectedTab").setInt(activity,5);
+            field("selectedTab").setInt(activity,2);
             method("draw").invoke(activity);
             apply(activity,data("2026-10-28T02:00:00Z","QUEUED",false));
         }catch(Exception error){throw new AssertionError(error);}});
@@ -66,6 +66,45 @@ public final class FinanceUiRefreshTest {
             assertTrue(((TextView)((android.view.ViewGroup)job).getChildAt(1)).getText().toString().contains("저장"));
             assertTrue(((TextView)((android.view.ViewGroup)job).getChildAt(3)).getText().toString().contains("PC 저장 확인: 완료"));
             assertEquals(position,scroll.getScrollY());
+        }catch(Exception error){throw new AssertionError(error);}});
+    }
+    @Test public void unifiedRequestMenuHasNoSeparateFinanceEntry(){
+        scenario.onActivity(activity->{try{
+            View anchor=activity.findViewById(android.R.id.content).findViewWithTag("menu_toggle");
+            assertNotNull(anchor);method("showMenu",View.class).invoke(activity,anchor);
+            android.widget.PopupWindow popup=(android.widget.PopupWindow)field("menuPopup").get(activity);
+            assertNotNull(popup);assertTrue(popup.isShowing());
+            View menu=popup.getContentView();
+            for(String tag:new String[]{"menu_home","menu_files","menu_pc_sync","menu_recent","menu_settings"})assertNotNull(menu.findViewWithTag(tag));
+            assertNull(menu.findViewWithTag("menu_finance"));
+            popup.dismiss();
+            for(String heading:new String[]{"지금 사용할 수 있는 작업","등록 문서 검토"}){
+                java.util.ArrayList<View> matches=new java.util.ArrayList<>();
+                activity.findViewById(android.R.id.content).findViewsWithText(matches,heading,View.FIND_VIEWS_WITH_TEXT);
+                matches.removeIf(view->!(view instanceof TextView)||!heading.contentEquals(((TextView)view).getText()));
+                assertEquals(1,matches.size());
+                assertTrue("Request heading must not collapse into a vertical column",((TextView)matches.get(0)).getLineCount()<=2);
+            }
+        }catch(Exception error){throw new AssertionError(error);}});
+    }
+    @Test public void conversationDraftSurvivesRecreationWithoutCreatingARequest()throws Exception{
+        String request="가상 검토서를 실사 자료와 지침으로 검토해 줘 🔎";
+        scenario.onActivity(activity->{try{
+            View content=activity.findViewById(android.R.id.content);
+            android.widget.EditText input=content.findViewWithTag("pc_chat_input");
+            assertNotNull(input);assertFalse(content.findViewWithTag("pc_chat_send").isEnabled());
+            input.setText(request);content.findViewWithTag("pc_chat_keep").performClick();
+            assertEquals(request,activity.getPreferences(0).getString(PcChatDraft.preferenceKey(session.getString("baseUrl"),session.getString("phoneId")),""));
+            assertNull(PcRequests.load(activity));assertNull(FinanceRequests.pending(activity));
+            assertTrue(((TextView)content.findViewWithTag("pc_chat_notice")).getText().toString().contains("PC에 전송하거나 작업을 실행하지 않았어요"));
+            for(int i=0;i<5;i++)apply(activity,data("2026-10-28T03:00:00Z","QUEUED",false));
+            assertSame(input,activity.findViewById(android.R.id.content).findViewWithTag("pc_chat_input"));
+        }catch(Exception error){throw new AssertionError(error);}});
+        scenario.recreate();
+        scenario.onActivity(activity->{try{
+            android.widget.EditText input=activity.findViewById(android.R.id.content).findViewWithTag("pc_chat_input");
+            assertNotNull(input);assertEquals(request,input.getText().toString());
+            assertNull(PcRequests.load(activity));assertNull(FinanceRequests.pending(activity));
         }catch(Exception error){throw new AssertionError(error);}});
     }
     @Test public void catalogChangesReuseExistingRowsAndRemoveOnlyMissingItems(){

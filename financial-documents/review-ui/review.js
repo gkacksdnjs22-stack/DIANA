@@ -1,6 +1,7 @@
 'use strict';
 import {recheckView} from './recheck-view.mjs';
 import {mountRegistration} from './registration.mjs';
+import {mountRequestRecords} from './request-records.mjs';
 (()=>{
  const $=id=>document.getElementById(id);
  const fragment=new URLSearchParams(location.hash.slice(1)),key=fragment.get('view')||sessionStorage.getItem('diana-local-view')||'';
@@ -16,6 +17,7 @@ import {mountRegistration} from './registration.mjs';
  const time=value=>{const d=new Date(value);return Number.isNaN(d.getTime())?'':d.toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});};
  function connection(available){$('connection').classList.toggle('online',available&&data.connection.connected===true);$('connection').lastElementChild.textContent=available?(data.connection.connected?'PC 연결됨':'서버 연결 확인 필요'):'로컬 화면 연결 끊김';}
  function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,3000);}
+ const recording=mountRequestRecords({key,getCurrent:()=>current()});
  const registration=mountRegistration({key,toast});$('jobs').addEventListener('click',registration.close);
  async function copy(text,message='복사했어요. PC 콘솔에 붙여넣어 주세요.'){try{await navigator.clipboard.writeText(text);toast(message);}catch{toast('복사 권한이 없어요. 화면의 텍스트를 직접 선택해 복사해 주세요.');}}
  function renderList(){
@@ -68,7 +70,7 @@ import {mountRegistration} from './registration.mjs';
  $('copy-path').addEventListener('click',()=>void copy(current()?.result?.outputFile||'','PC 저장 경로를 복사했어요.'));
  async function poll(){
   if(pending)return;pending=true;
-  try{if(!/^[a-f0-9]{64}$/.test(key))throw Error('SESSION_REQUIRED');const response=await fetch('/api/view',{headers:{Authorization:'Bearer '+key},cache:'no-store',signal:AbortSignal.timeout(5000)});if(!response.ok)throw Error('LOCAL_VIEW_UNAVAILABLE');data=await response.json();registration.setAvailable(data.capabilities?.registration===true);localAvailable=true;connection(true);const next=JSON.stringify(data.jobs);if(next!==signature){signature=next;if(data.jobs[0]?.job?.id!==lastNewest){lastNewest=data.jobs[0]?.job?.id;selected=lastNewest;sourceId=null;tab(data.jobs[0]?.result?.historical?'result':'diff');}renderList();render();}renderApproval();}
+  try{if(!/^[a-f0-9]{64}$/.test(key))throw Error('SESSION_REQUIRED');const response=await fetch('/api/view',{headers:{Authorization:'Bearer '+key},cache:'no-store',signal:AbortSignal.timeout(5000)});if(!response.ok)throw Error('LOCAL_VIEW_UNAVAILABLE');data=await response.json();registration.setAvailable(data.capabilities?.registration===true);recording.setAvailable(data.capabilities?.requestRecords===true);localAvailable=true;connection(true);const next=JSON.stringify(data.jobs);if(next!==signature){signature=next;if(data.jobs[0]?.job?.id!==lastNewest){lastNewest=data.jobs[0]?.job?.id;selected=lastNewest;sourceId=null;tab(data.jobs[0]?.result?.historical?'result':'diff');}renderList();render();}renderApproval();}
   catch{localAvailable=false;data.connection.connected=false;connection(false);renderApproval();if(!key)$('session-help').textContent='PC 콘솔에 표시된 검토 화면 주소로 열어 주세요.';}
   finally{pending=false;}
  }

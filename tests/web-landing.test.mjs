@@ -26,7 +26,7 @@ test('public home assets and APK work without a token; page links have real targ
   assert.match(html, /<title>DIANA/);
   assert.doesNotMatch(html, /<script|<form|id="token"/);
   const paths = [...new Set([...html.matchAll(/(?:href|src)="(\/[^"]*)"/g)].map(match => match[1]))];
-  for (const path of paths) assert.equal((await fetch(url + path)).status, 200, path);
+  for (const path of paths) { const asset = await fetch(url + path); assert.equal(asset.status, 200, path); await asset.body?.cancel(); }
   for (const [, id] of html.matchAll(/href="#([^"]+)"/g)) assert(html.includes(`id="${id}"`), `missing anchor: ${id}`);
   const jobs = await fetch(url + '/api/jobs', { headers: { Authorization: `Bearer ${owner}` } });
   assert.equal(jobs.status, 200);
@@ -68,4 +68,22 @@ test('public downloads do not expose protected jobs, settings, or arbitrary loca
   }
   const health = await fetch(url + '/api/health');
   assert.deepEqual(await health.json(), { ok: true, persistence: 'sqlite-local' });
+});
+
+test('Windows ZIP streams exact verified bytes and HEAD metadata without a PC job', async t => {
+  const { url } = await fixture(t);
+  const releases = await (await fetch(url + '/downloads/releases.json')).json();
+  const { path, sha256, bytes } = releases.windows;
+  const head = await fetch(url + path, { method: 'HEAD' });
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get('content-type'), 'application/zip');
+  assert.equal(head.headers.get('content-disposition'), 'attachment; filename="DIANA-PC-0.3.5-win-x64.zip"');
+  assert.equal(head.headers.get('content-length'), String(bytes));
+  assert.equal((await head.arrayBuffer()).byteLength, 0);
+  const download = await fetch(url + path);
+  const digest = createHash('sha256'); let length = 0;
+  for await (const chunk of download.body) { digest.update(chunk); length += chunk.length; }
+  assert.equal(length, bytes); assert.equal(digest.digest('hex'), sha256);
+  const abandoned = await fetch(url + path); await abandoned.body.cancel();
+  assert.equal((await fetch(url + '/api/health')).status, 200);
 });

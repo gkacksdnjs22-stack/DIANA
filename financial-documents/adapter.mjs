@@ -76,6 +76,48 @@ export class FinancialDocuments {
       .map(d => ({ id: d.id, version: d.version, classification: d.classification }));
   }
 
+  #reviewSelection(input) {
+    const s=explicitOperation(input);
+    if(s.action!=='checklist_review'||s.item_ids.length||!s.source_ids.length||
+      new Set([s.target_doc,...s.source_ids,s.guideline_id]).size!==s.source_ids.length+2)fail('INVALID_REVIEW_SELECTION');
+    // Stable, public operation shape: no natural-language command, path or plan.
+    return{action:s.action,target_doc:s.target_doc,source_ids:s.source_ids,guideline_id:s.guideline_id,item_ids:[],format:s.format};
+  }
+  #reviewSnapshot(selection,payload) {
+    const bindings=[payload.review_doc,...payload.source_docs,payload.guideline].map(({id,version,hash,classification,format})=>({id,version,hash,classification,format}));
+    const metadata={selection,bindings,policy_hash:this.#configHash};
+    return{...metadata,input_hash:digest(JSON.stringify(metadata))};
+  }
+  /** Read trusted current inputs without preparing, cancelling, auditing or
+   * publishing an approval plan. The returned hashes are for PC reconfirmation. */
+  async inspectExplicitReview(input) {
+    const selection=this.#reviewSelection(input),payload=await this.#payload(selection,randomUUID());
+    return clone(this.#reviewSnapshot(selection,payload));
+  }
+  /** Same adapter, read-only checklist core call. Unlike prepare(), this never
+   * mutates pending plans/tokens/receipts or writes to the business output root. */
+  async reviewExplicit(input,expectedSnapshot,{requestId=randomUUID()}={}) {
+    if(!validId(requestId))fail('INVALID_REQUEST_ID');
+    const selection=this.#reviewSelection(input),expected=clone(expectedSnapshot);
+    keys(expected,['selection','bindings','policy_hash','input_hash']);
+    if(!HASH.test(expected.input_hash)||!HASH.test(expected.policy_hash))fail('INVALID_REVIEW_SNAPSHOT');
+    const payload=await this.#payload(selection,requestId),snapshot=this.#reviewSnapshot(selection,payload);
+    if(snapshot.input_hash!==expected.input_hash)fail('CONTENT_CHANGED');
+    const plan=await callCore(this.#python,payload);
+    const fresh=await this.#payload(selection,requestId);
+    if(this.#reviewSnapshot(selection,fresh).input_hash!==snapshot.input_hash)fail('CONTENT_CHANGED');
+    assertCompletedCoreReview(plan,requestId);this.#integrity(plan);
+    const result={status:plan.status,reason:plan.reason,reviewComplete:plan.review_complete,
+      items:plan.items,unresolved:plan.unresolved,body:plan.expected_body,
+      documents:[payload.review_doc,...payload.source_docs,payload.guideline].map(({id,version,classification,format,content})=>({id,version,classification,format,content})),
+      checkedAt:new Date().toISOString(),saved:false};
+    // Leave room for execution metadata inside the separate 2 MB record.
+    // Check the whole sanitized UTF-8 result; never truncate evidence or return
+    // a successful review that the local history cannot persist and reopen.
+    if(Buffer.byteLength(JSON.stringify(result),'utf8')>1_500_000)fail('LOCAL_REVIEW_RESULT_TOO_LARGE');
+    return clone(result);
+  }
+
   async #readSaved(requestId, selection) {
     if(!validId(requestId)||!['patch','convert'].includes(selection.action))fail('NO_SAVED_RESULT');
     await this.#current(false,[selection.target_doc,...selection.source_ids,selection.guideline_id]);
