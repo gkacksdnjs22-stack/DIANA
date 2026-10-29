@@ -14,7 +14,7 @@ using System.Windows.Forms;
 
 [assembly: System.Reflection.AssemblyTitle("DIANA PC")]
 [assembly: System.Reflection.AssemblyProduct("DIANA PC Financial Review")]
-[assembly: System.Reflection.AssemblyVersion("0.2.1.0")]
+[assembly: System.Reflection.AssemblyVersion("0.3.6.0")]
 
 namespace Diana.Desktop {
     public sealed class Settings {
@@ -300,3 +300,4 @@ namespace Diana.Desktop {
         }
     }
 }
+

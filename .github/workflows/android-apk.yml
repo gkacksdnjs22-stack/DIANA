@@ -124,19 +124,32 @@ jobs:
           fi
           adb shell svc wifi disable
           adb shell svc data disable
+          # Reflection-only tests do not generate user activity. Keep this
+          # disposable emulator awake and reset windows between test runners.
+          adb shell svc power stayon true
+          adb shell settings put system screen_off_timeout 1800000
+          prepare_ui() {
+            adb shell input keyevent KEYCODE_WAKEUP
+            adb shell wm dismiss-keyguard
+            adb shell am force-stop kr.nightdesk.phone
+            adb shell input keyevent KEYCODE_HOME
+          }
           adb install -r android-app/app/build/outputs/apk/debug/app-debug.apk
           adb install -r android-app/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
           adb shell pm grant kr.nightdesk.phone android.permission.POST_NOTIFICATIONS
           adb shell wm size 1080x2160
           adb shell wm density 440
           adb shell settings put system font_scale 1.0
+          prepare_ui
           adb shell am instrument -w -r -e class kr.nightdesk.phone.FinanceUiRefreshTest kr.nightdesk.phone.test/androidx.test.runner.AndroidJUnitRunner | tee android-app/app/build/ui-verification/finance-refresh-test.txt
           grep -Eq 'OK \([1-9][0-9]* tests?\)' android-app/app/build/ui-verification/finance-refresh-test.txt
+          prepare_ui
           adb shell am instrument -w -r -e class kr.nightdesk.phone.MobileUiScreenshotTest -e screenshotPrefix phone-100 kr.nightdesk.phone.test/androidx.test.runner.AndroidJUnitRunner | tee android-app/app/build/ui-verification/phone-100-test.txt
           grep -Eq 'OK \([1-9][0-9]* tests?\)' android-app/app/build/ui-verification/phone-100-test.txt
           adb shell wm size 720x1440
           adb shell wm density 320
           adb shell settings put system font_scale 1.3
+          prepare_ui
           adb shell am instrument -w -r -e class kr.nightdesk.phone.MobileUiScreenshotTest -e screenshotPrefix compact-130 kr.nightdesk.phone.test/androidx.test.runner.AndroidJUnitRunner | tee android-app/app/build/ui-verification/compact-130-test.txt
           grep -Eq 'OK \([1-9][0-9]* tests?\)' android-app/app/build/ui-verification/compact-130-test.txt
           adb pull /sdcard/Android/data/kr.nightdesk.phone/files/ui-screenshots android-app/app/build/ui-verification/

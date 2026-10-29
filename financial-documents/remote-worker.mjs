@@ -97,6 +97,41 @@ export class FinancialWorker {
   }
   serial(action) { const p = this.#chain.then(action); this.#chain = p.catch(() => {}); return p; }
   registrationBase(){return structuredClone({configPath:this.#configPath,configHash:this.#configHash,config:this.#config,core:this.#coreConfig,coreHash:this.#coreHash,documentRoot:this.#documentRoot});}
+  // Read-only recording boundary. No preparation, cancellation, approval or relay.
+  async withRecordingContext(action){return this.serial(async()=>{
+    if(this.#closing)fail('DESKTOP_STOPPING');
+    if(!await this.#policyCurrent())fail('LOCAL_POLICY_CHANGED');
+    const result=await action({allowed:await this.#adapter.candidates(),config:structuredClone(this.#config),core:structuredClone(this.#coreConfig)});
+    if(!await this.#policyCurrent())fail('LOCAL_POLICY_CHANGED');
+    return result;
+  });}
+  /** Explicit PC-only checklist review under the existing owner and serial
+   * queue. Do not reuse withRegistration/prepare: both can cancel pending work. */
+  async withLocalReview(action){return this.serial(async()=>{
+    const ready=async()=>{
+      if(this.#closing)fail('DESKTOP_STOPPING');
+      if(!this.#lock)fail('WORKER_LOCK_UNCERTAIN');
+      if(!await this.#policyCurrent())fail('LOCAL_POLICY_CHANGED');
+      const a=this.#active;
+      if(a&&(!FINANCE_FINAL.has(a.job.state)||a.outbox||a.noJournal||a.job.state==='UNCERTAIN'||
+        !['finished','terminal'].includes(a.phase)))fail('LOCAL_REVIEW_BUSY');
+      await checkedDirectory(this.#stateRoot);
+      if(await realpath(this.#config.stateDir)!==this.#stateRoot)fail('FINANCE_STATE_OVERLAP');
+    };
+    await ready();
+    const context={allowed:await this.#adapter.candidates(),config:structuredClone(this.#config),core:structuredClone(this.#coreConfig)};
+    return action({context,
+      inspect:async input=>{await ready();return this.#adapter.inspectExplicitReview(input);},
+      run:async(input,snapshot,requestId)=>{
+        await ready();
+        const result=await this.#adapter.reviewExplicit(input,snapshot,{requestId});
+        if(!await this.#policyCurrent())fail('LOCAL_POLICY_CHANGED');
+        // close() drains this serial transaction; it never interrupts a core
+        // result already in flight or releases the worker lock prematurely.
+        return result;
+      }
+    });
+  });}
   /** PC registrar only. No browser-supplied path reaches this method. Preserve
    * the worker lease/identity and every existing task, role and document. */
   async withRegistration(action){return this.serial(async()=>{

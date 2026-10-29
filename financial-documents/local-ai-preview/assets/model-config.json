@@ -1,0 +1,6 @@
+{
+  "embedding": 24,
+  "hidden": 32,
+  "global_hidden": 64,
+  "pair_hidden": 48
+}
