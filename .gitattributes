@@ -1,0 +1,17 @@
+# Keep release input hashes stable in Windows and Linux checkouts.
+android-app/** text eol=lf
+financial-desktop/** text eol=lf
+financial-documents/** text eol=lf
+financial_core/** text eol=lf
+experiments/financial-review/contract.mjs text eol=lf
+experiments/financial-review/evaluation-intake-v1/*.mjs text eol=lf
+local-ai/files.mjs text eol=lf
+local-ai/provider.mjs text eol=lf
+personal-ai/documents/files.mjs text eol=lf
+lib/financial-contract.mjs text eol=lf
+scripts/build-financial-desktop.mjs text eol=lf
+scripts/init-financial-mobile-demo.mjs text eol=lf
+*.png -text
+*.npz -text
+*.apk -text
+*.zip -text
