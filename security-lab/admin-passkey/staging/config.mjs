@@ -1,3 +1,4 @@
+import {isIP} from 'node:net';
 export const STAGE_DATABASE='diana_admin_stage';
 export const STAGE_SCHEMA='diana_admin_stage_v1';
 export function stageConfig(env) {
@@ -13,5 +14,7 @@ export function stageConfig(env) {
   const bootstrapHash=env.ADMIN_BOOTSTRAP_SHA256||'';
   if(!/^[a-f0-9]{64}$/.test(bootstrapHash))throw Error('STAGE_BOOTSTRAP_HASH_REQUIRED');
   const port=Number(env.PORT||10000);if(!Number.isInteger(port)||port<1024||port>65535)throw Error('STAGE_PORT_INVALID');
-  return {origin:origin.origin,rpID:origin.hostname,databaseUrl:database.href,privateNetwork,expectedDatabase:STAGE_DATABASE,bootstrapHash,port,androidRedirect:'kr.nightdesk.phone.lab.passkey.stage://oauth2/callback'};
+  const trustedProxyIPs=env.ADMIN_TRUSTED_PROXY_IPS?env.ADMIN_TRUSTED_PROXY_IPS.split(',').map(x=>x.trim()):[];
+  if(trustedProxyIPs.length>32||trustedProxyIPs.some(ip=>!isIP(ip)))throw Error('TRUSTED_PROXY_IPS_INVALID');
+  return {origin:origin.origin,rpID:origin.hostname,databaseUrl:database.href,privateNetwork,expectedDatabase:STAGE_DATABASE,bootstrapHash,port,trustedProxyIPs,androidRedirect:'kr.nightdesk.phone.lab.passkey.stage://oauth2/callback'};
 }

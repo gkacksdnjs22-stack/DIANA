@@ -7,10 +7,11 @@ import {stageConfig} from './config.mjs';
 import {openPostgresStore} from './store.mjs';
 import {StagingAdminAuth} from './auth.mjs';
 import {StagingNativeAuthorization} from './native.mjs';
+import {StagingRateLimits,sourceResolver} from './rate-limit.mjs';
 const hash=x=>createHash('sha256').update(String(x||'')).digest('hex');
 export function createStagingServer(auth,config){
   const native=new StagingNativeAuthorization(auth,config.androidRedirect);
-  let requests=0,windowStart=Date.now();
+  const limits=new StagingRateLimits(),source=sourceResolver(config.trustedProxyIPs);
   const assets=new Map([
     ['/', ['index.html','text/html']],['/app.js',['app.js','text/javascript']],
     ['/native.html',['../ui/native.html','text/html']],['/native.js',['../ui/native.js','text/javascript']],
@@ -23,7 +24,11 @@ export function createStagingServer(auth,config){
         const metadata=await auth.get('SELECT version FROM staging_metadata WHERE id=1');return send(metadata?.version===1?200:503,{service:'diana-admin-passkey-stage',database:metadata?.version===1?'ready':'unavailable'});
       }
       if(req.headers.host!==new URL(config.origin).host||req.headers['x-forwarded-proto']!=='https')return send(403,{code:'DENIED'});
-      if(Date.now()-windowStart>60000){requests=0;windowStart=Date.now();}if(++requests>120)return send(429,{code:'LIMIT'});
+      const raw=/^Bearer ([A-Za-z0-9_-]{43})$/.exec(req.headers.authorization||'')?.[1];
+      const session=raw?await auth.session(raw).catch(()=>null):null;
+      const lane=session?'administrator':req.method==='GET'&&!req.url.startsWith('/authorize?')?'read':'anonymous';
+      // Only a DB-verified session can use the account lane. All that account's sessions share it.
+      if(!limits.allow(lane,session?session.user_id:source(req)))return send(429,{code:'LIMIT'});
       if(req.method==='GET'&&req.url.startsWith('/authorize?')){
         const params=new URL(req.url,config.origin).searchParams;if([...params.keys()].some(k=>params.getAll(k).length!==1))throw Error();
         const id=await native.begin(Object.fromEntries(params));await auth.audit('native/authorize',true);
@@ -35,7 +40,6 @@ export function createStagingServer(auth,config){
       if(req.method!=='POST'||!req.url.startsWith('/api/')||((!tokenRoute&&!statusRoute||req.headers.origin)&&req.headers.origin!==config.origin)||!/^application\/json(?:;\s*charset=utf-8)?$/i.test(req.headers['content-type']||''))return send(403,{code:'DENIED'});
       const chunks=[];let size=0;for await(const b of req){size+=b.length;if(size>32768)throw Error();chunks.push(b);}
       const body=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks)));if(!body||typeof body!=='object'||Array.isArray(body))throw Error();
-      const raw=/^Bearer ([A-Za-z0-9_-]{43})$/.exec(req.headers.authorization||'')?.[1];
       if(req.url==='/api/stage/bootstrap'){
         const result=await auth.tx(async()=>{
           const metadata=await auth.get('SELECT bootstrap_hash,bootstrap_expires FROM staging_metadata WHERE id=1');

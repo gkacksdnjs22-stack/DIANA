@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomBytes,createHash} from 'node:crypto';
 import {resolve} from 'node:path';
-import {mkdir} from 'node:fs/promises';
+import {mkdir,mkdtemp,open,readFile,writeFile,stat} from 'node:fs/promises';
 import {pgliteStore} from './test-support.mjs';
 import {StagingAdminAuth} from './auth.mjs';
 import {StagingNativeAuthorization,pkce} from './native.mjs';
@@ -11,6 +11,8 @@ import {stageConfig} from './config.mjs';
 import {prepareSQL} from './store.mjs';
 import {createStagingServer} from './server.mjs';
 import {request} from 'node:http';
+import {recoverToFile} from './recovery-file.mjs';
+import {StagingRateLimits,sourceResolver} from './rate-limit.mjs';
 const origin='https://diana-admin-passkey-stage.onrender.com',rpID=new URL(origin).hostname,redirect='kr.nightdesk.phone.lab.passkey.stage://oauth2/callback';
 const random=()=>randomBytes(32).toString('base64url');
 async function setup(t){let now=Date.now();const store=await pgliteStore();t.after(()=>store.close());const auth=new StagingAdminAuth({store,origin,rpID,now:()=>now});
@@ -58,6 +60,7 @@ test('staging config requires explicit HTTPS origin, matching RP ID and dedicate
   assert.throws(()=>stageConfig({...env,RENDER:'true',ADMIN_DATABASE_TRANSPORT:'render-private'}));
   assert.throws(()=>stageConfig({...env,ADMIN_DATABASE_TRANSPORT:'insecure'}));
   assert.equal(stageConfig({...env,RENDER:'true',ADMIN_DATABASE_TRANSPORT:'render-private',ADMIN_DATABASE_URL:'postgres://stage:fake@dpg-dbk9huuc6qcc73duefng-a/diana_admin_stage'}).privateNetwork,true);
+  assert.throws(()=>stageConfig({...env,ADMIN_TRUSTED_PROXY_IPS:'*'}));
 });
 test('HTTPS proxy, Host, Origin and initial administrator capability are enforced over HTTP',async t=>{
   const token=random(),bootstrapHash=createHash('sha256').update(token).digest('hex'),store=await pgliteStore({bootstrapHash}),auth=new StagingAdminAuth({store,origin,rpID});
@@ -79,4 +82,84 @@ test('HTTPS proxy, Host, Origin and initial administrator capability are enforce
   const persisted=await(await post('stage/persistence',{},headers)).json();assert.equal(persisted.instance.length,32);
   const audit=JSON.stringify(await store.all('SELECT * FROM audit'));assert.ok(!audit.includes(token));assert.ok(!audit.includes(login.sessionToken));assert.ok(!audit.includes(ticket));
   assert.equal((await post('recover',{token})).status,403);
+});
+
+test('recovery output reservation and write/sync/close failures preserve every recovery code, key and session',async t=>{
+  const f=await setup(t),codes=(await f.call('recovery/codes',{grant:await f.grant('recovery')},f.session)).recoveryCodes;
+  const dir=await mkdtemp(resolve(import.meta.dirname,'../generated/recovery-file-')),existing=resolve(dir,'existing.json');await writeFile(existing,'keep existing file');
+  const input={userId:f.owner.userId,recoveryCode:codes[0],outputPath:existing};
+  const unchanged=async()=>{
+    assert.equal((await f.store.get('SELECT COUNT(*) n FROM recovery WHERE user_id=?',f.owner.userId)).n,2);
+    assert.equal((await f.store.get("SELECT COUNT(*) n FROM credentials WHERE user_id=? AND state='active'",f.owner.userId)).n,1);
+    assert.equal((await f.auth.session(f.session)).role,'owner');
+    assert.equal((await f.store.get("SELECT COUNT(*) n FROM tickets WHERE kind='recovery'")).n,0);
+  };
+  await assert.rejects(recoverToFile(f.auth,input),{code:'EEXIST'});await unchanged();assert.equal(await readFile(existing,'utf8'),'keep existing file');
+  await assert.rejects(recoverToFile(f.auth,{...input,outputPath:resolve(dir,'missing','ticket.json')}),{code:'ENOENT'});await unchanged();
+  await assert.rejects(recoverToFile(f.auth,input,{openFile:async()=>{throw Object.assign(Error('permission denied'),{code:'EACCES'});}}),{code:'EACCES'});await unchanged();
+  for(const [index,failed]of ['writeFile','sync','close'].entries()){
+    const outputPath=resolve(dir,failed+'.json');let closed=false;
+    const openFile=async(...args)=>{const file=await open(...args);return{
+      async writeFile(data,encoding){if(failed==='writeFile'){await file.writeFile(data.slice(0,12),encoding);throw Object.assign(Error('disk full'),{code:'ENOSPC'});}return file.writeFile(data,encoding);},
+      async sync(){if(failed==='sync')throw Error('SYNC_FAILED');return file.sync();},
+      async close(){await file.close();closed=true;if(failed==='close')throw Error('CLOSE_FAILED');}
+    };};
+    await assert.rejects(recoverToFile(f.auth,{...input,recoveryCode:codes[index%2],outputPath},{openFile}));assert.equal(closed,true);
+    await assert.rejects(stat(outputPath),{code:'ENOENT'});await unchanged();
+  }
+  const outputPath=resolve(dir,'success.json'),result=await recoverToFile(f.auth,{...input,outputPath});assert.deepEqual(JSON.parse(await readFile(outputPath,'utf8')),result);
+  assert.equal((await f.store.get('SELECT COUNT(*) n FROM recovery WHERE user_id=?',f.owner.userId)).n,1);await assert.rejects(f.auth.session(f.session));await assert.rejects(f.login(f.owner.key));
+  const restored=await f.enroll(result.enrollmentTicket);assert.equal((await f.auth.session((await f.login(restored.key)).sessionToken)).role,'owner');
+  await assert.rejects(f.auth.recoverOffline(f.owner.userId,codes[0]));
+});
+
+test('source limits isolate callers, verified accounts and request classes with bounded expiry',()=>{
+  let now=100000;const limits=new StagingRateLimits({now:()=>now,maxSources:2});
+  for(let i=0;i<120;i++)assert.equal(limits.allow('read','source-a'),true);
+  assert.equal(limits.allow('read','source-a'),false);assert.equal(limits.allow('read','source-b'),true);
+  assert.equal(limits.allow('anonymous','source-a'),true);assert.equal(limits.allow('administrator','owner-a'),true);
+  for(let i=0;i<29;i++)assert.equal(limits.allow('anonymous','source-a'),true);
+  assert.equal(limits.allow('anonymous','source-a'),false);assert.equal(limits.allow('anonymous','source-b'),true);
+  assert.equal(limits.allow('read','source-c'),false);assert.equal(limits.allow('administrator','owner-b'),true);
+  now+=60000;assert.equal(limits.allow('read','source-c'),true);assert.equal(limits.allow('anonymous','source-a'),true);
+});
+
+test('source identity ignores forged forwarding headers unless every skipped proxy is explicitly trusted',()=>{
+  const req=(peer,forwarded)=>({socket:{remoteAddress:peer},headers:{'x-forwarded-for':forwarded}});
+  const direct=sourceResolver();assert.equal(direct(req('::ffff:192.0.2.9','198.51.100.8')),'192.0.2.9');assert.equal(direct(req('192.0.2.9','malformed')),'192.0.2.9');
+  const proxy=sourceResolver(['10.0.0.2','10.0.0.3']);
+  assert.equal(proxy(req('10.0.0.2','203.0.113.99, 192.0.2.9, 10.0.0.3')),'192.0.2.9');
+  assert.equal(proxy(req('198.51.100.8','203.0.113.99')),'198.51.100.8');
+  assert.equal(proxy(req('10.0.0.2','malformed, 192.0.2.9')),'10.0.0.2');assert.throws(()=>sourceResolver(['not-an-ip']));
+  assert.equal(direct(req('2001:0db8:0:0:0:0:0:1','192.0.2.1')),'2001:db8::1');
+});
+
+test('anonymous HTTP floods cannot exhaust owner status, management or a new login ceremony',async t=>{
+  const f=await setup(t),config={origin,rpID,androidRedirect:redirect},server=createStagingServer(f.auth,config);await new Promise(r=>server.listen(0,'127.0.0.1',r));
+  t.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));});
+  const send=(path,{method='GET',body={},token,forwarded}={})=>new Promise((resolve,reject)=>{
+    const req=request({hostname:'127.0.0.1',port:server.address().port,path,method,headers:{Host:rpID,'X-Forwarded-Proto':'https',Origin:origin,'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{}),...(forwarded?{'X-Forwarded-For':forwarded}:{})}},res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});req.on('error',reject);req.end(method==='POST'?JSON.stringify(body):undefined);
+  });
+  for(let i=0;i<120;i++)assert.equal(await send('/'),200);
+  assert.equal(await send('/'),429);assert.equal(await send('/',{forwarded:'203.0.113.1'}),429);
+  assert.equal(await send('/healthz'),200);assert.equal(await send('/api/login/begin',{method:'POST'}),200);
+  for(let i=0;i<29;i++)assert.equal(await send('/api/list',{method:'POST',token:random()}),403);
+  assert.equal(await send('/api/list',{method:'POST',token:random()}),429);
+  assert.equal(await send('/api/native/status',{method:'POST',token:f.session}),200);
+  assert.equal(await send('/api/list',{method:'POST',token:f.session}),200);
+  assert.equal(await send('/api/invite',{method:'POST',token:f.session,body:{role:'admin',grant:await f.grant()}}),200);
+  assert.equal(await send('/api/invite',{method:'POST',token:random(),body:{role:'owner'}}),429);
+  assert.equal(await send('/api/native/status',{method:'POST',token:f.session}),200);
+});
+
+test('HTTP authentication limits distinguish client IPs behind an explicitly trusted proxy',async t=>{
+  const f=await setup(t),server=createStagingServer(f.auth,{origin,rpID,androidRedirect:redirect,trustedProxyIPs:['127.0.0.1']});await new Promise(r=>server.listen(0,'127.0.0.1',r));
+  t.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));});
+  const begin=forwarded=>new Promise((resolve,reject)=>{
+    const req=request({hostname:'127.0.0.1',port:server.address().port,path:'/api/login/begin',method:'POST',headers:{Host:rpID,'X-Forwarded-Proto':'https',Origin:origin,'Content-Type':'application/json','X-Forwarded-For':forwarded}},res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});req.on('error',reject);req.end('{}');
+  });
+  for(let i=0;i<30;i++)assert.equal(await begin('192.0.2.1'),200);
+  assert.equal(await begin('192.0.2.1'),429);
+  assert.equal(await begin('198.51.100.99, 192.0.2.1'),429); // Attacker-controlled left prefix is not a new source.
+  assert.equal(await begin('192.0.2.2'),200);
 });
