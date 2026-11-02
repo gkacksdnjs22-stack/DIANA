@@ -1,0 +1,1 @@
+{"name":"diana-lab-admin-auth","private":true,"type":"module","scripts":{"test":"node --test test/*.test.mjs","start":"node server.mjs"},"dependencies":{"@simplewebauthn/browser":"13.3.0","@simplewebauthn/server":"14.0.0"}}

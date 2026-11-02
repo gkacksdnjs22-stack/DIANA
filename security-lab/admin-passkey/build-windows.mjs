@@ -1,0 +1,13 @@
+import {mkdir,access} from 'node:fs/promises';
+import path from 'node:path';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+if(process.platform!=='win32')throw Error('WINDOWS_REQUIRED');
+const root=import.meta.dirname,out=path.join(root,'generated/windows'),exec=promisify(execFile);
+await mkdir(path.join(out,'DIANA-LAB-PC'),{recursive:true});await mkdir(path.join(out,'native'),{recursive:true});
+const compiler=path.join(process.env.WINDIR,'Microsoft.NET/Framework64/v4.0.30319/csc.exe');await access(compiler);
+const common=['/nologo','/platform:x64','/optimize+','/utf8output','/reference:System.Web.Extensions.dll','/reference:System.Net.Http.dll','/reference:System.Security.dll'];
+const icon=path.resolve(root,'../../financial-documents/review-ui/diana-icon.png');await access(icon);
+await exec(compiler,[...common,'/target:winexe','/reference:System.Windows.Forms.dll','/reference:System.Drawing.dll','/resource:'+icon+',diana.png','/out:'+path.join(out,'DIANA-LAB-PC/DIANA-LAB-PASSKEY.exe'),...['DesktopLauncher.cs','AdminPasskeyClient.cs','AdminPasskeyForm.cs','BuildVersion.g.cs'].map(x=>path.join(root,'clients',x))],{windowsHide:true});
+await exec(compiler,[...common,'/target:exe','/out:'+path.join(out,'native/NativeProbe.exe'),path.join(root,'clients/AdminPasskeyClient.cs'),path.join(root,'test/NativeProbe.cs')],{windowsHide:true});
+console.log('Built isolated Windows administrator login EXE and integration probe.');

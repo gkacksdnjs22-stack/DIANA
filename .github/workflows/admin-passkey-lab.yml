@@ -1,0 +1,28 @@
+name: Administrator passkey lab and Windows client
+on:
+  pull_request:
+    paths: ['security-lab/admin-passkey/**', '.github/workflows/admin-passkey-lab.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-authentication:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: security-lab/admin-passkey
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node build-windows.mjs
+      - run: node --test test/auth.test.mjs test/native.test.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DIANA-admin-passkey-Windows-lab
+          path: security-lab/admin-passkey/generated/windows/DIANA-LAB-PC/DIANA-LAB-PASSKEY.exe
+          if-no-files-found: error
+          retention-days: 14
