@@ -15,6 +15,9 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ExecutorService;
 import static org.junit.Assert.*;
 import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
@@ -49,5 +52,24 @@ public class AdminPasskeyIntegrationTest {
         android.content.Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();context.getSharedPreferences(PREFS,0).edit().clear().commit();
         Intent intent=new Intent(context,AdminPasskeyActivity.class).setAction(Intent.ACTION_VIEW).setData(Uri.parse(NativePkce.REDIRECT+"?code="+NativePkce.random()+"&state="+NativePkce.random())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try(ActivityScenario<AdminPasskeyActivity> scenario=ActivityScenario.launch(intent)){waitText(scenario,"인증 반환을 확인하지 못했습니다");assertFalse(context.getSharedPreferences(PREFS,0).contains("session"));}
+    }
+    @Test public void queuedCallbackSurvivesRecreationAndDuplicateDelivery()throws Exception{
+        Instrumentation instrumentation=InstrumentationRegistry.getInstrumentation();android.content.Context context=instrumentation.getTargetContext();context.getSharedPreferences(PREFS,0).edit().clear().commit();
+        AtomicReference<String> authorize=new AtomicReference<>();
+        Instrumentation.ActivityMonitor monitor=new Instrumentation.ActivityMonitor(){@Override public Instrumentation.ActivityResult onStartActivity(Intent intent){if(Intent.ACTION_VIEW.equals(intent.getAction())&&intent.getData()!=null&&intent.getData().toString().startsWith("http://localhost:43871/authorize?")){authorize.set(intent.getData().toString());return new Instrumentation.ActivityResult(0,null);}return null;}};
+        instrumentation.addMonitor(monitor);CountDownLatch blocked=new CountDownLatch(1),release=new CountDownLatch(1);
+        try(ActivityScenario<AdminPasskeyActivity> scenario=ActivityScenario.launch(AdminPasskeyActivity.class)){
+            onView(withText("관리자 패스키로 로그인")).perform(click());for(int i=0;i<80&&authorize.get()==null;i++)Thread.sleep(100);assertNotNull(authorize.get());
+            String callback=fixture("authorize",new JSONObject().put("url",authorize.get())).getString("redirect");
+            int before=fixture("counts",new JSONObject()).getInt("tokenExchanges");
+            AtomicReference<ExecutorService> queue=new AtomicReference<>();scenario.onActivity(a->{try{java.lang.reflect.Field field=AdminPasskeyController.class.getDeclaredField("worker");field.setAccessible(true);queue.set((ExecutorService)field.get(AdminPasskeyController.get(a)));}catch(Exception e){throw new AssertionError(e);}});
+            queue.get().execute(()->{blocked.countDown();try{release.await(15,TimeUnit.SECONDS);}catch(InterruptedException e){Thread.currentThread().interrupt();}});assertTrue(blocked.await(5,TimeUnit.SECONDS));
+            Intent intent=new Intent(context,AdminPasskeyActivity.class).setAction(Intent.ACTION_VIEW).setData(Uri.parse(callback)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);context.startActivity(intent);instrumentation.waitForIdleSync();
+            scenario.recreate();context.startActivity(new Intent(intent));instrumentation.waitForIdleSync();release.countDown();
+            waitText(scenario,"관리자 인증 완료: owner");assertTrue(context.getSharedPreferences(PREFS,0).contains("session"));
+            assertEquals(before+1,fixture("counts",new JSONObject()).getInt("tokenExchanges"));
+            context.startActivity(new Intent(intent));instrumentation.waitForIdleSync();
+            assertEquals(before+1,fixture("counts",new JSONObject()).getInt("tokenExchanges"));waitText(scenario,"관리자 인증 완료: owner");
+        }finally{release.countDown();instrumentation.removeMonitor(monitor);}
     }
 }

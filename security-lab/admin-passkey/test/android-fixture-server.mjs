@@ -27,6 +27,7 @@ const server=httpServer(async(req,res)=>{
     if(req.url==='/__fixture/revoke'){
       auth.run('UPDATE sessions SET revoked=1 WHERE hash NOT IN (SELECT hash FROM fixture_sources)');return send(200,{revoked:true});
     }
+    if(req.url==='/__fixture/counts')return send(200,{tokenExchanges:auth.get("SELECT COUNT(*) n FROM audit WHERE operation='native/token' AND success=1").n});
     throw Error();
   }catch{send(403,{code:'TEST_DENIED'});}
 });

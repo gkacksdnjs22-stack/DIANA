@@ -36,7 +36,7 @@ public final class NightDeskMessagingService extends android.app.Service {
  @Override public android.os.IBinder onBind(android.content.Intent intent) { return null; }
 }
 `);
-for(const file of ['AdminPasskeyActivity.java','NativePkce.java'])await cp(path.join(root,'clients',file),path.join(javaDir,file));
+for(const file of ['AdminPasskeyActivity.java','AdminPasskeyController.java','NativePkce.java'])await cp(path.join(root,'clients',file),path.join(javaDir,file));
 await mkdir(path.join(project,'app/src/test/java/kr/nightdesk/phone'),{recursive:true});await cp(path.join(root,'clients/NativePkceTest.java'),path.join(project,'app/src/test/java/kr/nightdesk/phone/NativePkceTest.java'));
 await mkdir(path.join(project,'app/src/androidTest/java/kr/nightdesk/phone'),{recursive:true});await cp(path.join(root,'clients/AdminPasskeyIntegrationTest.java'),path.join(project,'app/src/androidTest/java/kr/nightdesk/phone/AdminPasskeyIntegrationTest.java'));
 await edit(path.join(javaDir,'MainActivity.java'),s=>patch(s,'title(pageContent,"설정","연결과 파일 저장 방식을 관리하세요.");','title(pageContent,"설정","연결과 파일 저장 방식을 관리하세요.");\n        Button adminPasskey=button(pageContent,"관리자 패스키 로그인",false);adminPasskey.setOnClickListener(v->startActivity(new Intent(this,AdminPasskeyActivity.class)));'));
