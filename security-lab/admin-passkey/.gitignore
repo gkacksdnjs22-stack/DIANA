@@ -2,3 +2,4 @@ node_modules/
 .npm-cache/
 test-data/
 generated/
+staging/private/
