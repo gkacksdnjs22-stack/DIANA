@@ -1,0 +1,12 @@
+CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, role TEXT NOT NULL CHECK(role IN ('owner','admin','auditor')), state TEXT NOT NULL CHECK(state IN ('pending','active','disabled')), epoch BIGINT NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS credentials(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), public_key BYTEA NOT NULL, counter BIGINT NOT NULL, device_type TEXT NOT NULL, backed_up BIGINT NOT NULL, state TEXT NOT NULL, created BIGINT NOT NULL);
+      CREATE TABLE IF NOT EXISTS sessions(hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), credential_id TEXT NOT NULL REFERENCES credentials(id), expires BIGINT NOT NULL, revoked BIGINT NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS session_authentication(session_hash TEXT PRIMARY KEY REFERENCES sessions(hash), webauthn_at BIGINT NOT NULL, absolute_expires BIGINT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('webauthn','native')));
+      CREATE TABLE IF NOT EXISTS tickets(hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), actor_session TEXT, kind TEXT NOT NULL, expires BIGINT NOT NULL);
+      CREATE TABLE IF NOT EXISTS challenges(id TEXT PRIMARY KEY, value TEXT NOT NULL, user_id TEXT, actor_session TEXT, kind TEXT NOT NULL, scope TEXT, expires BIGINT NOT NULL, epoch BIGINT);
+      CREATE TABLE IF NOT EXISTS grants(hash TEXT PRIMARY KEY, session_hash TEXT NOT NULL, scope TEXT NOT NULL, expires BIGINT NOT NULL);
+      CREATE TABLE IF NOT EXISTS recovery(hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id));
+      CREATE TABLE IF NOT EXISTS audit(id BIGSERIAL PRIMARY KEY, at BIGINT NOT NULL, operation TEXT NOT NULL, success BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS native_requests(id TEXT PRIMARY KEY,client TEXT NOT NULL,redirect TEXT NOT NULL,state TEXT NOT NULL,challenge TEXT NOT NULL,expires BIGINT NOT NULL);
+      CREATE TABLE IF NOT EXISTS native_codes(hash TEXT PRIMARY KEY,client TEXT NOT NULL,redirect TEXT NOT NULL,challenge TEXT NOT NULL,source TEXT NOT NULL,expires BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS staging_metadata(id BIGINT PRIMARY KEY CHECK(id=1),version BIGINT NOT NULL,instance_id TEXT NOT NULL,bootstrap_hash TEXT NOT NULL,bootstrap_expires BIGINT NOT NULL);

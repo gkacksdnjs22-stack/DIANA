@@ -1,0 +1,68 @@
+name: Administrator passkey HTTPS staging
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'security-lab/admin-passkey/**'
+      - '.github/workflows/admin-passkey-staging.yml'
+permissions:
+  contents: read
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: security-lab/admin-passkey
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node --test --test-skip-pattern='compiled EXE' test/*.test.mjs
+      - run: node --test staging/staging.test.mjs
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: security-lab/admin-passkey
+      - run: node build-windows.mjs
+        working-directory: security-lab/admin-passkey
+      - run: npm test
+        working-directory: security-lab/admin-passkey
+      - run: node staging/build-clients.mjs windows
+        working-directory: security-lab/admin-passkey
+      - run: security-lab/admin-passkey/generated/stage-windows/NativeProbe.exe --selftest
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DIANA-HTTPS-STAGE-Windows
+          path: |
+            security-lab/admin-passkey/generated/stage-windows/DIANA-HTTPS-STAGE.exe
+            security-lab/admin-passkey/staging/profile.json
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - run: node staging/build-clients.mjs android
+        working-directory: security-lab/admin-passkey
+      - run: gradle --no-daemon testDebugUnitTest assembleDebug
+        working-directory: security-lab/admin-passkey/generated/android/android-app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DIANA-HTTPS-STAGE-Android
+          path: security-lab/admin-passkey/generated/android/android-app/app/build/outputs/apk/debug/*.apk

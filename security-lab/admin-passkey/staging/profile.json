@@ -1,0 +1,6 @@
+{
+  "origin": "https://diana-admin-passkey-stage.onrender.com",
+  "rpID": "diana-admin-passkey-stage.onrender.com",
+  "androidPackage": "kr.nightdesk.phone.lab.passkey.stage",
+  "androidRedirect": "kr.nightdesk.phone.lab.passkey.stage://oauth2/callback"
+}
