@@ -1,0 +1,13 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>DIANA LAB 관리자 인증</title>
+<script defer src="/browser.js"></script><script defer src="/app.js"></script>
+<h1>DIANA LAB 관리자 인증</h1><p>시험 환경 전용. PC 문서 접근이나 작업 승인 권한을 부여하지 않습니다.</p>
+<button id="login">패스키로 관리자 로그인</button><button id="logout">로그아웃</button>
+<h2>초대 또는 최초 등록</h2><label>일회용 등록권 <input id="ticket" type="password" autocomplete="off"></label><button id="enroll">패스키 등록</button>
+<h2>관리자 계정</h2><label>추가할 역할 <select id="role"><option>admin</option><option>auditor</option><option>owner</option></select></label><button id="invite">관리자 초대</button>
+<p><label>대상 계정 ID <input id="userId"></label><button id="changeRole">선택 역할로 변경</button><button id="disable">계정 비활성화</button></p>
+<h2>인증 수단과 세션</h2><button id="addKey">내 패스키 추가</button>
+<p><label>인증 등록 ID <input id="credentialId"></label><button id="revokeKey">인증 등록 폐기</button></p>
+<p><label>내 세션 ID <input id="sessionId"></label><button id="revokeSession">해당 세션 종료</button></p>
+<button id="codes">내 복구 코드 발급 또는 교체</button><button id="refresh">상태 조회</button>
+<p>초대권과 복구 코드는 아래에 한 번 표시됩니다. 안전한 별도 장소에 보관하세요. 인증키 하나가 여러 기기에 동기화될 수 있습니다.</p>
+<pre id="result" aria-live="polite"></pre><pre id="state"></pre></html>
