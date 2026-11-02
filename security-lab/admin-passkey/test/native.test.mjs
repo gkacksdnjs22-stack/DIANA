@@ -25,6 +25,31 @@ test('desktop redirect only allows exact IPv4 loopback callback and no injected 
 for(const [name,patch]of Object.entries({verifier:{code_verifier:random()},client:{client_id:'diana-lab-desktop'},redirect:{redirect_uri:'https://evil.example'},grant:{grant_type:'password'}}))test('code exchange rejects '+name+' and consumes code',async t=>{const f=await setup(t),code=f.issue();assert.throws(()=>f.native.exchange({...f.exchange(code),...patch}));assert.throws(()=>f.native.exchange(f.exchange(code)));});
 test('authorization, code and fresh-login deadlines enforced',async t=>{const f=await setup(t),id=f.native.begin(f.params);f.advance(120001);assert.throws(()=>f.native.approve({requestId:id},f.session));f.session=await f.login();const id2=f.native.begin(f.params);f.advance(60001);assert.throws(()=>f.native.approve({requestId:id2},f.session));f.session=await f.login();const code=f.issue(f.session);f.advance(60001);assert.throws(()=>f.native.exchange(f.exchange(code)));});
 test('native session follows credential revocation and code does not survive source logout',async t=>{const f=await setup(t),code=f.issue(),child=f.native.exchange(f.exchange(code)).access_token;assert.equal(f.auth.session(child).role,'owner');assert.throws(()=>f.native.exchange(f.exchange(code)));const pending=f.issue();await f.auth.dispatch('logout',{},f.session);assert.throws(()=>f.native.exchange(f.exchange(pending)));f.auth.run("UPDATE credentials SET state='revoked'");assert.throws(()=>f.auth.session(child));});
+test('a native token cannot renew itself without another WebAuthn ceremony',async t=>{
+  const f=await setup(t);let access=f.native.exchange(f.exchange(f.issue())).access_token;
+  for(let elapsed=50_000;elapsed<=1_200_000;elapsed+=50_000){
+    f.advance(50_000);assert.throws(()=>f.issue(access),'native session accepted as fresh WebAuthn proof');
+  }
+  assert.throws(()=>f.auth.session(access));
+});
+test('delayed and multiple exchanges inherit original WebAuthn time and absolute expiry',async t=>{
+  const f=await setup(t),original=f.auth.session(f.session),code=f.issue();f.advance(50_000);
+  const first=f.native.exchange(f.exchange(code));assert.equal(first.expires_in,850);
+  const a=f.auth.session(first.access_token);assert.equal(a.webauthn_at,original.webauthn_at);assert.equal(a.expires,original.expires);assert.equal(a.absolute_expires,original.absolute_expires);assert.equal(a.kind,'native');
+  const next=f.issue();f.advance(20_000);const second=f.native.exchange(f.exchange(next));assert.equal(second.expires_in,830);assert.equal(f.auth.session(second.access_token).expires,original.expires);
+  f.advance(830_000);assert.throws(()=>f.auth.session(first.access_token));assert.throws(()=>f.auth.session(second.access_token));
+  const fresh=await f.login();assert.ok(f.auth.session(fresh).webauthn_at>original.webauthn_at);assert.ok(f.issue(fresh));
+});
+test('native exchange cannot outlive the original absolute deadline even if session expiry is corrupted',async t=>{
+  const f=await setup(t),code=f.issue(),s=f.auth.session(f.session);
+  f.auth.run('UPDATE sessions SET expires=? WHERE hash=?',s.expires+900_000,s.hash);f.advance(900_000);
+  assert.throws(()=>f.auth.session(f.session));assert.throws(()=>f.native.exchange(f.exchange(code)));
+});
+test('sessions without WebAuthn provenance are rejected including after database restart',async t=>{
+  const f=await setup(t),s=f.auth.session(f.session);f.auth.run('DELETE FROM session_authentication WHERE session_hash=?',s.hash);
+  assert.throws(()=>f.auth.session(f.session));assert.throws(()=>f.issue());
+  const reopened=new AdminAuth({dbPath:f.auth.db.location()});try{assert.throws(()=>reopened.session(f.session));}finally{reopened.close();}
+});
 test('compiled EXE client completes loopback PKCE, DPAPI restore and server revocation',async t=>{
   const f=await setup(t),server=createServer(f.auth);await new Promise(r=>server.listen(43871,'127.0.0.1',r));t.after(()=>server.listening?new Promise(r=>server.close(r)):undefined);
   const stage=path.resolve(import.meta.dirname,'../generated/windows');

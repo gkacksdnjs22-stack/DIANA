@@ -26,7 +26,8 @@ export class NativeAuthorization {
   approve({requestId},raw) {
     const a=this.auth;
     return a.tx(()=>{
-      const s=a.session(raw);need(['owner','admin'].includes(s.role));need(s.expires>a.now()+840_000);
+      const s=a.session(raw);need(['owner','admin'].includes(s.role));
+      need(s.kind==='webauthn'&&a.now()>=s.webauthn_at&&a.now()-s.webauthn_at<60_000);
       const r=need(a.get('SELECT * FROM native_requests WHERE id=? AND expires>?',requestId,a.now()));
       a.run('DELETE FROM native_requests WHERE id=?',requestId);
       const code=secret();a.run('INSERT INTO native_codes VALUES(?,?,?,?,?,?)',hash(code),r.client,r.redirect,r.challenge,s.hash,a.now()+60_000);
@@ -41,9 +42,11 @@ export class NativeAuthorization {
     return a.tx(()=>{
       need(body.grant_type==='authorization_code'&&c.expires>a.now());
       need(c.client===body.client_id&&c.redirect===body.redirect_uri&&/^[A-Za-z0-9_-]{43,128}$/.test(body.code_verifier)&&pkce(body.code_verifier)===c.challenge);
-      const s=a.activeSessionHash(c.source);need(['owner','admin'].includes(s.role));
-      const access=secret();a.run('INSERT INTO sessions VALUES(?,?,?,?,0)',hash(access),s.user_id,s.credential_id,a.now()+900_000);
-      return {access_token:access,token_type:'Bearer',expires_in:900};
+      const s=a.activeSessionHash(c.source);need(['owner','admin'].includes(s.role));need(s.kind==='webauthn');
+      const expires=Math.min(s.expires,s.absolute_expires);need(expires>a.now());
+      const access=secret();a.run('INSERT INTO sessions VALUES(?,?,?,?,0)',hash(access),s.user_id,s.credential_id,expires);
+      a.run('INSERT INTO session_authentication VALUES(?,?,?,?)',hash(access),s.webauthn_at,s.absolute_expires,'native');
+      return {access_token:access,token_type:'Bearer',expires_in:Math.floor((expires-a.now())/1000)};
     });
   }
 }

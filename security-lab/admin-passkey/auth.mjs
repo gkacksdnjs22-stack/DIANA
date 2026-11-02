@@ -28,6 +28,7 @@ export class AdminAuth {
       CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, role TEXT NOT NULL CHECK(role IN ('owner','admin','auditor')), state TEXT NOT NULL CHECK(state IN ('pending','active','disabled')), epoch INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS credentials(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), public_key BLOB NOT NULL, counter INTEGER NOT NULL, device_type TEXT NOT NULL, backed_up INTEGER NOT NULL, state TEXT NOT NULL, created INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS sessions(hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), credential_id TEXT NOT NULL REFERENCES credentials(id), expires INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS session_authentication(session_hash TEXT PRIMARY KEY REFERENCES sessions(hash), webauthn_at INTEGER NOT NULL, absolute_expires INTEGER NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('webauthn','native')));
       CREATE TABLE IF NOT EXISTS tickets(hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), actor_session TEXT, kind TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS challenges(id TEXT PRIMARY KEY, value TEXT NOT NULL, user_id TEXT, actor_session TEXT, kind TEXT NOT NULL, scope TEXT, expires INTEGER NOT NULL, epoch INTEGER);
       CREATE TABLE IF NOT EXISTS grants(hash TEXT PRIMARY KEY, session_hash TEXT NOT NULL, scope TEXT NOT NULL, expires INTEGER NOT NULL);
@@ -44,12 +45,12 @@ export class AdminAuth {
     this.run('DELETE FROM audit WHERE id <= (SELECT COALESCE(MAX(id),0)-1000 FROM audit)');
   }
   session(raw) {
-    return need(this.get(`SELECT s.*,u.role FROM sessions s JOIN users u ON u.id=s.user_id JOIN credentials c ON c.id=s.credential_id
-      WHERE s.hash=? AND s.expires>? AND s.revoked=0 AND u.state='active' AND c.state='active'`, hash(raw), this.now()));
+    return this.activeSessionHash(hash(raw));
   }
   activeSessionHash(value) {
-    return need(this.get(`SELECT s.*,u.role FROM sessions s JOIN users u ON u.id=s.user_id JOIN credentials c ON c.id=s.credential_id
-      WHERE s.hash=? AND s.expires>? AND s.revoked=0 AND u.state='active' AND c.state='active'`, value, this.now()));
+    // Sessions issued before authentication provenance was recorded fail closed.
+    return need(this.get(`SELECT s.*,u.role,m.webauthn_at,m.absolute_expires,m.kind FROM sessions s JOIN users u ON u.id=s.user_id JOIN credentials c ON c.id=s.credential_id JOIN session_authentication m ON m.session_hash=s.hash
+      WHERE s.hash=? AND s.expires>? AND m.absolute_expires>? AND s.revoked=0 AND u.state='active' AND c.state='active'`, value, this.now(), this.now()));
   }
   fresh(raw, grant, scope, owner = false) {
     const s = this.session(raw); if (owner) need(s.role === 'owner');
@@ -147,7 +148,9 @@ export class AdminAuth {
         this.run('INSERT INTO grants VALUES(?,?,?,?)', hash(secret), c.actor_session, c.scope, this.now() + 60_000);
         return { grant: secret, expiresIn: 60 };
       }
-      this.run('INSERT INTO sessions VALUES(?,?,?,?,0)', hash(secret), key.user_id, key.id, this.now() + 900_000);
+      const authenticatedAt=this.now(),absoluteExpires=authenticatedAt+900_000;
+      this.run('INSERT INTO sessions VALUES(?,?,?,?,0)', hash(secret), key.user_id, key.id, absoluteExpires);
+      this.run('INSERT INTO session_authentication VALUES(?,?,?,?)',hash(secret),authenticatedAt,absoluteExpires,'webauthn');
       return { sessionToken: secret, expiresIn: 900 };
     });
   }
