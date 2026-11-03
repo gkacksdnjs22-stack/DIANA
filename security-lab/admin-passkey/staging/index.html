@@ -4,8 +4,9 @@
 <label>초대 또는 초기 등록권 <input id="ticket" type="password" autocomplete="off"></label><button id="enroll">패스키 등록</button>
 <h2>관리자 로그인</h2><button id="login">패스키로 관리자 로그인</button><button id="logout">로그아웃</button>
 <h2>관리자 계정과 인증 수단</h2><label>추가할 역할 <select id="role"><option>admin</option><option>auditor</option><option>owner</option></select></label><button id="invite">관리자 초대</button>
+<p><button id="testInvite">시험 관리자 초대 파일 저장</button> owner 재인증 후 별도 admin 계정의 일회용 초대 파일을 PC에 저장합니다. 검증 도구용 파일이며 채팅으로 보내지 마세요.</p>
 <p><label>대상 계정 ID <input id="userId"></label><button id="changeRole">선택 역할로 변경</button><button id="disable">계정 비활성화</button></p>
 <button id="addKey">내 패스키 추가</button><p><label>인증 등록 ID <input id="credentialId"></label><button id="revokeKey">인증 등록 폐기</button></p>
 <p><label>내 세션 ID <input id="sessionId"></label><button id="revokeSession">해당 세션 종료</button></p>
 <button id="codes">내 복구 코드 발급 또는 교체</button><button id="refresh">상태 조회</button>
-<p>초대권과 복구 코드는 아래에 한 번 표시됩니다. 별도 안전한 장소에 보관하세요.</p><pre id="result" aria-live="polite"></pre><pre id="state"></pre></html>
+<p>초대권·복구 코드는 해당 발급 작업이 성공했을 때만 아래에 표시됩니다. 이 안내문은 패스키 등록 완료를 뜻하지 않습니다. 발급된 코드는 안전한 장소에 보관하세요.</p><pre id="result" aria-live="polite"></pre><pre id="state"></pre></html>
