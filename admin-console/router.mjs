@@ -3,7 +3,7 @@ import {BlockList,isIP} from 'node:net';
 import {StagingRateLimits,sourceResolver} from '../security-lab/admin-passkey/staging/rate-limit.mjs';
 
 export const ADMIN_PATH='/admin/';
-const actions=new Set(['register/begin','register/finish','login/begin','login/finish','list','invite','role','disable','credential/revoke','recovery/codes','session/revoke','logout']);
+const actions=new Set(['register/begin','register/finish','login/begin','login/finish','list','invite','role','disable','accounts/purge','credential/revoke','recovery/codes','session/revoke','logout']);
 const assets=new Map([
   ['/admin/',new URL('ui/index.html',import.meta.url)],
   ['/admin/app.js',new URL('ui/app.js',import.meta.url)],

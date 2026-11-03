@@ -13,12 +13,15 @@ export function createStagingServer(auth,config){
   const native=new StagingNativeAuthorization(auth,config.androidRedirect);
   const limits=new StagingRateLimits(),source=sourceResolver(config.trustedProxyIPs);
   const assets=new Map([
-    ['/', ['index.html','text/html']],['/app.js',['app.js','text/javascript']],
     ['/native.html',['../ui/native.html','text/html']],['/native.js',['../ui/native.js','text/javascript']],
     ['/browser.js',['../node_modules/@simplewebauthn/browser/dist/bundle/index.umd.min.js','text/javascript']],
+    ['/admin/', ['../../../admin-console/ui/index.html','text/html']],
+    ['/admin/app.js', ['../../../admin-console/ui/app.js','text/javascript']],
+    ['/admin/style.css', ['../../../admin-console/ui/style.css','text/css']],
+    ['/admin/browser.js',['../node_modules/@simplewebauthn/browser/dist/bundle/index.umd.min.js','text/javascript']],
   ]);
   return httpServer(async(req,res)=>{
-    const send=(status,data,type='application/json')=>{res.writeHead(status,{'Content-Type':type+'; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Strict-Transport-Security':'max-age=86400','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; connect-src 'self'"});res.end(type==='application/json'?JSON.stringify(data):data);};
+    const send=(status,data,type='application/json')=>{res.writeHead(status,{'Content-Type':type+'; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Strict-Transport-Security':'max-age=86400','Content-Security-Policy':req.url.startsWith('/admin/')?"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'":"default-src 'self'; script-src 'self'; style-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; connect-src 'self'"});res.end(type==='application/json'?JSON.stringify(data):data);};
     try{
       if(req.method==='GET'&&req.url==='/healthz'){
         const metadata=await auth.get('SELECT version FROM staging_metadata WHERE id=1');return send(metadata?.version===1?200:503,{service:'diana-admin-passkey-stage',database:metadata?.version===1?'ready':'unavailable'});
@@ -29,6 +32,9 @@ export function createStagingServer(auth,config){
       const lane=session?'administrator':req.method==='GET'&&!req.url.startsWith('/authorize?')?'read':'anonymous';
       // Only a DB-verified session can use the account lane. All that account's sessions share it.
       if(!limits.allow(lane,session?session.user_id:source(req)))return send(429,{code:'LIMIT'});
+      if(req.method==='GET'&&req.url==='/'){res.writeHead(308,{'Location':'/admin/','Cache-Control':'no-store','Referrer-Policy':'no-referrer'});return res.end();}
+      if(req.method==='GET'&&req.url==='/admin'){res.writeHead(308,{'Location':'/admin/','Cache-Control':'no-store','Referrer-Policy':'no-referrer'});return res.end();}
+      if(req.method==='GET'&&req.url==='/admin/config.json')return send(200,{configured:true,basePath:'/admin/',apiBasePath:'/api/',origin:config.origin,rpID:config.rpID,documentAccess:false});
       if(req.method==='GET'&&req.url.startsWith('/authorize?')){
         const params=new URL(req.url,config.origin).searchParams;if([...params.keys()].some(k=>params.getAll(k).length!==1))throw Error();
         const id=await native.begin(Object.fromEntries(params));await auth.audit('native/authorize',true);

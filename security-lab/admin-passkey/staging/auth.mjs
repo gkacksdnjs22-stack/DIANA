@@ -9,7 +9,7 @@ const need = value => {
   if (!value) deny();
   return value;
 };
-const scopes = new Set(['manage', 'credential', 'recovery']);
+const scopes = new Set(['manage', 'credential', 'recovery', 'cleanup']);
 const roles = new Set(['owner', 'admin', 'auditor']);
 function checkClient(response) {
   const data = JSON.parse(Buffer.from(response.response.clientDataJSON, 'base64url').toString());
@@ -293,6 +293,35 @@ export class StagingAdminAuth {
       };
     });
   }
+  async purgeAccounts({userIds, grant}, raw) {
+    return this.tx(async () => {
+      const actor = await this.fresh(raw, grant, 'cleanup', true);
+      need(Array.isArray(userIds) && userIds.length > 0 && userIds.length <= 50);
+      need(new Set(userIds).size === userIds.length);
+      for (const id of userIds) {
+        need(typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
+        const target = need(await this.get('SELECT id,role FROM users WHERE id=?', id));
+        // Protect every owner, including another owner, regardless of client UI state.
+        need(target.id !== actor.user_id && target.role !== 'owner');
+      }
+      const counts = {accounts:0, credentials:0, sessions:0};
+      // All target checks, grant consumption, deletion and success audit commit together.
+      for (const id of userIds) {
+        await this.run('DELETE FROM native_codes WHERE source IN (SELECT hash FROM sessions WHERE user_id=?)', id);
+        await this.run('DELETE FROM grants WHERE session_hash IN (SELECT hash FROM sessions WHERE user_id=?)', id);
+        await this.run('DELETE FROM challenges WHERE user_id=? OR actor_session IN (SELECT hash FROM sessions WHERE user_id=?)', id, id);
+        await this.run('DELETE FROM tickets WHERE user_id=? OR actor_session IN (SELECT hash FROM sessions WHERE user_id=?)', id, id);
+        await this.run('DELETE FROM session_authentication WHERE session_hash IN (SELECT hash FROM sessions WHERE user_id=?)', id);
+        counts.sessions += (await this.run('DELETE FROM sessions WHERE user_id=?', id)).changes;
+        counts.credentials += (await this.run('DELETE FROM credentials WHERE user_id=?', id)).changes;
+        await this.run('DELETE FROM recovery WHERE user_id=?', id);
+        counts.accounts += (await this.run('DELETE FROM users WHERE id=?', id)).changes;
+      }
+      await this.preserveOwner();
+      await this.audit('accounts/purge', true);
+      return {deleted:true, ...counts};
+    });
+  }
   async recoveryCodes(b, raw) {
     return await this.tx(async () => {
       const s = await this.fresh(raw, b.grant, 'recovery');
@@ -320,10 +349,11 @@ export class StagingAdminAuth {
     });
   }
   async dispatch(action, body = {}, raw) {
-    const allowed = new Set(['register/begin', 'register/finish', 'login/begin', 'login/finish', 'list', 'invite', 'role', 'disable', 'credential/revoke', 'recovery/codes', 'session/revoke', 'logout']);
+    const allowed = new Set(['register/begin', 'register/finish', 'login/begin', 'login/finish', 'list', 'invite', 'role', 'disable', 'accounts/purge', 'credential/revoke', 'recovery/codes', 'session/revoke', 'logout']);
     need(allowed.has(action));
     try {
       let result;
+      if (action === 'accounts/purge') return await this.purgeAccounts(body, raw);
       if (action === 'register/begin') result = await this.registerBegin(body, raw);else if (action === 'register/finish') result = await this.registerFinish(body);else if (action === 'login/begin') result = await this.loginBegin(body, raw);else if (action === 'login/finish') result = await this.loginFinish(body, raw);else if (['invite', 'role', 'disable'].includes(action)) result = await this.manage(action, body, raw);else if (action === 'credential/revoke') result = await this.revokeCredential(body, raw);else if (action === 'recovery/codes') result = await this.recoveryCodes(body, raw);else if (action === 'list') {
         const s = await this.session(raw);
         result = {

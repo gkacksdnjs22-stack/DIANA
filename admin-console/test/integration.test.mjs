@@ -89,6 +89,15 @@ test('anonymous requests cannot consume authenticated admin limits',async t=>{
 test('mount rejects an already started or ambiguous request handler without removing it',async t=>{
   const f=await fixture(t,{mode:'preview'});const n=f.server.listeners('request').length;assert.throws(()=>mountAdminConsole(f.server,createAdminConsole()));assert.equal(f.server.listeners('request').length,n);
 });
+
+test('bulk account purge is routed through the protected console prefix and rejects cross-origin requests',async t=>{
+  const f=await fixture(t),a=await f.call('invite',{role:'admin',grant:await f.grant()}),b=await f.call('invite',{role:'auditor',grant:await f.grant()});
+  const body={userIds:[a.data.userId,b.data.userId],grant:await f.grant('cleanup')};
+  assert.equal((await f.send('/admin/api/accounts/purge',{method:'POST',token:f.raw,body,headers:{Origin:'https://attacker.example'}})).status,403);
+  assert.equal((await f.call('accounts/purge',body,'')).status,403);
+  const deleted=await f.call('accounts/purge',body);assert.equal(deleted.status,200);assert.equal(deleted.data.accounts,2);
+  assert.equal((await f.call('list')).data.users.length,1);assert.equal((await f.call('list')).data.me.role,'owner');
+});
 test('a second mount is rejected before listening and the first handler remains intact',()=>{
   const server=createServer((_req,res)=>res.end('legacy'));mountAdminConsole(server,createAdminConsole());const listener=server.listeners('request')[0];
   assert.throws(()=>mountAdminConsole(server,createAdminConsole()));assert.equal(server.listeners('request').length,1);assert.equal(server.listeners('request')[0],listener);
