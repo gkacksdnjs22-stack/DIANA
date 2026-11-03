@@ -205,3 +205,65 @@ for(const role of ['owner','auditor'])test('test invitation export respects auth
   assert.deepEqual(JSON.parse(blob.text),{kind:'diana-staging-test-admin',origin,role:'admin',ownerUserId:'owner-id',userId:'test-user-id',enrollmentTicket:'private-ticket'});
   assert.equal(downloads[0].filename,'DIANA-test-admin-test-user-id.json');assert.equal(timers[0].ms,1000);assert.equal(JSON.parse(element('result').textContent).testAdminCreated,true);
 });
+
+async function physicalFixture(options={}){
+  const owner='11111111-1111-4111-8111-111111111111',user='22222222-2222-4222-8222-222222222222',key='test-physical-credential';
+  const elements=new Map(),calls=[];let browserCalls=0;
+  const element=id=>{if(!elements.has(id))elements.set(id,{value:'',textContent:'',disabled:false});return elements.get(id);};
+  const state={me:{id:owner,role:options.role||'owner'},users:[{id:owner,role:'owner',state:'active'},{id:user,role:'admin',state:'pending'}],credentials:[{id:'owner-credential',user_id:owner,state:'active'}]};
+  const invitation={kind:'diana-staging-test-admin',origin,role:'admin',ownerUserId:owner,userId:user,enrollmentTicket:'A'.repeat(43),...options.invitation};
+  const file={size:options.fileSize||274,text:async()=>JSON.stringify(invitation)};
+  const context={location:{origin:options.pageOrigin||origin},document:{getElementById:element},atob:s=>Buffer.from(s,'base64').toString('binary'),
+    SimpleWebAuthnBrowser:{startRegistration:async()=>{browserCalls++;return{id:key,response:'private-signature'};},startAuthentication:async()=>({signature:'private-signature'})},
+    fetch:async(url,init)=>{
+      const body=JSON.parse(init.body);calls.push({url,body});let value;
+      if(url.endsWith('/list'))value=JSON.parse(JSON.stringify(state));
+      else if(url.endsWith('/register/begin'))value={ceremonyId:'private-ceremony',options:{user:{id:Buffer.from(options.serverUser||user).toString('base64url')}}};
+      else if(url.endsWith('/register/finish')){
+        state.users[1].state='active';state.credentials.push({id:key,user_id:user,state:'active'});
+        if(options.finishNetworkFailure)throw Error('private-response');
+        value={registered:true,userId:user,credentialId:key};
+      }else if(url.endsWith('/login/begin'))value={ceremonyId:'private-reauth',options:{}};
+      else if(url.endsWith('/login/finish')){options.afterVerify?.(state);value={grant:'private-grant'};}
+      else if(url.endsWith('/credential/revoke')){state.credentials.find(c=>c.id===body.credentialId).state='revoked';value={revoked:true};}
+      else throw Error('UNEXPECTED_API');
+      return{ok:true,status:200,json:async()=>value};
+    }};
+  runInNewContext(await readFile(new URL('app.js',import.meta.url),'utf8'),context);
+  runInNewContext('session="private-owner-session"',context);
+  element('physicalInvitation').files=[file];
+  return{element,calls,state,owner,user,key,browserCalls:()=>browserCalls};
+}
+test('physical test pins the newly registered admin credential and requires fresh verification to revoke it',async()=>{
+  const f=await physicalFixture();await f.element('physicalEnroll').onclick();
+  assert.equal(JSON.parse(f.element('result').textContent).testPasskeyRegistered,true);assert.equal(f.browserCalls(),1);
+  f.element('credentialId').value='owner-credential';f.element('userId').value=f.owner;
+  await f.element('physicalRevoke').onclick();const revoked=f.calls.find(c=>c.url.endsWith('/credential/revoke'));
+  assert.deepEqual(revoked.body,{credentialId:f.key,grant:'private-grant'});
+  assert.equal(f.calls.find(c=>c.url.endsWith('/login/begin')).body.scope,'credential');
+  assert.equal(f.state.credentials[0].state,'active');assert.equal(f.state.credentials[1].state,'revoked');
+  assert.equal(JSON.parse(f.element('result').textContent).testPasskeyRevoked,true);
+  assert.doesNotMatch(f.element('result').textContent+f.element('physicalState').textContent,/private-|A{43}/);
+});
+for(const [name,options] of [
+  ['an auditor actor',{role:'auditor'}],
+  ['another page origin',{pageOrigin:'https://attacker.invalid'}],
+  ['another invitation origin',{invitation:{origin:'https://attacker.invalid'}}],
+  ['an owner-role invitation',{invitation:{role:'owner'}}],
+  ['the actual owner as target',{invitation:{userId:'11111111-1111-4111-8111-111111111111'}}],
+  ['another owner as inviter',{invitation:{ownerUserId:'33333333-3333-4333-8333-333333333333'}}],
+  ['an oversized input',{fileSize:4097}],
+  ['a different server-issued user handle',{serverUser:'11111111-1111-4111-8111-111111111111'}],
+])test('physical test rejects '+name+' before authenticator use',async()=>{
+  const f=await physicalFixture(options);await f.element('physicalEnroll').onclick();
+  assert.equal(f.browserCalls(),0);assert.ok(!f.calls.some(c=>c.url.endsWith('/register/finish')||c.url.endsWith('/credential/revoke')));
+  assert.doesNotMatch(f.element('result').textContent,/private-|A{43}/);
+});
+test('physical test rechecks account role after reauthentication before revoking',async()=>{
+  const f=await physicalFixture({afterVerify:s=>s.users[1].role='owner'});await f.element('physicalEnroll').onclick();await f.element('physicalRevoke').onclick();
+  assert.ok(!f.calls.some(c=>c.url.endsWith('/credential/revoke')));assert.equal(f.state.credentials[0].state,'active');
+});
+test('physical test can clean up only its own credential after an ambiguous registration response',async()=>{
+  const f=await physicalFixture({finishNetworkFailure:true});await f.element('physicalEnroll').onclick();assert.equal(f.state.credentials[1].state,'active');
+  await f.element('physicalRevoke').onclick();assert.equal(f.state.credentials[1].state,'revoked');assert.equal(f.state.credentials[0].state,'active');
+});

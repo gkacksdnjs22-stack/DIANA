@@ -1,5 +1,6 @@
 /* Tokens and one-time codes stay in memory; no localStorage, cookies, or console logging. */
 let session;
+let physicalTest;
 const el = id => document.getElementById(id);
 function failureText(error) {
   const stages = new Set(['등록권 확인','기기 패스키 생성','등록 결과 저장','인증 요청','기기 패스키 인증','인증 결과 확인','초기 등록권 발급']);
@@ -43,6 +44,56 @@ async function register(body) {
   return step('등록 결과 저장',()=>api('register/finish', { ceremonyId: begin.ceremonyId, response }));
 }
 async function mutate(action, scope, body = {}) { const { grant } = await verify(scope); return api(action, { ...body, grant }); }
+async function physicalOwner() {
+  if(location.origin!=='https://diana-admin-passkey-stage.onrender.com')throw Error();
+  const state=await api('list');if(state.me.role!=='owner')throw Error();return state;
+}
+function physicalTarget(state,target,pending=false) {
+  if(state.me.id!==target.ownerUserId||target.userId===state.me.id)throw Error();
+  const user=state.users.find(u=>u.id===target.userId);
+  if(!user||user.role!=='admin'||user.state!==(pending?'pending':'active'))throw Error();
+  if(pending&&state.credentials.some(c=>c.user_id===user.id))throw Error();
+  if(!pending&&!state.credentials.some(c=>c.id===target.credentialId&&c.user_id===user.id&&c.state==='active'))throw Error();
+}
+async function physicalEnroll() {
+  if(physicalTest)throw Error();
+  const file=el('physicalInvitation').files?.[0];
+  if(!file||file.size>4096)throw Error();
+  let invitation;
+  try{invitation=JSON.parse(await file.text());}finally{el('physicalInvitation').value='';}
+  const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
+  if(invitation?.kind!=='diana-staging-test-admin'||invitation.origin!==location.origin||invitation.role!=='admin'||!uuid.test(invitation.userId)||!uuid.test(invitation.ownerUserId)||!/^[A-Za-z0-9_-]{43}$/.test(invitation.enrollmentTicket))throw Error();
+  const target={ownerUserId:invitation.ownerUserId,userId:invitation.userId};
+  physicalTarget(await physicalOwner(),target,true);
+  const begin=await step('등록권 확인',()=>api('register/begin',{ticket:invitation.enrollmentTicket}));
+  invitation=undefined;
+  // Check the server-issued user handle before asking the OS to create any key.
+  const handle=begin.options.user.id.replace(/-/g,'+').replace(/_/g,'/');
+  if(atob(handle)!==target.userId)throw Error();
+  const response=await step('기기 패스키 생성',()=>SimpleWebAuthnBrowser.startRegistration({optionsJSON:begin.options}));
+  if(!/^[A-Za-z0-9_-]{1,1024}$/.test(response.id))throw Error();
+  // Retain only non-secret IDs so an ambiguous network failure can still be cleaned up.
+  physicalTest={...target,credentialId:response.id};
+  el('physicalState').textContent='시험 계정 ID: '+target.userId+' · 이 계정의 키만 폐기 대상으로 고정됩니다.';
+  const result=await step('등록 결과 저장',()=>api('register/finish',{ceremonyId:begin.ceremonyId,response}));
+  if(result.userId!==target.userId||result.credentialId!==response.id||!result.registered)throw Error();
+  physicalTarget(await physicalOwner(),physicalTest);
+  return{testPasskeyRegistered:true,userId:target.userId,next:'휴대폰 앱에서 이 시험 계정으로 로그인하여 admin을 확인하세요. owner가 나오면 시험 계정을 다시 선택하세요.'};
+}
+async function physicalRevoke() {
+  const target=physicalTest;if(!target)throw Error();
+  physicalTarget(await physicalOwner(),target);
+  const {grant}=await verify('credential');
+  // Recheck after the human verification delay; never accept IDs from editable inputs.
+  physicalTarget(await physicalOwner(),target);
+  const result=await api('credential/revoke',{credentialId:target.credentialId,grant});
+  if(!result.revoked)throw Error();
+  const state=await physicalOwner();
+  if(!state.credentials.some(c=>c.id===target.credentialId&&c.user_id===target.userId&&c.state==='revoked'))throw Error();
+  physicalTest=undefined;
+  el('physicalState').textContent='시험 키 폐기 완료: '+target.userId+' · 앱에서 재로그인하지 말고 현재 관리자 권한을 확인하세요.';
+  return{testPasskeyRevoked:true,userId:target.userId};
+}
 const actions = {
   login: async () => { const r = await verify(); session = r.sessionToken; return { loggedIn: true, expiresIn: r.expiresIn }; },
   logout: async () => { const r = await api('logout'); session = undefined; el('state').textContent = ''; return r; },
@@ -57,6 +108,8 @@ const actions = {
     const link=document.createElement('a');link.href=url;link.download='DIANA-test-admin-'+result.userId+'.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
     return{testAdminCreated:true,userId:result.userId,invitationDownloaded:true};
   },
+  physicalEnroll,
+  physicalRevoke,
   changeRole: () => mutate('role', 'manage', { userId: el('userId').value, role: el('role').value }),
   disable: () => mutate('disable', 'manage', { userId: el('userId').value }),
   addKey: async () => register({ grant: (await verify('credential')).grant }),
