@@ -1,0 +1,38 @@
+name: Administrator console preparation
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'admin-console/**'
+      - 'lib/**'
+      - 'public/**'
+      - 'security-lab/admin-passkey/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/admin-console.yml'
+permissions:
+  contents: read
+jobs:
+  isolated-console:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: security-lab/admin-passkey
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: admin-console
+      - run: npm test
+        working-directory: admin-console
+      - run: npx playwright install --with-deps chromium
+        working-directory: admin-console
+      - run: npm run test:browser
+        working-directory: admin-console
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: DIANA-admin-console-preview
+          path: admin-console/generated/preview-*.png

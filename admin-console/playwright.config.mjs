@@ -1,0 +1,2 @@
+import {defineConfig} from '@playwright/test';
+export default defineConfig({testDir:'./browser-test',fullyParallel:false,workers:1,reporter:'list',outputDir:'generated/browser-results',use:{baseURL:'http://127.0.0.1:43879',viewport:{width:1440,height:1000},headless:true,launchOptions:process.env.ADMIN_TEST_CHROME_PATH?{executablePath:process.env.ADMIN_TEST_CHROME_PATH}:{}},webServer:{command:'node preview.mjs',url:'http://127.0.0.1:43879/admin/',reuseExistingServer:false,timeout:30000}});
