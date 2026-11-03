@@ -27,6 +27,8 @@ npm run preview
 
 ## 같은 DIANA 서비스에 연결하는 인터페이스
 
+운영 연결 전 준비물과 남은 순서는 [PRODUCTION-CONNECTION.md](./PRODUCTION-CONNECTION.md)에 정리했다. `production-config.mjs`는 기본 비활성인 순수 설정 검사기이며 운영 엔트리포인트에서 import하지 않는다. `production.env.example`은 비어 있는 설정 예시다. 검사 통과는 실제 운영 DB/주소 검증이나 배포 승인을 뜻하지 않는다.
+
 공개 시험 서버에서는 기존 HTTPS 출처의 `/admin/`에 이 화면을 제공한다. `/admin/config.json`은 기존 시험 Origin/RP ID와 `apiBasePath: '/api/'`를 명시하고, 새 화면은 검증된 기존 시험 인증 엔진·시험 DB의 API를 그대로 사용한다. 브라우저는 `/api/` 또는 `/admin/api/` 두 고정된 같은 출처 경로만 허용하며 외부 API URL을 거절한다. 이전 루트 시험 화면은 제거하고 `/`를 `/admin/`로 이동한다. APK·EXE의 native 경로와 DB 스키마는 유지한다. 이 시험 연결은 운영 배포나 최종 관리자 도메인 확정이 아니다.
 
 아래 운영용 마운트 인터페이스의 `/admin/api/`와 엄격한 TLS/프록시 검사는 그대로 유지한다. 공개 시험 연결은 기존 시험 서버의 Host·HTTPS 전달·Origin·권한 검사로 보호되는 기존 `/api/`를 재사용하며, 운영 프록시의 실제 신뢰 경계가 해결됐다는 뜻으로 표시하지 않는다.
