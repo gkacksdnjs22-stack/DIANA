@@ -62,6 +62,28 @@ export class StagingAdminAuth {
     need((await this.run('DELETE FROM grants WHERE hash=? AND session_hash=? AND scope=? AND expires>?', hash(grant), s.hash, scope, this.now())).changes === 1);
     return s;
   }
+  // Internal maintenance only: expiry/revocation already denies use before this runs.
+  async cleanupExpired() {
+    return this.tx(async () => {
+      const now = this.now(), counts = {sessions:0, authentication:0, challenges:0, grants:0, tickets:0, nativeCodes:0, nativeRequests:0};
+      const expired = await this.all(`SELECT s.hash FROM sessions s LEFT JOIN session_authentication m ON m.session_hash=s.hash
+        WHERE s.expires<=? OR s.revoked<>0 OR m.absolute_expires<=? OR m.session_hash IS NULL ORDER BY s.expires,s.hash LIMIT 500`, now, now);
+      if (expired.length) {
+        const ids = expired.map(s => s.hash), placeholders = ids.map(() => '?').join(',');
+        counts.nativeCodes += (await this.run('DELETE FROM native_codes WHERE source IN ('+placeholders+')', ...ids)).changes;
+        counts.grants += (await this.run('DELETE FROM grants WHERE session_hash IN ('+placeholders+')', ...ids)).changes;
+        counts.challenges += (await this.run('DELETE FROM challenges WHERE actor_session IN ('+placeholders+')', ...ids)).changes;
+        counts.tickets += (await this.run('DELETE FROM tickets WHERE actor_session IN ('+placeholders+')', ...ids)).changes;
+        counts.authentication += (await this.run('DELETE FROM session_authentication WHERE session_hash IN ('+placeholders+')', ...ids)).changes;
+        counts.sessions += (await this.run('DELETE FROM sessions WHERE hash IN ('+placeholders+')', ...ids)).changes;
+      }
+      for (const [table, field] of [['challenges','challenges'],['grants','grants'],['tickets','tickets'],['native_codes','nativeCodes'],['native_requests','nativeRequests']]) {
+        counts[field] += (await this.run('DELETE FROM '+table+' WHERE expires<=?', now)).changes;
+      }
+      if (Object.values(counts).some(n => n > 0)) await this.audit('session/cleanup', true);
+      return counts;
+    });
+  }
   async issueTicket(user, kind, actor = null) {
     const secret = token();
     await this.run('INSERT INTO tickets VALUES(?,?,?,?,?)', hash(secret), user, actor, kind, this.now() + 600_000);
@@ -363,7 +385,8 @@ export class StagingAdminAuth {
           },
           users: s.role === 'owner' ? await this.all('SELECT id,role,state FROM users') : [],
           credentials: s.role === 'owner' ? await this.all('SELECT id,user_id,device_type,backed_up,state FROM credentials') : await this.all('SELECT id,user_id,device_type,backed_up,state FROM credentials WHERE user_id=?', s.user_id),
-          sessions: await this.all('SELECT hash,credential_id,expires,revoked FROM sessions WHERE user_id=?', s.user_id)
+          sessions: await this.all(`SELECT s.hash,s.credential_id,s.expires,s.revoked FROM sessions s JOIN session_authentication m ON m.session_hash=s.hash
+            WHERE s.user_id=? AND s.revoked=0 AND s.expires>? AND m.absolute_expires>?`, s.user_id, this.now(), this.now())
         };
       } else if (action === 'session/revoke') {
         result = await this.tx(async () => {
