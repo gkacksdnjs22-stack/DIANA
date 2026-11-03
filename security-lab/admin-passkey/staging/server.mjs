@@ -19,6 +19,7 @@ export function createStagingServer(auth,config){
     ['/admin/', ['../../../admin-console/ui/index.html','text/html']],
     ['/admin/app.js', ['../../../admin-console/ui/app.js','text/javascript']],
     ['/admin/style.css', ['../../../admin-console/ui/style.css','text/css']],
+    ['/admin/diana-logo.png', ['../../../admin-console/ui/diana-logo.png','image/png']],
     ['/admin/browser.js',['../node_modules/@simplewebauthn/browser/dist/bundle/index.umd.min.js','text/javascript']],
   ]);
   return httpServer(async(req,res)=>{

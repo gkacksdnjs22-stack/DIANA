@@ -25,7 +25,9 @@ test.describe.serial('real WebAuthn signatures against a connected test database
   });
   test.afterAll(async()=>{await adminContext?.close();await ownerContext?.close();await browser?.close();await fixture?.dispose();});
   test('registers and logs in with verified signatures, then retains the session after DB reopen',async()=>{
-    test.setTimeout(120000);await enroll(ownerPage,fixture.enrollmentTicket);await login(ownerPage,'owner');
+    test.setTimeout(120000);await ownerPage.setViewportSize({width:1440,height:1000});await ownerPage.goto(fixture.origin+'/admin/');await expect(ownerPage.locator('#login')).toBeEnabled();
+    await mkdir('generated',{recursive:true});await ownerPage.screenshot({path:'generated/design-login-desktop.png',fullPage:false});
+    await enroll(ownerPage,fixture.enrollmentTicket);await login(ownerPage,'owner');
     ownerId=(await fixture.auth.get("SELECT id FROM users WHERE role='owner' AND state='active'")).id;
     expect(await ownerPage.evaluate(()=>isSecureContext)).toBe(true);
     await fixture.restart();await ownerPage.locator('#refresh').click();await expect(ownerPage.locator('#myRole')).toHaveText('owner');await expect(ownerPage.locator('#notice')).toContainText('현재 권한');
@@ -51,7 +53,7 @@ test.describe.serial('real WebAuthn signatures against a connected test database
     expect(codes.recoveryCodes.every(code=>hashes.some(h=>h.hash===createHash('sha256').update(code).digest('hex')))).toBe(true);
     const visible=await ownerPage.locator('body').innerText(),audit=JSON.stringify(await fixture.auth.all('SELECT at,operation,success FROM audit'));
     expect(codes.recoveryCodes.every(code=>!visible.includes(code)&&!audit.includes(code))).toBe(true);
-    await mkdir('generated',{recursive:true});await ownerPage.evaluate(()=>scrollTo(0,0));await ownerPage.screenshot({path:'generated/connected-owner.png',fullPage:true});
+    await mkdir('generated',{recursive:true});await ownerPage.evaluate(()=>scrollTo(0,0));await ownerPage.screenshot({path:'generated/connected-owner.png',fullPage:true});await ownerPage.screenshot({path:'generated/design-owner-desktop.png',fullPage:false});
     await ownerPage.setViewportSize({width:390,height:844});expect(await ownerPage.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await ownerPage.evaluate(()=>scrollTo(0,0));await ownerPage.screenshot({path:'generated/connected-mobile.png',fullPage:true});
   });
   test('selects multiple accounts, cancels safely, then purges once with real owner verification',async()=>{
