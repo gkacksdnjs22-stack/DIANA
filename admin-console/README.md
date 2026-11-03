@@ -13,6 +13,8 @@
 
 ## 로컬 미리보기
 
+세션 목록은 만료·종료된 로그인을 숨긴다. 시험 서버는 시작 시 및 1분마다 해당 세션과 연결된 임시 인증 정보를 원자적으로 정리한다. owner 계정·패스키·복구 코드와 활성 세션은 유지한다. 세부 보존·실패 재시도 정책은 `security-lab/admin-passkey/staging/README.md`를 참조한다. 운영용 일반 마운트는 이 작업을 자동 기동하지 않으며 운영 연결은 별도 검토 대상이다.
+
 ```sh
 cd admin-console
 npm ci --ignore-scripts --no-audit --no-fund

@@ -13,6 +13,7 @@ import {createStagingServer} from './server.mjs';
 import {request} from 'node:http';
 import {recoverToFile} from './recovery-file.mjs';
 import {StagingRateLimits,sourceResolver} from './rate-limit.mjs';
+import {startSessionCleanup} from './session-cleanup.mjs';
 const origin='https://diana-admin-passkey-stage.onrender.com',rpID=new URL(origin).hostname,redirect='kr.nightdesk.phone.lab.passkey.stage://oauth2/callback';
 const random=()=>randomBytes(32).toString('base64url');
 async function setup(t){let now=Date.now();const store=await pgliteStore();t.after(()=>store.close());const auth=new StagingAdminAuth({store,origin,rpID,now:()=>now});
@@ -250,4 +251,80 @@ test('concurrent purge retries commit once and do not affect the owner',async t=
   const f=await setup(t),a=await f.invite('admin'),b=await f.invite('auditor'),grant=await f.grant('cleanup');
   const results=await Promise.allSettled([1,2].map(()=>f.call('accounts/purge',{userIds:[a.userId,b.userId],grant},f.session)));
   assert.equal(results.filter(r=>r.status==='fulfilled').length,1);assert.equal((await f.store.get('SELECT COUNT(*) n FROM users')).n,1);assert.equal((await f.auth.session(f.session)).role,'owner');
+});
+
+test('expired session cleanup removes dependencies but keeps live sessions, keys, accounts and recovery hashes',async t=>{
+  const f=await setup(t),oldSession=await f.auth.session(f.session),admin=await f.invite('admin');
+  const raw=(await f.login(admin.key)).sessionToken,native=(await f.exchange(await f.issue(raw))).access_token,code=await f.issue(raw);
+  const grant=await f.grant(),ticket=await f.auth.issueTicket(admin.userId,'invite',oldSession.hash);
+  await f.call('login/begin',{scope:'manage'},f.session);
+  await f.call('recovery/codes',{grant:await f.grant('recovery')},f.session);
+  const users=await f.store.all('SELECT * FROM users ORDER BY id'),keys=await f.store.all('SELECT * FROM credentials ORDER BY id'),recovery=await f.store.all('SELECT * FROM recovery');
+  f.advance(900000);await assert.rejects(f.auth.session(f.session));
+  const current=(await f.login(f.owner.key)).sessionToken,live=await f.auth.session(current),liveGrant=await f.grant('manage',current),pending=await f.call('invite',{role:'auditor',grant:liveGrant},current);
+  const loginChallenge=await f.call('login/begin',{scope:'manage'},current),request=random();
+  await f.store.run('INSERT INTO native_requests VALUES(?,?,?,?,?,?)',request,f.params.client_id,redirect,f.params.state,f.params.code_challenge,f.auth.now()+120000);
+  const result=await f.auth.cleanupExpired();assert.equal(result.sessions,3);assert.equal(result.authentication,3);
+  assert.ok(result.nativeCodes>0);assert.ok(result.tickets>0);assert.ok(result.challenges>0);assert.ok(result.grants>0);
+  assert.deepEqual(await f.auth.session(current),live);assert.ok(await f.store.get('SELECT id FROM challenges WHERE id=?',loginChallenge.ceremonyId));
+  assert.ok(await f.store.get('SELECT id FROM native_requests WHERE id=?',request));assert.ok(await f.store.get('SELECT id FROM users WHERE id=?',pending.userId));
+  assert.equal((await f.store.get('SELECT COUNT(*) n FROM tickets WHERE user_id=?',pending.userId)).n,1);
+  for(const token of [f.session,raw,native])await assert.rejects(f.auth.session(token));
+  await assert.rejects(f.exchange(code));await assert.rejects(f.call('register/begin',{ticket}));await assert.rejects(f.call('invite',{role:'admin',grant},current));
+  for(const user of users)assert.deepEqual(await f.store.get('SELECT * FROM users WHERE id=?',user.id),user);
+  for(const key of keys){const actual=await f.store.get('SELECT * FROM credentials WHERE id=?',key.id);assert.ok(actual);assert.equal(actual.state,key.state);assert.deepEqual(actual.public_key,key.public_key);}
+  assert.deepEqual(await f.store.all('SELECT * FROM recovery'),recovery);
+  const audit=await f.store.all("SELECT * FROM audit WHERE operation='session/cleanup'");assert.equal(audit.length,1);assert.deepEqual(Object.keys(audit[0]).sort(),['at','id','operation','success']);
+  assert.ok(!JSON.stringify(audit).includes(oldSession.hash));assert.equal((await f.auth.cleanupExpired()).sessions,0);assert.equal((await f.store.get("SELECT COUNT(*) n FROM audit WHERE operation='session/cleanup'")).n,1);
+});
+
+test('cleanup respects native absolute deadlines and preserves a live native session after its source browser logs out',async t=>{
+  const f=await setup(t),token=(await f.exchange(await f.issue())).access_token;
+  await f.call('logout',{},f.session);assert.equal((await f.auth.cleanupExpired()).sessions,1);assert.equal((await f.auth.session(token)).role,'owner');
+  const native=await f.auth.session(token);await f.store.run('UPDATE session_authentication SET absolute_expires=? WHERE session_hash=?',f.auth.now()-1000,native.hash);
+  assert.equal((await f.auth.cleanupExpired()).sessions,1);await assert.rejects(f.auth.session(token));
+  const legacy=random();await f.store.run('INSERT INTO sessions VALUES(?,?,?,?,0)',createHash('sha256').update(legacy).digest('hex'),f.owner.userId,f.owner.credentialId,Date.now()+100000);
+  await assert.rejects(f.auth.session(legacy));assert.equal((await f.auth.cleanupExpired()).sessions,1);
+});
+
+test('expired independent challenges, grants, tickets and native requests are swept without removing valid sessions',async t=>{
+  const f=await setup(t);await f.call('login/begin');await f.grant();await f.auth.issueTicket(f.owner.userId,'invite');await f.native.begin(f.params);
+  f.advance(600001);const result=await f.auth.cleanupExpired();assert.equal(result.sessions,0);assert.ok(result.challenges>0);assert.ok(result.grants>0);assert.ok(result.tickets>0);assert.ok(result.nativeRequests>0);
+  assert.equal((await f.auth.session(f.session)).role,'owner');
+  await assert.rejects(f.call('session/cleanup',{},f.session)); // No public operator endpoint.
+});
+
+test('expiry cleanup rolls back dependencies, parent rows and audit on database failure, then retries',async t=>{
+  const f=await setup(t),source=await f.auth.session(f.session);await f.issue();await f.grant();await f.auth.issueTicket(f.owner.userId,'invite',source.hash);
+  f.advance(900000);const tables=['sessions','session_authentication','native_codes','grants','tickets'];
+  const before=await Promise.all(tables.map(table=>f.store.all('SELECT * FROM '+table)));
+  const original=f.store.run.bind(f.store);f.store.run=async(sql,...args)=>{if(sql.startsWith('DELETE FROM sessions WHERE hash IN'))throw Error('PRIVATE_DATABASE_ERROR');return original(sql,...args);};
+  try{await assert.rejects(f.auth.cleanupExpired());}finally{f.store.run=original;}
+  for(let i=0;i<tables.length;i++)assert.deepEqual(await f.store.all('SELECT * FROM '+tables[i]),before[i]);
+  assert.equal((await f.store.get("SELECT COUNT(*) n FROM audit WHERE operation='session/cleanup'")).n,0);
+  assert.equal((await f.auth.cleanupExpired()).sessions,1);
+});
+
+test('automatic sweeper starts immediately, retries a failed tick, prevents overlap and drains on stop',async()=>{
+  let tick,cleared=false,calls=0,errors=0,release;const pending=new Promise(r=>release=r);
+  const auth={async cleanupExpired(){calls++;if(calls===1)throw Error('PRIVATE_ERROR');if(calls===2)await pending;return{sessions:0};}};
+  const worker=await startSessionCleanup(auth,{setIntervalFn:(fn,ms)=>{assert.equal(ms,60000);tick=fn;return{unref(){}};},clearIntervalFn:()=>cleared=true,onError:(...args)=>{assert.equal(args.length,0);errors++;}});
+  assert.equal(calls,1);assert.equal(errors,1);tick();await Promise.resolve();tick();assert.equal(calls,2);
+  let stopped=false;const stopping=worker.stop().then(()=>stopped=true);await Promise.resolve();assert.equal(stopped,false);assert.equal(cleared,true);
+  release();await stopping;tick();await Promise.resolve();assert.equal(calls,2);
+});
+
+test('session lists hide ended records before their scheduled physical cleanup',async t=>{
+  const f=await setup(t),old=await f.auth.session(f.session),second=(await f.login(f.owner.key)).sessionToken;
+  await f.call('logout',{},f.session);const state=await f.call('list',{},second);assert.ok(!state.sessions.some(s=>s.hash===old.hash));assert.equal(state.sessions.length,1);
+  assert.equal((await f.store.get('SELECT COUNT(*) n FROM sessions')).n,2);
+  await f.auth.cleanupExpired();assert.equal((await f.store.get('SELECT COUNT(*) n FROM sessions')).n,1);
+});
+
+test('each sweep bounds session deletion to 500 and leaves the active owner session intact',async t=>{
+  const f=await setup(t),source=await f.auth.session(f.session);
+  await f.store.run("INSERT INTO sessions SELECT 'expired-'||n,?,?,?,0 FROM generate_series(1,501) n",f.owner.userId,f.owner.credentialId,f.auth.now()-1000);
+  await f.store.run("INSERT INTO session_authentication SELECT hash,?,?, 'webauthn' FROM sessions WHERE hash<>?",f.auth.now()-10000,f.auth.now()-1000,source.hash);
+  assert.equal((await f.auth.cleanupExpired()).sessions,500);assert.equal((await f.store.get('SELECT COUNT(*) n FROM sessions')).n,2);
+  assert.equal((await f.auth.cleanupExpired()).sessions,1);assert.deepEqual(await f.auth.session(f.session),source);
 });

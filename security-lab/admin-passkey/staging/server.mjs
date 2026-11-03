@@ -8,6 +8,7 @@ import {openPostgresStore} from './store.mjs';
 import {StagingAdminAuth} from './auth.mjs';
 import {StagingNativeAuthorization} from './native.mjs';
 import {StagingRateLimits,sourceResolver} from './rate-limit.mjs';
+import {startSessionCleanup} from './session-cleanup.mjs';
 const hash=x=>createHash('sha256').update(String(x||'')).digest('hex');
 export function createStagingServer(auth,config){
   const native=new StagingNativeAuthorization(auth,config.androidRedirect);
@@ -66,9 +67,13 @@ export function createStagingServer(auth,config){
 }
 export async function main(env=process.env){
   const config=stageConfig(env),store=await openPostgresStore(config),auth=new StagingAdminAuth({store,origin:config.origin,rpID:config.rpID});
+  const cleanup=await startSessionCleanup(auth,{
+    onCleanup:counts=>{if(Object.values(counts).some(n=>n>0))console.log('Expired administrator session data cleaned.');},
+    onError:()=>console.error('Administrator session cleanup failed; a later sweep will retry.'),
+  });
   const server=createStagingServer(auth,config);server.requestTimeout=10000;server.headersTimeout=10000;
   server.listen(config.port,'0.0.0.0',()=>console.log('DIANA administrator HTTPS staging service ready.'));
-  for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>server.close(()=>void store.close().then(()=>process.exit())));
-  return{server,auth};
+  for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>server.close(()=>void cleanup.stop().then(()=>store.close()).then(()=>process.exit())));
+  return{server,auth,cleanup};
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)main().catch(()=>{console.error('Staging startup failed. Check staging-only configuration and database.');process.exitCode=1;});
