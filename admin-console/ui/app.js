@@ -3,11 +3,12 @@ let session,state,config,pendingFile,busy=false;
 const el=id=>document.getElementById(id);
 const roleName={owner:'owner',admin:'admin',auditor:'auditor'};
 function notice(text,error=false){el('notice').textContent=text;el('notice').dataset.error=String(error);}
-function message(error){const names={NotAllowedError:'기기 인증이 취소되었거나 시간이 초과됐습니다.',NotSupportedError:'이 기기의 패스키 지원 상태를 확인하세요.',SecurityError:'인증 출처 또는 RP ID가 허용되지 않았습니다.'};return names[error?.name]||'연결·로그인 만료·현재 권한을 확인한 뒤 다시 시도하세요.';}
+function message(error){const names={NotAllowedError:'기기 인증이 취소되었거나 시간이 초과됐습니다.',NotSupportedError:'이 기기의 패스키 지원 상태를 확인하세요.',SecurityError:'인증 출처 또는 RP ID가 허용되지 않았습니다.',InvalidStateError:'이미 등록된 인증 수단입니다.'};return error?.message==='NETWORK_UNAVAILABLE'?'서버에 연결할 수 없어 관리자 상태를 지웠습니다. 연결 후 다시 로그인하세요.':names[error?.cause?.name||error?.name]||'연결·로그인 만료·현재 권한을 확인한 뒤 다시 시도하세요.';}
 function clearSession(){session=undefined;state=undefined;pendingFile=undefined;el('ticket').value='';el('downloadPanel').hidden=true;render();}
 async function api(action,body={}){
-  const r=await fetch('./api/'+action,{method:'POST',headers:{'Content-Type':'application/json',...(session?{Authorization:'Bearer '+session}:{})},body:JSON.stringify(body)});
-  if(!r.ok){if(r.status===401||r.status===403)clearSession();throw Error('REQUEST_DENIED');}return r.json();
+  let r;try{r=await fetch('./api/'+action,{method:'POST',headers:{'Content-Type':'application/json',...(session?{Authorization:'Bearer '+session}:{})},body:JSON.stringify(body)});}catch{clearSession();throw Error('NETWORK_UNAVAILABLE');}
+  if(!r.ok){if(r.status===401||r.status===403||r.status>=500)clearSession();throw Error('REQUEST_DENIED');}
+  try{return await r.json();}catch{clearSession();throw Error('INVALID_RESPONSE');}
 }
 async function verify(scope){const begin=await api('login/begin',scope?{scope}:{});const response=await SimpleWebAuthnBrowser.startAuthentication({optionsJSON:begin.options});return api('login/finish',{ceremonyId:begin.ceremonyId,response});}
 async function register(body){const begin=await api('register/begin',body);const response=await SimpleWebAuthnBrowser.startRegistration({optionsJSON:begin.options});return api('register/finish',{ceremonyId:begin.ceremonyId,response});}

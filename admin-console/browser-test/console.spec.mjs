@@ -2,12 +2,13 @@ import {test,expect} from '@playwright/test';
 import {mkdir} from 'node:fs/promises';
 const owner='11111111-1111-4111-8111-111111111111',other='22222222-2222-4222-8222-222222222222';
 async function connected(page,{role='owner',credentialId='public-credential'}={}){
-  const calls=[];let scope,expired=false,offlineLogout=false;
+  const calls=[];let scope,expired=false,offlineLogout=false,offlineStatus=false;
   await page.route('**/admin/config.json',route=>route.fulfill({json:{configured:true,basePath:'/admin/',origin:'https://admin-console.example',rpID:'admin-console.example',documentAccess:false}}));
   await page.route('**/admin/browser.js',route=>route.fulfill({contentType:'text/javascript',body:'window.SimpleWebAuthnBrowser={startAuthentication:async()=>({id:"fixture-auth",signature:"private-signature"}),startRegistration:async()=>({id:"fixture-key"})};'}));
   await page.route('**/admin/api/**',async route=>{
     const action=new URL(route.request().url()).pathname.slice('/admin/api/'.length),body=route.request().postDataJSON();calls.push({action,body});
     if(action==='logout'&&offlineLogout)return route.abort();
+    if(action==='list'&&offlineStatus)return route.abort();
     if(action==='list'&&expired)return route.fulfill({status:403,json:{code:'DENIED'}});
     const values={
       'login/begin':()=>{scope=body.scope;return{ceremonyId:'private-ceremony',options:{}};},
@@ -21,7 +22,7 @@ async function connected(page,{role='owner',credentialId='public-credential'}={}
     await route.fulfill({json:values[action]()});
   });
   await page.goto('/admin/');await expect(page.getByRole('button',{name:'패스키로 로그인'})).toBeEnabled();await page.getByRole('button',{name:'패스키로 로그인'}).click();await expect(page.locator('#myRole')).toHaveText(role);
-  return{calls,expire:()=>expired=true,offlineLogout:()=>offlineLogout=true};
+  return{calls,expire:()=>expired=true,offlineLogout:()=>offlineLogout=true,offlineStatus:()=>offlineStatus=true};
 }
 test('preview is visibly disconnected, read only and responsive',async({page})=>{
   await page.goto('/admin/');await expect(page.locator('#connection')).toHaveText('로컬 미리보기');await expect(page.locator('#login')).toBeDisabled();await expect(page.locator('#invite')).toBeDisabled();
@@ -49,6 +50,10 @@ test('server rejection clears role controls and pending capability downloads',as
 });
 test('local signout clears the console even when remote logout cannot be confirmed',async({page})=>{
   const f=await connected(page);f.offlineLogout();await page.locator('#logout').click();await expect(page.locator('#dashboard')).toBeHidden();await expect(page.locator('#notice')).toContainText('서버 세션 종료는 연결 후 확인');
+});
+test('network loss clears cached administrator controls and issued files',async({page})=>{
+  const f=await connected(page);await page.locator('#codes').click();await expect(page.locator('#downloadPanel')).toBeVisible();f.offlineStatus();await page.locator('#refresh').click();
+  await expect(page.locator('#dashboard')).toBeHidden();await expect(page.locator('#downloadPanel')).toBeHidden();await expect(page.locator('#notice')).toContainText('서버에 연결할 수 없어 관리자 상태를 지웠습니다');
 });
 test('credential metadata is rendered as text rather than active markup',async({page})=>{
   await connected(page,{credentialId:'"><img src=x onerror="window.pwned=1">'});expect(await page.locator('img').count()).toBe(0);expect(await page.evaluate(()=>window.pwned)).toBeUndefined();
