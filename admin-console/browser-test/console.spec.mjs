@@ -57,7 +57,7 @@ test('network loss clears cached administrator controls and issued files',async(
   await expect(page.locator('#dashboard')).toBeHidden();await expect(page.locator('#downloadPanel')).toBeHidden();await expect(page.locator('#notice')).toContainText('서버에 연결할 수 없어 관리자 상태를 지웠습니다');
 });
 test('credential metadata is rendered as text rather than active markup',async({page})=>{
-  await connected(page,{credentialId:'"><img src=x onerror="window.pwned=1">'});expect(await page.locator('img').count()).toBe(0);expect(await page.evaluate(()=>window.pwned)).toBeUndefined();
+  await connected(page,{credentialId:'"><img src=x onerror="window.pwned=1">'});expect(await page.locator('#credentialRows img').count()).toBe(0);expect(await page.evaluate(()=>window.pwned)).toBeUndefined();
 });
 test('the explicit staging API bridge remains on the same origin',async({page})=>{
   const f=await connected(page,{apiBasePath:'/api/'});await expect(page.locator('#myRole')).toHaveText('owner');expect(f.calls.some(c=>c.action==='list')).toBe(true);

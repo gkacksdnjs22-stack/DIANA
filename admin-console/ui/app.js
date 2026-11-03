@@ -17,6 +17,7 @@ async function mutate(action,scope,body={}){const {grant}=await verify(scope);re
 async function refresh(){state=await api('list');render();}
 function button(label,work,danger=false){const b=document.createElement('button');b.textContent=label;b.disabled=busy;b.className=danger?'danger':'';b.onclick=()=>run(work);return b;}
 function textCell(tr,text,title){const td=document.createElement('td');td.textContent=String(text);if(title)td.title=title;tr.append(td);return td;}
+function statusCell(tr,text,tone){const td=textCell(tr,''),tag=document.createElement('span');tag.className='status-pill';tag.dataset.tone=tone;tag.textContent=text;td.append(tag);return td;}
 function short(value){return String(value).slice(0,12)+'…';}
 function row(parent){const tr=document.createElement('tr');el(parent).append(tr);return tr;}
 function render(){
@@ -33,6 +34,7 @@ function render(){
   el('cleanupCancel').disabled=busy;
   el('loginPanel').hidden=logged;el('dashboard').hidden=!logged&&!preview;
   el('connection').textContent=preview?'로컬 미리보기':logged?'서버 인증 확인':'로그인 필요';
+  el('connection').dataset.state=preview?'preview':logged?'online':'offline';
   for(const id of ['login','enroll'])el(id).disabled=!config?.configured||busy;
   for(const id of ['refresh','logout','addKey','codes'])el(id).disabled=!logged||busy;
   el('invite').disabled=!owner||busy;el('inviteRole').disabled=!owner||busy;
@@ -44,13 +46,13 @@ function render(){
   for(const user of state?.users||[]){
     const tr=row('accountRows'),selection=textCell(tr,'');
     if(owner&&user.role!=='owner'&&user.id!==state.me.id){const check=document.createElement('input');check.type='checkbox';check.setAttribute('aria-label','계정 '+user.id+' 선택');check.checked=selectedAccounts.has(user.id);check.disabled=busy;check.onchange=()=>{if(check.checked)selectedAccounts.add(user.id);else selectedAccounts.delete(user.id);render();};selection.append(check);}else selection.textContent='보호';
-    textCell(tr,short(user.id),user.id);textCell(tr,user.role);textCell(tr,user.state==='active'?'활성':user.state==='pending'?'등록 대기':'비활성');
+    textCell(tr,short(user.id),user.id);textCell(tr,user.role);statusCell(tr,user.state==='active'?'활성':user.state==='pending'?'등록 대기':'비활성',user.state==='active'?'active':user.state==='pending'?'pending':'inactive');
     const td=textCell(tr,'');if(owner){const select=document.createElement('select');select.setAttribute('aria-label',user.id+' 역할');for(const value of Object.keys(roleName)){const o=document.createElement('option');o.value=value;o.textContent=value;select.append(o);}select.value=user.role;select.disabled=busy;td.append(select);
       td.append(button('변경',async()=>{if(!confirm('계정 '+user.id+'의 역할을 '+select.value+'으로 변경할까요?'))return;await mutate('role','manage',{userId:user.id,role:select.value});await refresh();notice('권한을 변경했습니다. 해당 계정의 기존 로그인은 종료됩니다.');}));
       if(user.state!=='disabled')td.append(button('비활성화',async()=>{if(!confirm('계정 '+user.id+'을 비활성화할까요?'))return;await mutate('disable','manage',{userId:user.id});await refresh();notice('계정을 비활성화했습니다.');},true));}
   }
-  for(const key of state?.credentials||[]){const tr=row('credentialRows');textCell(tr,short(key.id),key.id);textCell(tr,key.device_type==='multiDevice'?'동기화 가능':'인증기 보관');textCell(tr,key.state==='active'?'활성':'폐기됨');const td=textCell(tr,'');if(key.state==='active'&&(owner||key.user_id===state.me.id))td.append(button('등록 폐기',async()=>{if(!confirm('인증 등록 '+key.id+'을 폐기할까요? 이 키의 기존 세션도 종료됩니다.'))return;await mutate('credential/revoke','credential',{credentialId:key.id});await refresh();notice('인증 등록을 폐기했습니다.');},true));}
-  for(const item of state?.sessions||[]){const tr=row('sessionRows');textCell(tr,short(item.hash));textCell(tr,new Date(item.expires).toLocaleString('ko-KR'));textCell(tr,item.revoked?'종료됨':item.expires<=Date.now()?'만료됨':'활성');const td=textCell(tr,'');if(!item.revoked&&item.expires>Date.now())td.append(button('세션 종료',async()=>{await mutate('session/revoke','credential',{sessionId:item.hash});await refresh();notice('선택한 세션을 종료했습니다.');}));}
+  for(const key of state?.credentials||[]){const tr=row('credentialRows');textCell(tr,short(key.id),key.id);textCell(tr,key.device_type==='multiDevice'?'동기화 가능':'인증기 보관');statusCell(tr,key.state==='active'?'활성':'폐기됨',key.state==='active'?'active':'inactive');const td=textCell(tr,'');if(key.state==='active'&&(owner||key.user_id===state.me.id))td.append(button('등록 폐기',async()=>{if(!confirm('인증 등록 '+key.id+'을 폐기할까요? 이 키의 기존 세션도 종료됩니다.'))return;await mutate('credential/revoke','credential',{credentialId:key.id});await refresh();notice('인증 등록을 폐기했습니다.');},true));}
+  for(const item of state?.sessions||[]){const tr=row('sessionRows');textCell(tr,short(item.hash));textCell(tr,new Date(item.expires).toLocaleString('ko-KR'));statusCell(tr,item.revoked?'종료됨':item.expires<=Date.now()?'만료됨':'활성',!item.revoked&&item.expires>Date.now()?'active':'inactive');const td=textCell(tr,'');if(!item.revoked&&item.expires>Date.now())td.append(button('세션 종료',async()=>{await mutate('session/revoke','credential',{sessionId:item.hash});await refresh();notice('선택한 세션을 종료했습니다.');}));}
 }
 async function run(work){if(busy)return;busy=true;render();try{await work();}catch(error){notice(message(error),true);}finally{busy=false;render();}}
 function issuedFile(title,filename,data){pendingFile={filename,data};el('downloadTitle').textContent=title;el('downloadPanel').hidden=false;notice('파일을 발급했습니다. 아래 파일 저장을 눌러 비공개 장소에 보관하세요.');}

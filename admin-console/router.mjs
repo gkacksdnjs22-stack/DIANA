@@ -8,6 +8,7 @@ const assets=new Map([
   ['/admin/',new URL('ui/index.html',import.meta.url)],
   ['/admin/app.js',new URL('ui/app.js',import.meta.url)],
   ['/admin/style.css',new URL('ui/style.css',import.meta.url)],
+  ['/admin/diana-logo.png',new URL('ui/diana-logo.png',import.meta.url)],
   ['/admin/browser.js',new URL('node_modules/@simplewebauthn/browser/dist/bundle/index.umd.min.js',import.meta.url)],
 ]);
 export function isAdminRequest(target=''){
@@ -52,7 +53,7 @@ export function createAdminConsole({mode='preview',auth,origin,rpID,trustedProxy
       if(!limits.allow(lane,session?session.user_id:source(req)))return send(res,429,{code:'LIMIT'});
       if(path==='/admin'&&req.method==='GET'){res.setHeader('Location',ADMIN_PATH);return send(res,308,'','text/plain; charset=utf-8');}
       if((req.method==='GET'||req.method==='HEAD')&&assets.has(path)){
-        const type=path.endsWith('.js')?'text/javascript; charset=utf-8':path.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8';
+        const type=path.endsWith('.png')?'image/png':path.endsWith('.js')?'text/javascript; charset=utf-8':path.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8';
         return send(res,200,req.method==='HEAD'?'':await readFile(assets.get(path)),type);
       }
       if(path==='/admin/config.json'&&req.method==='GET')return send(res,200,{configured,basePath:ADMIN_PATH,origin:configured?origin:null,rpID:configured?rpID:null,documentAccess:false});

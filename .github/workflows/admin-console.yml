@@ -40,3 +40,4 @@ jobs:
             admin-console/generated/connected-owner.png
             admin-console/generated/connected-mobile.png
             admin-console/generated/bulk-cleanup-*.png
+            admin-console/generated/design-*.png
