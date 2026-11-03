@@ -12,7 +12,7 @@ import {createAdminConsole} from '../router.mjs';
 import {mountAdminConsole} from '../mount.mjs';
 const origin='https://admin-console.example',rpID='admin-console.example';
 const USER='legacy-user-'+'u'.repeat(40),AGENT='legacy-agent-'+'a'.repeat(40),GATEWAY='legacy-gateway-'+'g'.repeat(40);
-async function fixture(t,{mode='connected',trustedProxyIPs=['127.0.0.1']}={}){
+async function fixture(t,{mode='connected',trustedProxyIPs=['127.0.0.1'],handlerOverride}={}){
   await mkdir(new URL('../generated/',import.meta.url),{recursive:true});
   const dir=await mkdtemp(new URL('../generated/integration-',import.meta.url));
   let store,auth,owner,raw;
@@ -23,7 +23,7 @@ async function fixture(t,{mode='connected',trustedProxyIPs=['127.0.0.1']}={}){
     const l=await auth.dispatch('login/begin');raw=(await auth.dispatch('login/finish',{ceremonyId:l.ceremonyId,response:owner.login(l.options,{rp:rpID,client:{origin}})})).sessionToken;
   }
   const server=createControlServer({userToken:USER,agentToken:AGENT,gatewayToken:GATEWAY,appOrigin:origin,transferDir:dir});
-  const handler=createAdminConsole(mode==='preview'?{}:{mode,auth,origin,rpID,trustedProxyIPs});
+  const handler=handlerOverride??createAdminConsole(mode==='preview'?{}:{mode,auth,origin,rpID,trustedProxyIPs});
   mountAdminConsole(server,handler);server.listen(0,'127.0.0.1');await once(server,'listening');
   t.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));await store?.close();assert.ok(dir.startsWith(resolve(import.meta.dirname,'../generated')));await rm(dir,{recursive:true,force:true});});
   const send=(path,{method='GET',token,body,headers={},bytes}={})=>new Promise((resolve,reject)=>{
@@ -92,4 +92,9 @@ test('mount rejects an already started or ambiguous request handler without remo
 test('a second mount is rejected before listening and the first handler remains intact',()=>{
   const server=createServer((_req,res)=>res.end('legacy'));mountAdminConsole(server,createAdminConsole());const listener=server.listeners('request')[0];
   assert.throws(()=>mountAdminConsole(server,createAdminConsole()));assert.equal(server.listeners('request').length,1);assert.equal(server.listeners('request')[0],listener);
+});
+test('an administrator handler failure is contained and the legacy server stays available',async t=>{
+  const f=await fixture(t,{mode:'preview',handlerOverride:{handle(){throw Error('private-diagnostic');}}});
+  const failed=await f.send('/admin/');assert.equal(failed.status,503);assert.deepEqual(failed.data,{code:'ADMIN_UNAVAILABLE'});assert.ok(!failed.text.includes('private-diagnostic'));
+  assert.equal((await f.send('/api/jobs',{token:USER})).status,200);
 });
