@@ -6,6 +6,17 @@ const STAGE_DB_HOST = 'dpg-dbk9huuc6qcc73duefng-a';
 const invalid = code => { throw Error(code); };
 const requireValue = (ok, code) => { if (!ok) invalid(code); };
 function parseURL(value, code) { try { return new URL(value); } catch { invalid(code); } }
+function databaseHost(url, code) {
+  // postgres URLs retain opaque host spelling. Parse only the host with WHATWG
+  // special-scheme rules to normalize case, escapes, IDNA and IP literals offline.
+  const parsed = parseURL(`http://${url.hostname}/`, code);
+  requireValue(!!parsed.hostname && !parsed.port && !parsed.username && !parsed.password
+    && parsed.pathname === '/' && !parsed.search && !parsed.hash, code);
+  const host = parsed.hostname.replace(/\.$/, '');
+  requireValue(!!isIP(host.replace(/^\[|\]$/g, '')) || (host.length <= 253
+    && host.split('.').every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))), code);
+  return host;
+}
 const realHostname = host => host.length <= 253 && host.includes('.') && !isIP(host)
   && host.split('.').every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))
   && !/(?:^|\.)(localhost|invalid|test|example)$/.test(host);
@@ -26,18 +37,20 @@ export function productionAdminConfig(env = {}) {
     && expectedDatabase !== 'diana_admin_stage', 'ADMIN_PRODUCTION_DATABASE_REQUIRED');
   requireValue(env.DIANA_ADMIN_DATABASE_SCHEMA === PRODUCTION_ADMIN_SCHEMA, 'ADMIN_PRODUCTION_SCHEMA_REQUIRED');
   const database = parseURL(env.DIANA_ADMIN_DATABASE_URL, 'ADMIN_PRODUCTION_DATABASE_URL_REQUIRED');
+  const adminHost = databaseHost(database, 'ADMIN_PRODUCTION_DATABASE_URL_INVALID');
   let databaseName;try { databaseName = decodeURIComponent(database.pathname.slice(1)); } catch { invalid('ADMIN_PRODUCTION_DATABASE_URL_INVALID'); }
   requireValue(['postgres:','postgresql:'].includes(database.protocol) && !!database.username && !!database.password
     && !database.search && !database.hash && databaseName === expectedDatabase
-    && database.hostname !== STAGE_DB_HOST && !database.hostname.startsWith(STAGE_DB_HOST+'.')
-    && !['localhost','127.0.0.1','::1','[::1]'].includes(database.hostname), 'ADMIN_PRODUCTION_DATABASE_URL_INVALID');
+    && adminHost !== STAGE_DB_HOST && !adminHost.startsWith(STAGE_DB_HOST+'.')
+    && !['localhost','127.0.0.1','[::1]'].includes(adminHost), 'ADMIN_PRODUCTION_DATABASE_URL_INVALID');
   // Existing application credentials are not a production authentication DB default.
   if (env.DATABASE_URL) {
     const application = parseURL(env.DATABASE_URL, 'ADMIN_APPLICATION_DATABASE_URL_INVALID');
+    const applicationHost = databaseHost(application, 'ADMIN_APPLICATION_DATABASE_URL_INVALID');
     let applicationUser, adminUser;
     try { applicationUser = decodeURIComponent(application.username); adminUser = decodeURIComponent(database.username); }
     catch { invalid('ADMIN_PRODUCTION_DATABASE_URL_INVALID'); }
-    requireValue(!(application.hostname === database.hostname
+    requireValue(!(applicationHost === adminHost
       && (application.port || '5432') === (database.port || '5432')
       && applicationUser === adminUser), 'ADMIN_SEPARATE_DATABASE_CREDENTIALS_REQUIRED');
   }
@@ -46,7 +59,7 @@ export function productionAdminConfig(env = {}) {
   if (transport === 'render-private') {
     const host = env.DIANA_ADMIN_PRIVATE_DATABASE_HOST;
     requireValue(env.RENDER === 'true' && typeof host === 'string' && /^dpg-[a-z0-9-]+$/.test(host)
-      && database.hostname === host && host !== STAGE_DB_HOST, 'ADMIN_PRODUCTION_PRIVATE_DATABASE_INVALID');
+      && adminHost === host && host !== STAGE_DB_HOST, 'ADMIN_PRODUCTION_PRIVATE_DATABASE_INVALID');
   }
   const rawProxies = env.DIANA_ADMIN_TRUSTED_PROXY_IPS;
   requireValue(typeof rawProxies === 'string' && rawProxies.trim().length > 0, 'ADMIN_VERIFIED_PROXY_IPS_REQUIRED');

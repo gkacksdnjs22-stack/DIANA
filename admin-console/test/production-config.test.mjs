@@ -37,6 +37,44 @@ test('rejects mismatched DB names, missing credentials and TLS query overrides',
   for(const url of ['postgresql://u:p@db.diana.company/other','postgresql://u@db.diana.company/diana_admin_production',valid().DIANA_ADMIN_DATABASE_URL+'?sslmode=no-verify',valid().DIANA_ADMIN_DATABASE_URL+'#private','postgresql://u:p@localhost/diana_admin_production'])assert.throws(()=>productionAdminConfig({...valid(),DIANA_ADMIN_DATABASE_URL:url}));
   for(const mode of [undefined,'','insecure'])assert.throws(()=>productionAdminConfig({...valid(),DIANA_ADMIN_DATABASE_TRANSPORT:mode}));
 });
+
+test('normalizes both DB hosts before rejecting reuse of the application role',()=>{
+  const hosts=['db.diana.company','DB.DIANA.COMPANY','%64b.diana.company','db.diana.company.','%44B.DIANA.COMPANY.'];
+  for(const adminHost of hosts)for(const applicationHost of hosts){
+    assert.throws(()=>productionAdminConfig({...valid(),
+      DIANA_ADMIN_DATABASE_URL:`postgresql://admin:p@${adminHost}/diana_admin_production`,
+      DATABASE_URL:`postgres://%61dmin:changed@${applicationHost}:5432/other_database`}),
+    {message:'ADMIN_SEPARATE_DATABASE_CREDENTIALS_REQUIRED'},`${adminHost} / ${applicationHost}`);
+  }
+  assert.throws(()=>productionAdminConfig({...valid(),
+    DIANA_ADMIN_DATABASE_URL:'postgresql://admin:p@[2001:db8::1]/diana_admin_production',
+    DATABASE_URL:'postgresql://admin:p@[2001:0db8:0:0:0:0:0:1]:5432/app'}),
+  {message:'ADMIN_SEPARATE_DATABASE_CREDENTIALS_REQUIRED'});
+  for(const DATABASE_URL of ['postgres://different:p@DB.DIANA.COMPANY/app','postgres://admin:p@other.diana.company/app']){
+    assert.equal(productionAdminConfig({...valid(),DATABASE_URL}).enabled,true);
+  }
+});
+
+test('staging and loopback exclusions use the same normalized database host',()=>{
+  for(const host of ['DPG-DBK9HUUC6QCC73DUEFNG-A','%64pg-dbk9huuc6qcc73duefng-a',
+    'dpg-dbk9huuc6qcc73duefng-a.','DPG-DBK9HUUC6QCC73DUEFNG-A.SINGAPORE-POSTGRES.RENDER.COM.',
+    'LOCALHOST','%6cocalhost','localhost.','127.1','0x7f000001','[0:0:0:0:0:0:0:1]']){
+    assert.throws(()=>productionAdminConfig({...valid(),DIANA_ADMIN_DATABASE_URL:`postgresql://u:p@${host}/diana_admin_production`}),
+    {message:'ADMIN_PRODUCTION_DATABASE_URL_INVALID'},host);
+  }
+});
+
+test('host normalization rejects malformed escapes and applies to private-host matching',()=>{
+  for(const host of ['%ZZ.diana.company','db%2fdiana.company','db%40diana.company']){
+    assert.throws(()=>productionAdminConfig({...valid(),DIANA_ADMIN_DATABASE_URL:`postgresql://u:p@${host}/diana_admin_production`}),
+    {message:'ADMIN_PRODUCTION_DATABASE_URL_INVALID'});
+    assert.throws(()=>productionAdminConfig({...valid(),DATABASE_URL:`postgresql://u:p@${host}/app`}),
+    {message:'ADMIN_APPLICATION_DATABASE_URL_INVALID'});
+  }
+  assert.equal(productionAdminConfig({...valid(),RENDER:'true',DIANA_ADMIN_DATABASE_TRANSPORT:'render-private',
+    DIANA_ADMIN_PRIVATE_DATABASE_HOST:'dpg-prod-fixture-a',
+    DIANA_ADMIN_DATABASE_URL:'postgresql://u:p@DPG-PROD-FIXTURE-A./diana_admin_production'}).privateNetwork,true);
+});
 test('private transport needs explicit Render context and matching production host',()=>{
   const env={...valid(),RENDER:'true',DIANA_ADMIN_DATABASE_TRANSPORT:'render-private',DIANA_ADMIN_PRIVATE_DATABASE_HOST:'dpg-prod-fixture-a',DIANA_ADMIN_DATABASE_URL:'postgresql://u:p@dpg-prod-fixture-a/diana_admin_production'};
   assert.equal(productionAdminConfig(env).privateNetwork,true);
