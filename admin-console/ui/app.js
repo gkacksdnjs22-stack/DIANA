@@ -6,7 +6,7 @@ function notice(text,error=false){el('notice').textContent=text;el('notice').dat
 function message(error){const names={NotAllowedError:'기기 인증이 취소되었거나 시간이 초과됐습니다.',NotSupportedError:'이 기기의 패스키 지원 상태를 확인하세요.',SecurityError:'인증 출처 또는 RP ID가 허용되지 않았습니다.',InvalidStateError:'이미 등록된 인증 수단입니다.'};return error?.message==='NETWORK_UNAVAILABLE'?'서버에 연결할 수 없어 관리자 상태를 지웠습니다. 연결 후 다시 로그인하세요.':names[error?.cause?.name||error?.name]||'연결·로그인 만료·현재 권한을 확인한 뒤 다시 시도하세요.';}
 function clearSession(){session=undefined;state=undefined;pendingFile=undefined;el('ticket').value='';el('downloadPanel').hidden=true;render();}
 async function api(action,body={}){
-  let r;try{r=await fetch('./api/'+action,{method:'POST',headers:{'Content-Type':'application/json',...(session?{Authorization:'Bearer '+session}:{})},body:JSON.stringify(body)});}catch{clearSession();throw Error('NETWORK_UNAVAILABLE');}
+  let r;try{r=await fetch((config?.apiBasePath||'/admin/api/')+action,{method:'POST',headers:{'Content-Type':'application/json',...(session?{Authorization:'Bearer '+session}:{})},body:JSON.stringify(body)});}catch{clearSession();throw Error('NETWORK_UNAVAILABLE');}
   if(!r.ok){if(r.status===401||r.status===403||r.status>=500)clearSession();throw Error('REQUEST_DENIED');}
   try{return await r.json();}catch{clearSession();throw Error('INVALID_RESPONSE');}
 }
@@ -52,5 +52,5 @@ const actions={
 };
 for(const[id,work]of Object.entries(actions))el(id).onclick=()=>run(work);
 el('saveFile').onclick=()=>{if(!pendingFile)return;try{const url=URL.createObjectURL(new Blob([JSON.stringify(pendingFile.data)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=pendingFile.filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);notice('파일 저장을 요청했습니다. 다운로드 결과를 확인하세요. 필요하면 다시 저장할 수 있습니다.');}catch{notice('파일 저장을 시작하지 못했습니다. 같은 버튼으로 다시 시도하세요.',true);}};
-async function init(){try{const r=await fetch('./config.json',{cache:'no-store'});if(!r.ok)throw Error();config=await r.json();notice(config.configured?'패스키로 관리자 로그인을 진행하세요.':'로컬 미리보기입니다. 인증 연결은 꺼져 있어 계정·DB 변경을 수행할 수 없습니다.');}catch{notice('관리자 연결 정보를 확인하지 못했습니다.',true);}render();}
+async function init(){try{const r=await fetch('./config.json',{cache:'no-store'});if(!r.ok)throw Error();const next=await r.json();if(next.apiBasePath!==undefined&&!['/admin/api/','/api/'].includes(next.apiBasePath))throw Error();config=next;notice(config.configured?'패스키로 관리자 로그인을 진행하세요.':'로컬 미리보기입니다. 인증 연결은 꺼져 있어 계정·DB 변경을 수행할 수 없습니다.');}catch{notice('관리자 연결 정보를 확인하지 못했습니다.',true);}render();}
 void init();

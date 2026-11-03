@@ -267,3 +267,26 @@ test('physical test can clean up only its own credential after an ambiguous regi
   const f=await physicalFixture({finishNetworkFailure:true});await f.element('physicalEnroll').onclick();assert.equal(f.state.credentials[1].state,'active');
   await f.element('physicalRevoke').onclick();assert.equal(f.state.credentials[1].state,'revoked');assert.equal(f.state.credentials[0].state,'active');
 });
+test('connected console assets use the existing staging origin, auth API and test database',async t=>{
+  const f=await setup(t),server=createStagingServer(f.auth,{origin,rpID,androidRedirect:redirect});await new Promise(r=>server.listen(0,'127.0.0.1',r));
+  t.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));});
+  const send=(path,{method='GET',body,headers={}}={})=>new Promise((resolve,reject)=>{
+    const req=request({hostname:'127.0.0.1',port:server.address().port,path,method,headers:{Host:rpID,'X-Forwarded-Proto':'https',Origin:origin,...(body?{'Content-Type':'application/json'}:{}),...headers}},res=>{const parts=[];res.on('data',b=>parts.push(b));res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,text:Buffer.concat(parts).toString()}));});req.on('error',reject);req.end(body?JSON.stringify(body):undefined);
+  });
+  const cfg=await send('/admin/config.json');assert.equal(cfg.status,200);assert.deepEqual(JSON.parse(cfg.text),{configured:true,basePath:'/admin/',apiBasePath:'/api/',origin,rpID,documentAccess:false});
+  assert.ok(!cfg.text.includes(f.session));const page=await send('/admin/');assert.match(page.text,/<title>DIANA 관리자<\/title>/);assert.match(page.headers['content-security-policy'],/style-src 'self'/);
+  assert.match((await send('/')).headers['content-security-policy'],/style-src 'none'/);
+  assert.equal((await send('/admin/browser.js')).text,(await send('/browser.js')).text);
+  assert.equal((await send('/admin/app.js')).text,await readFile(new URL('../../../admin-console/ui/app.js',import.meta.url),'utf8'));
+  const state=await send('/api/list',{method:'POST',body:{},headers:{Authorization:'Bearer '+f.session}});assert.equal(state.status,200);assert.equal(JSON.parse(state.text).me.id,f.owner.userId);
+  const canonical=await send('/admin');assert.equal(canonical.status,308);assert.equal(canonical.headers.location,'/admin/');
+  assert.equal((await send('/admin/',{headers:{Host:'attacker.example'}})).status,403);
+  assert.equal((await send('/admin/config.json',{headers:{'X-Forwarded-Proto':'http'}})).status,403);
+});
+test('console integration adds no alternate bootstrap, recovery or native API paths',async t=>{
+  const f=await setup(t),server=createStagingServer(f.auth,{origin,rpID,androidRedirect:redirect});await new Promise(r=>server.listen(0,'127.0.0.1',r));
+  t.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));});
+  const send=path=>new Promise((resolve,reject)=>{const req=request({hostname:'127.0.0.1',port:server.address().port,path,method:'POST',headers:{Host:rpID,'X-Forwarded-Proto':'https',Origin:origin,'Content-Type':'application/json',Authorization:'Bearer '+f.session}},res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});req.on('error',reject);req.end('{}');});
+  for(const path of ['/admin/api/stage/bootstrap','/admin/api/recover','/admin/api/native/token','/admin/api/list'])assert.equal(await send(path),403);
+  assert.equal((await f.auth.session(f.session)).role,'owner');assert.equal((await f.store.get("SELECT COUNT(*) n FROM credentials WHERE state='active'")).n,1);
+});

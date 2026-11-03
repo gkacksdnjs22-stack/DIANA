@@ -35,4 +35,7 @@ jobs:
         if: always()
         with:
           name: DIANA-admin-console-preview
-          path: admin-console/generated/preview-*.png
+          path: |
+            admin-console/generated/preview-*.png
+            admin-console/generated/connected-owner.png
+            admin-console/generated/connected-mobile.png

@@ -1,12 +1,12 @@
 import {test,expect} from '@playwright/test';
 import {mkdir} from 'node:fs/promises';
 const owner='11111111-1111-4111-8111-111111111111',other='22222222-2222-4222-8222-222222222222';
-async function connected(page,{role='owner',credentialId='public-credential'}={}){
+async function connected(page,{role='owner',credentialId='public-credential',apiBasePath}={}){
   const calls=[];let scope,expired=false,offlineLogout=false,offlineStatus=false;
-  await page.route('**/admin/config.json',route=>route.fulfill({json:{configured:true,basePath:'/admin/',origin:'https://admin-console.example',rpID:'admin-console.example',documentAccess:false}}));
+  await page.route('**/admin/config.json',route=>route.fulfill({json:{configured:true,basePath:'/admin/',origin:'https://admin-console.example',rpID:'admin-console.example',documentAccess:false,...(apiBasePath?{apiBasePath}:{})}}));
   await page.route('**/admin/browser.js',route=>route.fulfill({contentType:'text/javascript',body:'window.SimpleWebAuthnBrowser={startAuthentication:async()=>({id:"fixture-auth",signature:"private-signature"}),startRegistration:async()=>({id:"fixture-key"})};'}));
-  await page.route('**/admin/api/**',async route=>{
-    const action=new URL(route.request().url()).pathname.slice('/admin/api/'.length),body=route.request().postDataJSON();calls.push({action,body});
+  await page.route('**'+(apiBasePath||'/admin/api/')+'**',async route=>{
+    const action=new URL(route.request().url()).pathname.slice((apiBasePath||'/admin/api/').length),body=route.request().postDataJSON();calls.push({action,body});
     if(action==='logout'&&offlineLogout)return route.abort();
     if(action==='list'&&offlineStatus)return route.abort();
     if(action==='list'&&expired)return route.fulfill({status:403,json:{code:'DENIED'}});
@@ -57,4 +57,11 @@ test('network loss clears cached administrator controls and issued files',async(
 });
 test('credential metadata is rendered as text rather than active markup',async({page})=>{
   await connected(page,{credentialId:'"><img src=x onerror="window.pwned=1">'});expect(await page.locator('img').count()).toBe(0);expect(await page.evaluate(()=>window.pwned)).toBeUndefined();
+});
+test('the explicit staging API bridge remains on the same origin',async({page})=>{
+  const f=await connected(page,{apiBasePath:'/api/'});await expect(page.locator('#myRole')).toHaveText('owner');expect(f.calls.some(c=>c.action==='list')).toBe(true);
+});
+test('an external API destination is rejected before any login can start',async({page})=>{
+  await page.route('**/admin/config.json',route=>route.fulfill({json:{configured:true,apiBasePath:'https://attacker.invalid/api/'}}));
+  await page.goto('/admin/');await expect(page.locator('#login')).toBeDisabled();await expect(page.locator('#notice')).toContainText('연결 정보를 확인하지 못했습니다');
 });
