@@ -11,7 +11,6 @@ import {stageConfig} from './config.mjs';
 import {prepareSQL} from './store.mjs';
 import {createStagingServer} from './server.mjs';
 import {request} from 'node:http';
-import {runInNewContext} from 'node:vm';
 import {recoverToFile} from './recovery-file.mjs';
 import {StagingRateLimits,sourceResolver} from './rate-limit.mjs';
 const origin='https://diana-admin-passkey-stage.onrender.com',rpID=new URL(origin).hostname,redirect='kr.nightdesk.phone.lab.passkey.stage://oauth2/callback';
@@ -141,8 +140,8 @@ test('anonymous HTTP floods cannot exhaust owner status, management or a new log
   const send=(path,{method='GET',body={},token,forwarded}={})=>new Promise((resolve,reject)=>{
     const req=request({hostname:'127.0.0.1',port:server.address().port,path,method,headers:{Host:rpID,'X-Forwarded-Proto':'https',Origin:origin,'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{}),...(forwarded?{'X-Forwarded-For':forwarded}:{})}},res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});req.on('error',reject);req.end(method==='POST'?JSON.stringify(body):undefined);
   });
-  for(let i=0;i<120;i++)assert.equal(await send('/'),200);
-  assert.equal(await send('/'),429);assert.equal(await send('/',{forwarded:'203.0.113.1'}),429);
+  for(let i=0;i<120;i++)assert.equal(await send('/admin/'),200);
+  assert.equal(await send('/admin/'),429);assert.equal(await send('/admin/',{forwarded:'203.0.113.1'}),429);
   assert.equal(await send('/healthz'),200);assert.equal(await send('/api/login/begin',{method:'POST'}),200);
   for(let i=0;i<29;i++)assert.equal(await send('/api/list',{method:'POST',token:random()}),403);
   assert.equal(await send('/api/list',{method:'POST',token:random()}),429);
@@ -165,108 +164,6 @@ test('HTTP authentication limits distinguish client IPs behind an explicitly tru
   assert.equal(await begin('192.0.2.2'),200);
 });
 
-async function uiFixture({beginStatus=200,finishStatus=200,browserError}={}){
-  const elements=new Map(),requests=[];let browserCalls=0;
-  const element=id=>{if(!elements.has(id))elements.set(id,{value:'',textContent:'',disabled:false});return elements.get(id);};
-  const context={document:{getElementById:element},fetch:async(url,init)=>{
-    requests.push({url,body:JSON.parse(init.body)});
-    const status=url.endsWith('/register/begin')?beginStatus:url.endsWith('/register/finish')?finishStatus:200;
-    return{ok:status===200,status,json:async()=>url.endsWith('/register/begin')?{ceremonyId:'private-ceremony',options:{challenge:'private-challenge'}}:{registered:true,enrollmentTicket:'private-ticket'}};
-  },SimpleWebAuthnBrowser:{startRegistration:async()=>{browserCalls++;if(browserError)throw browserError;return{response:'private-signature'};}}};
-  runInNewContext(await readFile(new URL('app.js',import.meta.url),'utf8'),context);
-  return{element,requests,browserCalls:()=>browserCalls};
-}
-for(const [name,options,stage,detail]of[
-  ['registration ticket denied',{beginStatus:403},'등록권 확인','HTTP 403'],
-  ['device cancellation',{browserError:{name:'WebAuthnError',cause:{name:'NotAllowedError',message:'private-ticket'},message:'private-signature'}},'기기 패스키 생성','취소'],
-  ['unsupported algorithm',{browserError:{name:'WebAuthnError',code:'ERROR_AUTHENTICATOR_NO_SUPPORTED_PUBKEYCREDPARAMS_ALG',message:'private-challenge'}},'기기 패스키 생성','서명 알고리즘'],
-  ['server rejects registration result',{finishStatus:403},'등록 결과 저장','HTTP 403'],
-  ['unrecognized browser error',{browserError:{name:'constructor',message:'private-signature'}},'기기 패스키 생성','요청이 거절'],
-])test('registration UI identifies '+name+' without exposing authentication data',async()=>{
-  const f=await uiFixture(options);f.element('ticket').value='  private-ticket  ';await f.element('enroll').onclick();
-  const text=f.element('result').textContent;assert.ok(text.includes(stage));assert.ok(text.includes(detail));assert.doesNotMatch(text,/private-/);assert.equal(f.element('enroll').disabled,false);assert.equal(f.element('ticket').value,'');
-  assert.equal(f.requests[0].body.ticket,'private-ticket');if(options.beginStatus===403)assert.equal(f.browserCalls(),0);
-});
-test('registration UI explicitly confirms only completed registration',async()=>{const f=await uiFixture();f.element('ticket').value='private-ticket';await f.element('enroll').onclick();assert.ok(f.element('result').textContent.startsWith('패스키 등록 완료.'));assert.equal(f.requests.at(-1).url,'/api/register/finish');assert.doesNotMatch(f.element('result').textContent,/private-/);});
-test('bootstrap UI trims copied whitespace and prevents duplicate in-flight issuance',async()=>{const f=await uiFixture();f.element('bootstrapToken').value=' private-token ';const first=f.element('bootstrap').onclick();await f.element('bootstrap').onclick();await first;assert.equal(f.requests.length,1);assert.equal(f.requests[0].body.token,'private-token');assert.equal(f.element('bootstrap').disabled,false);assert.equal(f.element('bootstrapToken').value,'');assert.equal(f.element('ticket').value,'private-ticket');});
-
-for(const role of ['owner','auditor'])test('test invitation export respects authenticated '+role+' role and never displays its capability',async()=>{
-  const elements=new Map(),calls=[],downloads=[],timers=[];let blob;
-  const element=id=>{if(!elements.has(id))elements.set(id,{value:'',textContent:'',disabled:false});return elements.get(id);};
-  const ctx={location:{origin},document:{getElementById:element,createElement:()=>({click(){downloads.push({href:this.href,filename:this.download});}})},
-    Blob:class{constructor(parts){this.text=parts.join('');}},URL:{createObjectURL(value){blob=value;return'blob:private-invitation';},revokeObjectURL(){}},setTimeout:(fn,ms)=>timers.push({fn,ms}),
-    fetch:async(url,init)=>{calls.push({url,body:JSON.parse(init.body),authorization:init.headers.Authorization});return{ok:true,status:200,json:async()=>url.endsWith('/list')?{me:{id:'owner-id',role}}:url.endsWith('/login/begin')?{ceremonyId:'private-ceremony',options:{challenge:'private-challenge'}}:url.endsWith('/login/finish')?{grant:'private-grant'}:{userId:'test-user-id',enrollmentTicket:'private-ticket'}};},
-    SimpleWebAuthnBrowser:{startAuthentication:async()=>({signature:'private-signature'})}};
-  runInNewContext(await readFile(new URL('app.js',import.meta.url),'utf8'),ctx);runInNewContext('session="private-owner-session"',ctx);element('role').value='owner';await element('testInvite').onclick();
-  assert.doesNotMatch(element('result').textContent,/private-/);assert.equal(element('testInvite').disabled,false);
-  if(role!=='owner'){assert.equal(calls.length,1);assert.equal(downloads.length,0);return;}
-  assert.equal(calls.find(x=>x.url.endsWith('/login/begin')).body.scope,'manage');
-  const invite=calls.find(x=>x.url.endsWith('/invite'));assert.equal(invite.body.role,'admin');assert.equal(invite.body.grant,'private-grant');assert.equal(invite.authorization,'Bearer private-owner-session');
-  assert.deepEqual(JSON.parse(blob.text),{kind:'diana-staging-test-admin',origin,role:'admin',ownerUserId:'owner-id',userId:'test-user-id',enrollmentTicket:'private-ticket'});
-  assert.equal(downloads[0].filename,'DIANA-test-admin-test-user-id.json');assert.equal(timers[0].ms,1000);assert.equal(JSON.parse(element('result').textContent).testAdminCreated,true);
-});
-
-async function physicalFixture(options={}){
-  const owner='11111111-1111-4111-8111-111111111111',user='22222222-2222-4222-8222-222222222222',key='test-physical-credential';
-  const elements=new Map(),calls=[];let browserCalls=0;
-  const element=id=>{if(!elements.has(id))elements.set(id,{value:'',textContent:'',disabled:false});return elements.get(id);};
-  const state={me:{id:owner,role:options.role||'owner'},users:[{id:owner,role:'owner',state:'active'},{id:user,role:'admin',state:'pending'}],credentials:[{id:'owner-credential',user_id:owner,state:'active'}]};
-  const invitation={kind:'diana-staging-test-admin',origin,role:'admin',ownerUserId:owner,userId:user,enrollmentTicket:'A'.repeat(43),...options.invitation};
-  const file={size:options.fileSize||274,text:async()=>JSON.stringify(invitation)};
-  const context={location:{origin:options.pageOrigin||origin},document:{getElementById:element},atob:s=>Buffer.from(s,'base64').toString('binary'),
-    SimpleWebAuthnBrowser:{startRegistration:async()=>{browserCalls++;return{id:key,response:'private-signature'};},startAuthentication:async()=>({signature:'private-signature'})},
-    fetch:async(url,init)=>{
-      const body=JSON.parse(init.body);calls.push({url,body});let value;
-      if(url.endsWith('/list'))value=JSON.parse(JSON.stringify(state));
-      else if(url.endsWith('/register/begin'))value={ceremonyId:'private-ceremony',options:{user:{id:Buffer.from(options.serverUser||user).toString('base64url')}}};
-      else if(url.endsWith('/register/finish')){
-        state.users[1].state='active';state.credentials.push({id:key,user_id:user,state:'active'});
-        if(options.finishNetworkFailure)throw Error('private-response');
-        value={registered:true,userId:user,credentialId:key};
-      }else if(url.endsWith('/login/begin'))value={ceremonyId:'private-reauth',options:{}};
-      else if(url.endsWith('/login/finish')){options.afterVerify?.(state);value={grant:'private-grant'};}
-      else if(url.endsWith('/credential/revoke')){state.credentials.find(c=>c.id===body.credentialId).state='revoked';value={revoked:true};}
-      else throw Error('UNEXPECTED_API');
-      return{ok:true,status:200,json:async()=>value};
-    }};
-  runInNewContext(await readFile(new URL('app.js',import.meta.url),'utf8'),context);
-  runInNewContext('session="private-owner-session"',context);
-  element('physicalInvitation').files=[file];
-  return{element,calls,state,owner,user,key,browserCalls:()=>browserCalls};
-}
-test('physical test pins the newly registered admin credential and requires fresh verification to revoke it',async()=>{
-  const f=await physicalFixture();await f.element('physicalEnroll').onclick();
-  assert.equal(JSON.parse(f.element('result').textContent).testPasskeyRegistered,true);assert.equal(f.browserCalls(),1);
-  f.element('credentialId').value='owner-credential';f.element('userId').value=f.owner;
-  await f.element('physicalRevoke').onclick();const revoked=f.calls.find(c=>c.url.endsWith('/credential/revoke'));
-  assert.deepEqual(revoked.body,{credentialId:f.key,grant:'private-grant'});
-  assert.equal(f.calls.find(c=>c.url.endsWith('/login/begin')).body.scope,'credential');
-  assert.equal(f.state.credentials[0].state,'active');assert.equal(f.state.credentials[1].state,'revoked');
-  assert.equal(JSON.parse(f.element('result').textContent).testPasskeyRevoked,true);
-  assert.doesNotMatch(f.element('result').textContent+f.element('physicalState').textContent,/private-|A{43}/);
-});
-for(const [name,options] of [
-  ['an auditor actor',{role:'auditor'}],
-  ['another page origin',{pageOrigin:'https://attacker.invalid'}],
-  ['another invitation origin',{invitation:{origin:'https://attacker.invalid'}}],
-  ['an owner-role invitation',{invitation:{role:'owner'}}],
-  ['the actual owner as target',{invitation:{userId:'11111111-1111-4111-8111-111111111111'}}],
-  ['another owner as inviter',{invitation:{ownerUserId:'33333333-3333-4333-8333-333333333333'}}],
-  ['an oversized input',{fileSize:4097}],
-  ['a different server-issued user handle',{serverUser:'11111111-1111-4111-8111-111111111111'}],
-])test('physical test rejects '+name+' before authenticator use',async()=>{
-  const f=await physicalFixture(options);await f.element('physicalEnroll').onclick();
-  assert.equal(f.browserCalls(),0);assert.ok(!f.calls.some(c=>c.url.endsWith('/register/finish')||c.url.endsWith('/credential/revoke')));
-  assert.doesNotMatch(f.element('result').textContent,/private-|A{43}/);
-});
-test('physical test rechecks account role after reauthentication before revoking',async()=>{
-  const f=await physicalFixture({afterVerify:s=>s.users[1].role='owner'});await f.element('physicalEnroll').onclick();await f.element('physicalRevoke').onclick();
-  assert.ok(!f.calls.some(c=>c.url.endsWith('/credential/revoke')));assert.equal(f.state.credentials[0].state,'active');
-});
-test('physical test can clean up only its own credential after an ambiguous registration response',async()=>{
-  const f=await physicalFixture({finishNetworkFailure:true});await f.element('physicalEnroll').onclick();assert.equal(f.state.credentials[1].state,'active');
-  await f.element('physicalRevoke').onclick();assert.equal(f.state.credentials[1].state,'revoked');assert.equal(f.state.credentials[0].state,'active');
-});
 test('connected console assets use the existing staging origin, auth API and test database',async t=>{
   const f=await setup(t),server=createStagingServer(f.auth,{origin,rpID,androidRedirect:redirect});await new Promise(r=>server.listen(0,'127.0.0.1',r));
   t.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));});
@@ -275,7 +172,7 @@ test('connected console assets use the existing staging origin, auth API and tes
   });
   const cfg=await send('/admin/config.json');assert.equal(cfg.status,200);assert.deepEqual(JSON.parse(cfg.text),{configured:true,basePath:'/admin/',apiBasePath:'/api/',origin,rpID,documentAccess:false});
   assert.ok(!cfg.text.includes(f.session));const page=await send('/admin/');assert.match(page.text,/<title>DIANA 관리자<\/title>/);assert.match(page.headers['content-security-policy'],/style-src 'self'/);
-  assert.match((await send('/')).headers['content-security-policy'],/style-src 'none'/);
+  const root=await send('/');assert.equal(root.status,308);assert.equal(root.headers.location,'/admin/');assert.equal((await send('/app.js')).status,403);
   assert.equal((await send('/admin/browser.js')).text,(await send('/browser.js')).text);
   assert.equal((await send('/admin/app.js')).text,await readFile(new URL('../../../admin-console/ui/app.js',import.meta.url),'utf8'));
   const state=await send('/api/list',{method:'POST',body:{},headers:{Authorization:'Bearer '+f.session}});assert.equal(state.status,200);assert.equal(JSON.parse(state.text).me.id,f.owner.userId);
@@ -289,4 +186,68 @@ test('console integration adds no alternate bootstrap, recovery or native API pa
   const send=path=>new Promise((resolve,reject)=>{const req=request({hostname:'127.0.0.1',port:server.address().port,path,method:'POST',headers:{Host:rpID,'X-Forwarded-Proto':'https',Origin:origin,'Content-Type':'application/json',Authorization:'Bearer '+f.session}},res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});req.on('error',reject);req.end('{}');});
   for(const path of ['/admin/api/stage/bootstrap','/admin/api/recover','/admin/api/native/token','/admin/api/list'])assert.equal(await send(path),403);
   assert.equal((await f.auth.session(f.session)).role,'owner');assert.equal((await f.store.get("SELECT COUNT(*) n FROM credentials WHERE state='active'")).n,1);
+});
+
+test('bulk account purge removes linked credentials, web/native sessions and capabilities, preserving owner and unselected accounts',async t=>{
+  const f=await setup(t),admin=await f.invite('admin'),other=await f.invite('auditor');
+  const raw=(await f.login(admin.key)).sessionToken,issued=(await f.exchange(await f.issue(raw))).access_token,code=await f.issue(raw);
+  const oldTicket=await f.auth.issueTicket(admin.userId,'invite');
+  await f.call('recovery/codes',{grant:await f.grant('recovery',raw,admin.key)},raw);
+  await f.grant('credential',raw,admin.key);await f.call('login/begin',{scope:'manage'},raw);
+  const pending=await f.call('invite',{role:'admin',grant:await f.grant()},f.session);
+  const grant=await f.grant('cleanup'),before=await f.store.get('SELECT * FROM users WHERE id=?',f.owner.userId);
+  const ownerKey=await f.store.get('SELECT * FROM credentials WHERE user_id=?',f.owner.userId);
+  const ownerSession=await f.auth.session(f.session);
+  const result=await f.call('accounts/purge',{userIds:[admin.userId,pending.userId],grant},f.session);
+  assert.deepEqual(result,{deleted:true,accounts:2,credentials:1,sessions:2});
+  for(const table of ['users','credentials','sessions','tickets','challenges','recovery']){
+    const column=table==='users'?'id':'user_id';assert.equal((await f.store.get('SELECT COUNT(*) n FROM '+table+' WHERE '+column+' IN (?,?)',admin.userId,pending.userId)).n,0);
+  }
+  assert.equal((await f.store.get('SELECT COUNT(*) n FROM session_authentication m LEFT JOIN sessions s ON s.hash=m.session_hash WHERE s.hash IS NULL')).n,0);
+  assert.equal((await f.store.get('SELECT COUNT(*) n FROM native_codes c LEFT JOIN sessions s ON s.hash=c.source WHERE s.hash IS NULL')).n,0);
+  assert.equal((await f.store.get('SELECT COUNT(*) n FROM grants g LEFT JOIN sessions s ON s.hash=g.session_hash WHERE s.hash IS NULL')).n,0);
+  assert.deepEqual(await f.store.get('SELECT * FROM users WHERE id=?',f.owner.userId),before);
+  assert.deepEqual(await f.store.get('SELECT * FROM credentials WHERE user_id=?',f.owner.userId),ownerKey);
+  assert.deepEqual(await f.auth.session(f.session),ownerSession);
+  assert.ok(await f.store.get('SELECT id FROM users WHERE id=?',other.userId));
+  for(const token of [raw,issued])await assert.rejects(f.auth.session(token));
+  await assert.rejects(f.login(admin.key));await assert.rejects(f.exchange(code));await assert.rejects(f.call('register/begin',{ticket:oldTicket}));
+  const audit=await f.store.all("SELECT * FROM audit WHERE operation='accounts/purge' AND success=1");assert.equal(audit.length,1);
+  assert.deepEqual(Object.keys(audit[0]).sort(),['at','id','operation','success']);
+  assert.ok(!JSON.stringify(audit).includes(admin.userId));
+  await assert.rejects(f.call('accounts/purge',{userIds:[other.userId],grant},f.session));
+});
+
+test('bulk purge rejects missing, duplicate, oversized or owner-containing targets atomically',async t=>{
+  const f=await setup(t),admin=await f.invite('admin'),owner2=await f.invite('owner');
+  for(const ids of [[],null,'all',[admin.userId,admin.userId],Array(51).fill(admin.userId),[admin.userId,'missing'],[admin.userId,'00000000-0000-4000-8000-000000000000'],[admin.userId,f.owner.userId],[admin.userId,owner2.userId]]){
+    await assert.rejects(f.call('accounts/purge',{userIds:ids,grant:await f.grant('cleanup')},f.session));
+    assert.ok(await f.store.get('SELECT id FROM users WHERE id=?',admin.userId));assert.equal((await f.auth.session(f.session)).role,'owner');
+  }
+});
+
+test('bulk purge requires an active owner, matching cleanup scope and an unexpired one-use reauthentication',async t=>{
+  const f=await setup(t),admin=await f.invite('admin'),raw=(await f.login(admin.key)).sessionToken,target=await f.invite('auditor');
+  for(const token of [undefined,random(),raw])await assert.rejects(f.call('accounts/purge',{userIds:[target.userId],grant:await f.grant('cleanup')},token));
+  for(const grant of [undefined,random(),await f.grant('manage'),await f.grant('cleanup',raw,admin.key)])await assert.rejects(f.call('accounts/purge',{userIds:[target.userId],grant},f.session));
+  const expired=await f.grant('cleanup');f.advance(60001);await assert.rejects(f.call('accounts/purge',{userIds:[target.userId],grant:expired},f.session));
+  const grant=await f.grant('cleanup');await f.call('role',{userId:target.userId,role:'owner',grant:await f.grant()},f.session);
+  await assert.rejects(f.call('accounts/purge',{userIds:[target.userId],grant},f.session));assert.ok(await f.store.get("SELECT id FROM users WHERE id=? AND role='owner'",target.userId));
+});
+
+test('bulk purge rolls back every deletion and grant consumption on write or audit failure',async t=>{
+  const f=await setup(t),a=await f.invite('admin'),b=await f.invite('auditor');
+  for(const failed of ['second-account','success-audit']){
+    const grant=await f.grant('cleanup'),original=f.store.run.bind(f.store);let deleted=0;
+    f.store.run=async(sql,...args)=>{if(failed==='second-account'&&sql==='DELETE FROM users WHERE id=?'&&++deleted===2)throw Error('INJECTED');if(failed==='success-audit'&&sql.startsWith('INSERT INTO audit')&&args[1]==='accounts/purge'&&args[2]===1)throw Error('INJECTED');return original(sql,...args);};
+    try{await assert.rejects(f.call('accounts/purge',{userIds:[a.userId,b.userId],grant},f.session));}finally{f.store.run=original;}
+    for(const id of [a.userId,b.userId]){assert.ok(await f.store.get('SELECT id FROM users WHERE id=?',id));assert.equal((await f.store.get('SELECT COUNT(*) n FROM credentials WHERE user_id=?',id)).n,1);}
+    assert.ok(await f.store.get('SELECT hash FROM grants WHERE hash=?',createHash('sha256').update(grant).digest('hex')));
+  }
+});
+
+test('concurrent purge retries commit once and do not affect the owner',async t=>{
+  const f=await setup(t),a=await f.invite('admin'),b=await f.invite('auditor'),grant=await f.grant('cleanup');
+  const results=await Promise.allSettled([1,2].map(()=>f.call('accounts/purge',{userIds:[a.userId,b.userId],grant},f.session)));
+  assert.equal(results.filter(r=>r.status==='fulfilled').length,1);assert.equal((await f.store.get('SELECT COUNT(*) n FROM users')).n,1);assert.equal((await f.auth.session(f.session)).role,'owner');
 });

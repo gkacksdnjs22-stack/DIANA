@@ -13,7 +13,6 @@ export function createStagingServer(auth,config){
   const native=new StagingNativeAuthorization(auth,config.androidRedirect);
   const limits=new StagingRateLimits(),source=sourceResolver(config.trustedProxyIPs);
   const assets=new Map([
-    ['/', ['index.html','text/html']],['/app.js',['app.js','text/javascript']],
     ['/native.html',['../ui/native.html','text/html']],['/native.js',['../ui/native.js','text/javascript']],
     ['/browser.js',['../node_modules/@simplewebauthn/browser/dist/bundle/index.umd.min.js','text/javascript']],
     ['/admin/', ['../../../admin-console/ui/index.html','text/html']],
@@ -33,6 +32,7 @@ export function createStagingServer(auth,config){
       const lane=session?'administrator':req.method==='GET'&&!req.url.startsWith('/authorize?')?'read':'anonymous';
       // Only a DB-verified session can use the account lane. All that account's sessions share it.
       if(!limits.allow(lane,session?session.user_id:source(req)))return send(429,{code:'LIMIT'});
+      if(req.method==='GET'&&req.url==='/'){res.writeHead(308,{'Location':'/admin/','Cache-Control':'no-store','Referrer-Policy':'no-referrer'});return res.end();}
       if(req.method==='GET'&&req.url==='/admin'){res.writeHead(308,{'Location':'/admin/','Cache-Control':'no-store','Referrer-Policy':'no-referrer'});return res.end();}
       if(req.method==='GET'&&req.url==='/admin/config.json')return send(200,{configured:true,basePath:'/admin/',apiBasePath:'/api/',origin:config.origin,rpID:config.rpID,documentAccess:false});
       if(req.method==='GET'&&req.url.startsWith('/authorize?')){

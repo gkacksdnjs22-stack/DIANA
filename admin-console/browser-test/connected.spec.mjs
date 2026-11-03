@@ -54,4 +54,21 @@ test.describe.serial('real WebAuthn signatures against a connected test database
     await mkdir('generated',{recursive:true});await ownerPage.evaluate(()=>scrollTo(0,0));await ownerPage.screenshot({path:'generated/connected-owner.png',fullPage:true});
     await ownerPage.setViewportSize({width:390,height:844});expect(await ownerPage.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await ownerPage.evaluate(()=>scrollTo(0,0));await ownerPage.screenshot({path:'generated/connected-mobile.png',fullPage:true});
   });
+  test('selects multiple accounts, cancels safely, then purges once with real owner verification',async()=>{
+    test.setTimeout(120000);await ownerPage.setViewportSize({width:1440,height:1000});
+    await ownerPage.locator('#invite').click();await expect(ownerPage.locator('#downloadPanel')).toBeVisible();const pending=await downloaded(ownerPage);
+    const before=await fixture.auth.all('SELECT hash FROM recovery WHERE user_id=?',ownerId);
+    await ownerPage.locator('#selectAll').check();await expect(ownerPage.locator('#selectionCount')).toHaveText('2개 선택');
+    await expect(ownerPage.getByLabel('계정 '+ownerId+' 선택',{exact:true})).toHaveCount(0);
+    await ownerPage.locator('#cleanupReview').click();await expect(ownerPage.locator('#cleanupDialog')).toBeVisible();await ownerPage.locator('#cleanupCancel').click();
+    expect((await fixture.auth.get('SELECT COUNT(*) n FROM users')).n).toBe(3);
+    await ownerPage.locator('#cleanupReview').click();await expect(ownerPage.locator('#cleanupExecute')).toBeDisabled();
+    await ownerPage.screenshot({path:'generated/bulk-cleanup-review-desktop.png',fullPage:false});
+    await ownerPage.locator('#cleanupAcknowledge').check();await ownerPage.locator('#cleanupExecute').click();await expect(ownerPage.locator('#notice')).toContainText('2개 계정과 연결된 기록을 삭제');
+    await expect(ownerPage.locator('#accountRows tr')).toHaveCount(1);await expect(ownerPage.locator('#myRole')).toHaveText('owner');
+    for(const id of [invitation.userId,pending.userId])expect(await fixture.auth.get('SELECT id FROM users WHERE id=?',id)).toBeUndefined();
+    expect(await fixture.auth.all('SELECT hash FROM recovery WHERE user_id=?',ownerId)).toEqual(before);
+    await ownerPage.locator('#refresh').click();await expect(ownerPage.locator('#myRole')).toHaveText('owner');
+    await ownerPage.screenshot({path:'generated/bulk-cleanup-complete-desktop.png',fullPage:true});
+  });
 });

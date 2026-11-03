@@ -2,7 +2,7 @@ import {test,expect} from '@playwright/test';
 import {mkdir} from 'node:fs/promises';
 const owner='11111111-1111-4111-8111-111111111111',other='22222222-2222-4222-8222-222222222222';
 async function connected(page,{role='owner',credentialId='public-credential',apiBasePath}={}){
-  const calls=[];let scope,expired=false,offlineLogout=false,offlineStatus=false;
+  const calls=[];let scope,expired=false,offlineLogout=false,offlineStatus=false,purged=false,otherRole='admin';
   await page.route('**/admin/config.json',route=>route.fulfill({json:{configured:true,basePath:'/admin/',origin:'https://admin-console.example',rpID:'admin-console.example',documentAccess:false,...(apiBasePath?{apiBasePath}:{})}}));
   await page.route('**/admin/browser.js',route=>route.fulfill({contentType:'text/javascript',body:'window.SimpleWebAuthnBrowser={startAuthentication:async()=>({id:"fixture-auth",signature:"private-signature"}),startRegistration:async()=>({id:"fixture-key"})};'}));
   await page.route('**'+(apiBasePath||'/admin/api/')+'**',async route=>{
@@ -13,7 +13,8 @@ async function connected(page,{role='owner',credentialId='public-credential',api
     const values={
       'login/begin':()=>{scope=body.scope;return{ceremonyId:'private-ceremony',options:{}};},
       'login/finish':()=>scope?{grant:'private-grant'}:{sessionToken:'S'.repeat(43),expiresIn:900},
-      list:()=>({me:{id:owner,role},users:role==='owner'?[{id:owner,role:'owner',state:'active'},{id:other,role:'admin',state:'active'}]:[],credentials:[{id:credentialId,user_id:owner,state:'active',device_type:'multiDevice'}],sessions:[{hash:'a'.repeat(64),expires:Date.now()+600000,revoked:0}]}),
+      list:()=>({me:{id:owner,role},users:role==='owner'?[{id:owner,role:'owner',state:'active'},...(purged?[]:[{id:other,role:otherRole,state:'active'}])]:[],credentials:[{id:credentialId,user_id:owner,state:'active',device_type:'multiDevice'}],sessions:[{hash:'a'.repeat(64),expires:Date.now()+600000,revoked:0}]}),
+      'accounts/purge':()=>{purged=true;return{deleted:true,accounts:1,credentials:1,sessions:2};},
       invite:()=>({userId:other,enrollmentTicket:'T'.repeat(43)}),
       'recovery/codes':()=>({recoveryCodes:['private-recovery-one','private-recovery-two']}),
       logout:()=>({loggedOut:true}),
@@ -22,7 +23,7 @@ async function connected(page,{role='owner',credentialId='public-credential',api
     await route.fulfill({json:values[action]()});
   });
   await page.goto('/admin/');await expect(page.getByRole('button',{name:'패스키로 로그인'})).toBeEnabled();await page.getByRole('button',{name:'패스키로 로그인'}).click();await expect(page.locator('#myRole')).toHaveText(role);
-  return{calls,expire:()=>expired=true,offlineLogout:()=>offlineLogout=true,offlineStatus:()=>offlineStatus=true};
+  return{calls,expire:()=>expired=true,offlineLogout:()=>offlineLogout=true,offlineStatus:()=>offlineStatus=true,protectOther:()=>otherRole='owner'};
 }
 test('preview is visibly disconnected, read only and responsive',async({page})=>{
   await page.goto('/admin/');await expect(page.locator('#connection')).toHaveText('로컬 미리보기');await expect(page.locator('#login')).toBeDisabled();await expect(page.locator('#invite')).toBeDisabled();
@@ -64,4 +65,29 @@ test('the explicit staging API bridge remains on the same origin',async({page})=
 test('an external API destination is rejected before any login can start',async({page})=>{
   await page.route('**/admin/config.json',route=>route.fulfill({json:{configured:true,apiBasePath:'https://attacker.invalid/api/'}}));
   await page.goto('/admin/');await expect(page.locator('#login')).toBeDisabled();await expect(page.locator('#notice')).toContainText('연결 정보를 확인하지 못했습니다');
+});
+
+test('bulk selection excludes owner and cancellation sends no purge or reauthentication request',async({page})=>{
+  const f=await connected(page);await expect(page.getByLabel('계정 '+owner+' 선택',{exact:true})).toHaveCount(0);
+  await expect(page.locator('#cleanupReview')).toBeDisabled();await page.locator('#selectAll').check();await expect(page.locator('#selectionCount')).toHaveText('1개 선택');
+  await page.locator('#cleanupReview').click();await expect(page.locator('#cleanupDialog')).toBeVisible();await expect(page.locator('#cleanupExecute')).toBeDisabled();await expect(page.locator('#cleanupTargets')).toHaveText(other);
+  await page.locator('#cleanupCancel').click();await expect(page.locator('#cleanupDialog')).toBeHidden();expect(f.calls.some(c=>c.action==='accounts/purge'||c.body.scope==='cleanup')).toBe(false);
+});
+
+test('bulk purge requires acknowledgement and one cleanup reauthentication for the reviewed IDs',async({page})=>{
+  const f=await connected(page);await page.getByLabel('계정 '+other+' 선택',{exact:true}).check();await page.locator('#cleanupReview').click();
+  await page.locator('#cleanupAcknowledge').check();await page.locator('#cleanupExecute').click();await expect(page.locator('#notice')).toContainText('1개 계정과 연결된 기록을 삭제');
+  expect(f.calls.filter(c=>c.action==='login/begin'&&c.body.scope==='cleanup')).toHaveLength(1);expect(f.calls.find(c=>c.action==='accounts/purge').body).toEqual({userIds:[other],grant:'private-grant'});
+  await expect(page.locator('#accountRows tr')).toHaveCount(1);await expect(page.locator('#myRole')).toHaveText('owner');await expect(page.locator('#cleanupReview')).toBeDisabled();
+});
+
+test('review refresh drops a selected account that has become owner',async({page})=>{
+  const f=await connected(page);await page.locator('#selectAll').check();f.protectOther();await page.locator('#cleanupReview').click();await expect(page.locator('#selectionCount')).toHaveText('0개 선택');
+  await expect(page.locator('#cleanupDialog')).toBeHidden();expect(f.calls.some(c=>c.body.scope==='cleanup'||c.action==='accounts/purge')).toBe(false);
+});
+
+test('bulk deletion review fits a mobile viewport without exposing authentication secrets',async({page})=>{
+  await connected(page);await page.locator('#selectAll').check();await page.locator('#cleanupReview').click();await page.setViewportSize({width:390,height:844});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);const visible=await page.locator('#cleanupDialog').innerText();expect(visible).toContain('owner 계정');expect(visible).not.toContain('private-grant');
+  await page.screenshot({path:'generated/bulk-cleanup-review-mobile.png',fullPage:true});
 });
