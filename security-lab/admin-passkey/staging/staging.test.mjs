@@ -189,3 +189,19 @@ for(const [name,options,stage,detail]of[
 });
 test('registration UI explicitly confirms only completed registration',async()=>{const f=await uiFixture();f.element('ticket').value='private-ticket';await f.element('enroll').onclick();assert.ok(f.element('result').textContent.startsWith('패스키 등록 완료.'));assert.equal(f.requests.at(-1).url,'/api/register/finish');assert.doesNotMatch(f.element('result').textContent,/private-/);});
 test('bootstrap UI trims copied whitespace and prevents duplicate in-flight issuance',async()=>{const f=await uiFixture();f.element('bootstrapToken').value=' private-token ';const first=f.element('bootstrap').onclick();await f.element('bootstrap').onclick();await first;assert.equal(f.requests.length,1);assert.equal(f.requests[0].body.token,'private-token');assert.equal(f.element('bootstrap').disabled,false);assert.equal(f.element('bootstrapToken').value,'');assert.equal(f.element('ticket').value,'private-ticket');});
+
+for(const role of ['owner','auditor'])test('test invitation export respects authenticated '+role+' role and never displays its capability',async()=>{
+  const elements=new Map(),calls=[],downloads=[],timers=[];let blob;
+  const element=id=>{if(!elements.has(id))elements.set(id,{value:'',textContent:'',disabled:false});return elements.get(id);};
+  const ctx={location:{origin},document:{getElementById:element,createElement:()=>({click(){downloads.push({href:this.href,filename:this.download});}})},
+    Blob:class{constructor(parts){this.text=parts.join('');}},URL:{createObjectURL(value){blob=value;return'blob:private-invitation';},revokeObjectURL(){}},setTimeout:(fn,ms)=>timers.push({fn,ms}),
+    fetch:async(url,init)=>{calls.push({url,body:JSON.parse(init.body),authorization:init.headers.Authorization});return{ok:true,status:200,json:async()=>url.endsWith('/list')?{me:{id:'owner-id',role}}:url.endsWith('/login/begin')?{ceremonyId:'private-ceremony',options:{challenge:'private-challenge'}}:url.endsWith('/login/finish')?{grant:'private-grant'}:{userId:'test-user-id',enrollmentTicket:'private-ticket'}};},
+    SimpleWebAuthnBrowser:{startAuthentication:async()=>({signature:'private-signature'})}};
+  runInNewContext(await readFile(new URL('app.js',import.meta.url),'utf8'),ctx);runInNewContext('session="private-owner-session"',ctx);element('role').value='owner';await element('testInvite').onclick();
+  assert.doesNotMatch(element('result').textContent,/private-/);assert.equal(element('testInvite').disabled,false);
+  if(role!=='owner'){assert.equal(calls.length,1);assert.equal(downloads.length,0);return;}
+  assert.equal(calls.find(x=>x.url.endsWith('/login/begin')).body.scope,'manage');
+  const invite=calls.find(x=>x.url.endsWith('/invite'));assert.equal(invite.body.role,'admin');assert.equal(invite.body.grant,'private-grant');assert.equal(invite.authorization,'Bearer private-owner-session');
+  assert.deepEqual(JSON.parse(blob.text),{kind:'diana-staging-test-admin',origin,role:'admin',ownerUserId:'owner-id',userId:'test-user-id',enrollmentTicket:'private-ticket'});
+  assert.equal(downloads[0].filename,'DIANA-test-admin-test-user-id.json');assert.equal(timers[0].ms,1000);assert.equal(JSON.parse(element('result').textContent).testAdminCreated,true);
+});

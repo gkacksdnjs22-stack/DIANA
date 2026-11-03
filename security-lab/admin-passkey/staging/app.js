@@ -48,6 +48,15 @@ const actions = {
   logout: async () => { const r = await api('logout'); session = undefined; el('state').textContent = ''; return r; },
   enroll: () => { const ticket = el('ticket').value.trim(); el('ticket').value = ''; return register({ ticket }); },
   invite: () => mutate('invite', 'manage', { role: el('role').value }),
+  testInvite: async () => {
+    if(location.origin!=='https://diana-admin-passkey-stage.onrender.com')throw Error();
+    const before=await api('list');if(before.me.role!=='owner')throw Error();
+    const result=await mutate('invite','manage',{role:'admin'});
+    const invitation={kind:'diana-staging-test-admin',origin:location.origin,role:'admin',ownerUserId:before.me.id,userId:result.userId,enrollmentTicket:result.enrollmentTicket};
+    const url=URL.createObjectURL(new Blob([JSON.stringify(invitation)],{type:'application/json'}));
+    const link=document.createElement('a');link.href=url;link.download='DIANA-test-admin-'+result.userId+'.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    return{testAdminCreated:true,userId:result.userId,invitationDownloaded:true};
+  },
   changeRole: () => mutate('role', 'manage', { userId: el('userId').value, role: el('role').value }),
   disable: () => mutate('disable', 'manage', { userId: el('userId').value }),
   addKey: async () => register({ grant: (await verify('credential')).grant }),
