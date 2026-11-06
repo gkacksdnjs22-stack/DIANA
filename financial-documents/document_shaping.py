@@ -31,7 +31,13 @@ def recover_pdf_pages(pages):
             lines=[s.strip() for s in g.splitlines() if s.strip()]
             if not lines: continue
             first=norm(re.split(r'\s{3,}',lines[0])[0])
-            if (i<2 or i>=len(groups)-3) and first in repeated: continue
+            if (i<2 or i>=len(groups)-3) and first in repeated:
+                # Remove only the matched boundary text, not the whole group.
+                # A PDF extractor may join the header and body into one group,
+                # including body text in a second column on the same line.
+                parts=re.split(r'\s{3,}',lines[0],maxsplit=1)
+                lines=([parts[1].strip()] if len(parts)>1 and parts[1].strip() else [])+lines[1:]
+                if not lines: continue
             if len(lines)==1 and re.fullmatch(r'(?:page\s*)?\d+\s*(?:/\s*\d+)?',lines[0],re.I): continue
             # Layout line breaks within a paragraph must not become summary units.
             joined=lines[0]

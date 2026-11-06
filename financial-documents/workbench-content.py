@@ -100,10 +100,11 @@ def process(req):
     plain='\n\n'.join(h+'\n'+'\n'.join(ls) for h,ls in sections)
     if op in ('edit','convert'):plain=sections[0][1][0]
     md=plain if op in ('edit','convert') else '# '+title+'\n\n'+'\n\n'.join('## '+h+'\n\n'+'\n'.join(ls) for h,ls in sections)
-    if op not in ('edit','convert') and docs:
-        references='\n'.join(f'[{i}] {name}' for i,(name,_) in enumerate(docs,1))
-        plain+='\n\n출처\n'+references
-        md+='\n\n## 출처\n\n'+references
+    references=[f'[{i}] {name}' for i,(name,_) in enumerate(docs,1)] if op not in ('edit','convert') else []
+    if references:
+        plain+='\n\n출처\n'+'\n'.join(references)
+        md+='\n\n## 출처\n\n'+'\n'.join(references)
+    office_sections=sections+([('출처',references)] if references else [])
     if fmt in ('txt','md','json'):raw=(json.dumps({'title':title,'body':plain,'sources':[x[0] for x in docs]},ensure_ascii=False,indent=2) if fmt=='json' else md if fmt=='md' else plain).encode()
     elif fmt=='pdf':
         from pdf_theme import render_pdf
@@ -114,16 +115,16 @@ def process(req):
         from pptx.util import Inches,Pt
         from pptx.dml.color import RGBColor
         pres=Presentation();pres.slide_width=Inches(13.33);pres.slide_height=Inches(7.5)
-        for h,ls in sections:
+        for h,ls in office_sections:
             chunks=[]
             for line in ls:
                 for j in range(0,len(line),110):chunks.append(line[j:j+110])
             for pos in range(0,len(chunks),3):
-                sl=pres.slides.add_slide(pres.slide_layouts[6]);bg=sl.background.fill;bg.solid();bg.fore_color.rgb=RGBColor.from_string('102336')
+                sl=pres.slides.add_slide(pres.slide_layouts[6]);bg=sl.background.fill;bg.solid();bg.fore_color.rgb=RGBColor.from_string('FFFFFF')
                 def box(x,y,w,ht,txt,size,col):
                     tf=sl.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(ht)).text_frame;tf.word_wrap=True;p=tf.paragraphs[0];r=p.add_run();r.text=txt;r.font.name='맑은 고딕';r.font.size=Pt(size);r.font.color.rgb=RGBColor.from_string(col)
-                box(.65,.35,12,.5,title[:65],16,'69D8C7');box(.65,1,12,1,h[:65],29,'FFFFFF')
-                for j,line in enumerate(chunks[pos:pos+3]):box(.7,2.05+1.6*j,12,1.56,line,19,'E2E9EF')
+                box(.65,.35,12,.5,title[:65],16,'657080');box(.65,1,12,1,h[:65],29,'253042')
+                for j,line in enumerate(chunks[pos:pos+3]):box(.7,2.05+1.6*j,12,1.56,line,19,'253042')
         stream=io.BytesIO();pres.save(stream);raw=stream.getvalue()
         if fmt=='ppt':
             tool=Path(sys.executable).resolve().parents[1]/'native'/'DIANA-PresentationExport.exe'
@@ -141,7 +142,7 @@ def process(req):
     elif fmt=='docx':
         from docx import Document
         d=Document();d.add_heading(title,0)
-        for h,ls in sections:
+        for h,ls in office_sections:
             if h!=title:d.add_heading(h,1)
             for l in ls:d.add_paragraph(l)
         stream=io.BytesIO();d.save(stream);raw=stream.getvalue()
