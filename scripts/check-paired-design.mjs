@@ -1,0 +1,15 @@
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+import {mkdir} from 'node:fs/promises';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+if(process.platform!=='win32')throw Error('Windows 네이티브 화면 검사입니다.');
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const out=path.join(root,'.local/paired-ui-review'),exec=promisify(execFile);
+await mkdir(out,{recursive:true});
+const compiler=path.join(process.env.WINDIR,'Microsoft.NET/Framework64/v4.0.30319/csc.exe');
+const library=path.join(out,'PairedUi.dll'),renderer=path.join(out,'RenderPairedWorkspace.exe');
+await exec(compiler,['/nologo','/target:library','/reference:System.Drawing.dll','/reference:System.Windows.Forms.dll','/reference:System.Web.Extensions.dll','/reference:System.Security.dll','/out:'+library,'/resource:'+path.join(root,'financial-documents/review-ui/diana-icon.png')+',diana.png',...['PairedForm.cs','PairedLogin.cs','PairedLayout.cs'].map(f=>path.join(root,'financial-desktop/native',f)),path.join(root,'tests/native/UiBuildVersionFixture.cs')],{windowsHide:true});
+await exec(compiler,['/nologo','/target:exe','/reference:System.Drawing.dll','/reference:System.Windows.Forms.dll','/out:'+renderer,path.join(root,'tests/native/RenderPairedWorkspace.cs')],{windowsHide:true});
+const result=await exec(renderer,[library,out],{windowsHide:true});
+console.log(result.stdout);
