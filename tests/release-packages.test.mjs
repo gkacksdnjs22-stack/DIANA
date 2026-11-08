@@ -1,19 +1,14 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';import {createHash} from 'node:crypto';
-import {zipFiles,androidManifest} from './helpers/release-zip.mjs';
+import {fileURLToPath} from 'node:url';
+import {zipFiles} from './helpers/release-zip.mjs';
+import {verifyAndroidRelease} from './helpers/android-release.mjs';
 const root=new URL('../',import.meta.url),hash=b=>createHash('sha256').update(b).digest('hex');
 const read=p=>readFile(new URL(p,root));
 const releases=JSON.parse(await read('public/downloads/releases.json'));
-test('published Android package agrees with the actual application source version and SDK',async()=>{
- const r=releases.android,b=await read('public'+r.path),gradle=(await read('android-app/app/build.gradle')).toString();
- assert.equal(hash(b),r.sha256);assert.equal(b.length,r.bytes);
- const manifest=androidManifest(zipFiles(b).get('AndroidManifest.xml')());
- assert.equal(manifest.package,gradle.match(/applicationId\s+'([^']+)'/)[1]);
- assert.equal(manifest.versionName,gradle.match(/versionName\s+'([^']+)'/)[1]);
- assert.equal(manifest.versionCode,Number(gradle.match(/versionCode\s+(\d+)/)[1]));
- assert.equal(manifest.minSdk,Number(gradle.match(/minSdk\s+(\d+)/)[1]));
- assert.equal(manifest.versionName,r.version);assert.equal(manifest.versionCode,r.versionCode);
- for(const f of r.sourceFiles)assert.equal(hash(await read(f.path)),f.sha256,'Android source: '+f.path);
+test('published Android package agrees with its recorded source commit, version and SDK',async()=>{
+ const r=releases.android,b=await read('public'+r.path);
+ verifyAndroidRelease(r,b,fileURLToPath(root));
 });
 test('published Windows bundle agrees with source hashes, native version and complete runtime manifest',async()=>{
  const r=releases.windows,b=await read('public'+r.path);assert.equal(hash(b),r.sha256);assert.equal(b.length,r.bytes);
