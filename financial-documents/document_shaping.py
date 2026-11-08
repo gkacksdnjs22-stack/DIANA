@@ -59,7 +59,7 @@ def sentence_units(text):
     """Return complete source spans, never character slices presented as summaries."""
     return [s.strip() for s in re.split(r'(?<=[.!?。！？])\s+(?=[가-힣A-Z0-9“"(])',text) if s.strip()]
 
-def select_outline(name,text,request):
+def select_outline(name,text,request,max_items=9):
     paragraphs=[norm(p.strip(' \t#*•')) for p in re.split(r'\n\s*\n',text) if p.strip()]
     if len(paragraphs)==1:
         paragraphs=[norm(s.strip(' \t#*•')) for s in text.splitlines() if s.strip()]
@@ -69,14 +69,15 @@ def select_outline(name,text,request):
     for order,p in enumerate(paragraphs):
         if not p or re.fullmatch(r'[\W\d_]+',p): continue
         if re.search(r'\|.*20\d\d[./-]',p) and not re.search(r'[.!?。！？]$',p): continue
-        if is_heading(p): current=p; continue
         measured=bool(re.search(r'[:：=]\s*-?\d',p))
-        if len(p)<22 and not measured or re.match(r'^(?:https?://|www\.)',p): continue
+        record=measured or bool(re.match(r'^(?:상태|결론|결정|위험|이슈|미해결|확인 필요|누락|제약|주의 사항)\s*[:：]',p))
+        if not record and is_heading(p): current=p; continue
+        if len(p)<22 and not record or re.match(r'^(?:https?://|www\.)',p): continue
         if re.search(r'@',p) and len(p)<100: continue
-        if repetitions[p]>2: continue
+        if repetitions[p]>2 and not record: continue
         for sentence in sentence_units(p):
             key=norm(sentence).lower()
-            if key in seen or len(sentence)<22 and not measured: continue
+            if key in seen or len(sentence)<22 and not record: continue
             if len(sentence)>1800: continue
             seen.add(key);candidates.append({'heading':current,'text':sentence,'order':order})
     if not candidates:
@@ -89,10 +90,11 @@ def select_outline(name,text,request):
     focus=terms(request)-{'자료','파일','내용','문서','요약해줘','요약해서','발표자료','만들어줘','바탕화면','보고서','작성해줘','포함해서','핵심','주요'}
     def score(c):
         ws=terms(c['text']); complete=bool(re.search(r'[.!?。！？]$',c['text']))
-        return 3*len(ws&focus)+sum(min(3,frequency[w]) for w in ws)/max(1,len(ws))+1.4*complete+min(len(c['text']),170)/170+.5*bool(re.search(r'\d',c['text']))
-    budget=min(9,max(3,math.ceil(math.sqrt(len(candidates))*1.25)))
+        important=bool(re.match(r'^(?:상태|결론|결정|위험|이슈|미해결|확인 필요|누락|제약|주의 사항)\s*[:：]',c['text']))
+        return 3*len(ws&focus)+sum(min(3,frequency[w]) for w in ws)/max(1,len(ws))+1.4*complete+min(len(c['text']),170)/170+.5*bool(re.search(r'\d',c['text']))+3*important
     by_heading=collections.OrderedDict()
     for c in candidates: by_heading.setdefault(c['heading'],[]).append(c)
+    budget=min(max_items,max(3,len(by_heading),math.ceil(math.sqrt(len(candidates))*1.25)))
     selected=[]
     # Cover source sections before filling with high-scoring repeated themes.
     ranked_groups=sorted(by_heading.values(),key=lambda group:max(map(score,group)),reverse=True)

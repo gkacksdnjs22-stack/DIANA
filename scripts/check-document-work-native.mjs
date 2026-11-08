@@ -1,0 +1,11 @@
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+import {mkdir} from 'node:fs/promises';
+if(process.platform!=='win32')throw Error('Windows Word·PowerPoint 검사용 도구입니다.');
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),folder=path.resolve(process.argv[2]||path.join(root,'.local/document-work-preview'));
+const output=path.join(root,'.local/document-work-native');await mkdir(output,{recursive:true});
+const run=promisify(execFile),compiler=path.join(process.env.WINDIR,'Microsoft.NET/Framework64/v4.0.30319/csc.exe'),helper=path.join(output,'RenderDocumentWork.exe');
+await run(compiler,['/nologo','/reference:System.Web.Extensions.dll','/out:'+helper,path.join(root,'tests/native/RenderDocumentWork.cs')],{windowsHide:true});
+const result=await run(helper,[folder],{windowsHide:true,timeout:120000});console.log(result.stdout);
