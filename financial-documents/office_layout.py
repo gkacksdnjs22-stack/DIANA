@@ -72,10 +72,10 @@ def render_pptx(plan):
         frame.word_wrap=True;frame.margin_left=frame.margin_right=Pt(0)
         para=frame.paragraphs[0];para.line_spacing=1.15;run=para.add_run();run.text=text
         run.font.name='맑은 고딕';run.font.size=Pt(size);run.font.bold=bold;run.font.color.rgb=RGBColor.from_string(color)
-    def slide(heading):
+    def slide(heading,only_title=False):
         s=p.slides.add_slide(p.slide_layouts[6]);fill=s.background.fill;fill.solid();fill.fore_color.rgb=RGBColor(255,255,255)
-        if not plan['preserve']:box(s,.65,.25,12,.65,plan['title'],11 if len(plan['title'])>100 else 14,'657080')
-        if heading:box(s,.65,.95,12,.95,heading,20 if len(heading)>55 else 27,bold=True)
+        if not plan['preserve'] and not only_title and heading!=plan['title']:box(s,.65,.25,12,.65,plan['title'],11 if len(plan['title'])>100 else 14,'657080')
+        if heading:box(s,.65,1.2 if only_title else .95,12,4.8 if only_title else .95,heading,27 if only_title else 20 if len(heading)>55 else 27,bold=True)
         return s
     for heading,items in plan['sections']:
         table=plan.get('table')
@@ -97,6 +97,9 @@ def render_pptx(plan):
         packets=[];current_heading=heading
         def emit():
             nonlocal packets
+            if not packets:
+                if current_heading:slide(current_heading)
+                return
             for start in range(0,len(packets),3):
                 s=slide(current_heading)
                 for i,value in enumerate(packets[start:start+3]):box(s,.7,2.05+1.55*i,12,1.48,value,19)
@@ -107,5 +110,5 @@ def render_pptx(plan):
                 else:
                     for line in value.splitlines():packets.extend(chunks(line))
         emit()
-    if not p.slides:slide(plan['title'])
+    if not p.slides:slide(plan['title'],only_title=True)
     stream=io.BytesIO();p.save(stream);return stream.getvalue()

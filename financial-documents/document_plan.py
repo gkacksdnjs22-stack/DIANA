@@ -48,8 +48,29 @@ def numeric_analysis(docs,request):
             if '평균' in request:findings.append(label+'의 단순 평균: '+format(context.divide(total,decimal.Decimal(len(amounts))).quantize(decimal.Decimal('0.01'),context=context),'f')+unit+'.')
     return {'rows':rows,'findings':findings,'notes':notes}
 
+def requests_report(request,docs):
+    """Only an explicit output instruction selects the report layout."""
+    command=request
+    for name,_ in sorted(docs,key=lambda pair:len(pair[0]),reverse=True):
+        if name and name not in ('보고서','리포트'):command=re.sub(re.escape(name),' ',command,flags=re.I)
+    quoted=re.compile(r'"([^"]*)"|“([^”]*)”|\x27([^\x27]*)\x27|‘([^’]*)’|`([^`]*)`')
+    def mask_quote(match):
+        value=next(value for value in match.groups() if value is not None).strip()
+        if value in ('보고서','리포트'):return value
+        return ' '
+    command=quoted.sub(mask_quote,command)
+    # A file extension is not the end of an instruction (e.g. 보고서작성.pdf).
+    end=r'(?=\s*(?:$|[!?;,]|\.(?:\s|$)))'
+    terminal=r'(?=\s*[.!?]?\s*$)'
+    polite=r'(?:\s*(?:줘|주세요|주십시오))?'
+    author=r'(?:(?:(?:작성|제작)(?:해'+polite+r'|하세요|하십시오)|만들어'+polite+r'|써'+polite+r')'+end+r'|(?:작성|제작)'+terminal+r')'
+    qualifiers=r'(?:(?:짧게|간단히|자세히|상세히|(?:pdf|docx|txt|md|json|pptx?|워드|텍스트|마크다운)(?:\s*파일)?(?:으로|로)?)\s*)*'
+    direct=r'(?:보고서|리포트)(?:를|을)?\s*'+qualifiers+author
+    form=r'(?:보고서|리포트)\s*(?:(?:형식|형태)(?:으로|로)?|으로|로)\s*'+qualifiers+r'(?:'+author+r'|(?:요약|정리)해'+polite+end+r'|(?:요약|정리)'+terminal+r'|'+terminal+r')'
+    return bool(re.search(direct,command,re.I) or re.search(form,command,re.I))
+
 def build_plan(op,title,docs,request,body='',change=None):
-    report=op in ('summary','compare') and bool(re.search('보고서|리포트',request))
+    report=op in ('summary','compare') and requests_report(request,docs)
     mode='report' if report else op
     if not title:title={'summary':'자료 요약','compare':'자료 비교','slides':'발표 자료','create':'새 문서','edit':'수정본','convert':'변환본'}[op]
     if report and title in ('자료 요약','자료 비교'):title='자료 종합 보고서'

@@ -123,5 +123,39 @@ class WorkQuality(unittest.TestCase):
     def test_invalid_or_empty_operations_fail(self):
         for request in (self.request('create',docs=[],body=' '),self.request('compare',docs=self.documents()[:1]),self.request('summary',docs=[]),self.request(fmt='png')):
             with self.assertRaises((ValueError,KeyError)):engine.process(request)
+    def test_ppt_preserves_leading_consecutive_and_trailing_headings(self):
+        bodies=['# 단독 제목','# 첫 제목\n## 둘째 제목\n확인한 본문입니다.','# 앞 제목\n확인한 본문입니다.\n## 마지막 제목']
+        for op in ('create','edit','convert'):
+            for body in bodies:
+                with self.subTest(op=op,body=body):
+                    req=self.request(op,'pptx',title='검사용 문서',body=body,docs=[] if op=='create' else [{'name':'원문.md','decoded':body}],change=['제목','항목'])
+                    value=engine.process(req);p=Presentation(io.BytesIO(self.decoded(value)))
+                    text=[s.text for sl in p.slides for s in sl.shapes if s.has_text_frame]
+                    expected=[line.lstrip('# ').replace('제목','항목') if op=='edit' else line.lstrip('# ') for line in body.splitlines() if line.startswith('#')]
+                    self.assertEqual([t for t in text if t in expected],expected)
+                    if '본문' in body:self.assertTrue(any('확인한 본문입니다.' in t for t in text))
+    def test_ppt_preserves_section_headings_without_body(self):
+        from office_layout import render_pptx
+        p=Presentation(io.BytesIO(render_pptx({'title':'검사용 문서','preserve':False,'table':None,'sections':[('앞 제목',[]),('중간 제목',['']),('끝 제목',[])]})))
+        text=[s.text for sl in p.slides for s in sl.shapes if s.has_text_frame]
+        self.assertEqual([t for t in text if t!='검사용 문서'],['앞 제목','중간 제목','끝 제목'])
+    def test_ppt_title_only_document_does_not_repeat_title(self):
+        r=engine.process(self.request('create','pptx',title='실행 계획',body='# 실행 계획',docs=[]));p=Presentation(io.BytesIO(self.decoded(r)))
+        self.assertEqual([s.text for sl in p.slides for s in sl.shapes if s.has_text_frame],['실행 계획'])
+    def test_input_report_references_do_not_select_report_layout(self):
+        requests=['분기보고서.txt를 요약해줘','분기보고서를 짧게 요약해줘','"분기보고서.txt"와 회의록을 비교해줘','자료의 "보고서 작성" 부분을 요약해줘','보고서를 요약해서 TXT로 만들어줘','보고서 작성 방법을 짧게 요약해줘','"보고서로 작성해줘"라는 문장을 요약해줘','참고리포트.md의 내용을 요약해줘','보고서 형식으로 작성된 자료를 요약해줘','보고서로 작성하지 말고 요약해줘','보고서작성.pdf를 요약해줘','자료의 보고서 작성, 검토 절차를 요약해줘','보고서 형식으로, 그 내용을 요약해줘']
+        docs=[('분기보고서.txt','담당자는 보고서 작성 방법을 확인한 뒤 결과를 기록했습니다.'),('참고리포트.md','다른 담당자는 현장 검토 내용을 확인하고 기록했습니다.')]
+        for op in ('summary','compare'):
+            for request in requests:
+                with self.subTest(op=op,request=request):
+                    p=build_plan(op,'사용자 지정 제목',docs,request);self.assertEqual(p['mode'],op);self.assertEqual(p['title'],'사용자 지정 제목');self.assertNotIn('자료 범위',[h for h,_ in p['sections']])
+    def test_explicit_report_output_instructions_still_work(self):
+        requests=['자료로 보고서 작성해줘','자료를 정리한 보고서 작성','자료를 보고서로 작성해 주세요','분기보고서.txt를 읽고 보고서로 만들어줘','자료를 보고서 형식으로 짧게 요약해줘','리포트 형태로 정리해줘','자료를 "보고서"로 작성해줘','자료를 ‘리포트’로 만들어줘','자료를 "보고서"를 작성해줘','자료를 보고서 PDF로 만들어줘','자료를 보고서로 DOCX 파일로 작성해줘','보고서 형식으로','자료를 보고서로 작성하세요','자료를 보고서로 작성해 주십시오']
+        docs=[('분기보고서.txt','담당자는 현장 상태를 확인한 뒤 결과를 기록했습니다.')]
+        for op in ('summary','compare'):
+            for request in requests:
+                with self.subTest(op=op,request=request):
+                    p=build_plan(op,None,docs if op=='summary' else docs+[('회의록.txt','참석자는 검토 내용을 정리하고 결과를 기록했습니다.')],request)
+                    self.assertEqual(p['mode'],'report');self.assertIn('자료 범위',[h for h,_ in p['sections']])
 
 if __name__=='__main__':unittest.main()
