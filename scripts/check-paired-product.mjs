@@ -170,13 +170,19 @@ try {
   const attached = Buffer.from('현장 점검에서 장치 217개가 정상 작동했습니다.');
   await mobile({ op: 'job', action: 'desk-upload', id: randomUUID(), name: '첨부 점검 자료.txt',
     base64: attached.toString('base64'), sha256: sha256(attached) });
-  const attachedReport = await send('첨부한 자료를 보고서로 만들어줘');
-  await approve(attachedReport, preview => {
-    assert.match(preview, /자료 범위/);
-    assert.match(preview, /첨부 점검 자료\.txt/);
-    assert.match(preview, /217개/);
-  });
-  assert.equal((await receive(attachedReport)).subarray(0, 5).toString(), '%PDF-');
+  for (const request of [
+    '첨부한 자료를 보고서로 만들어줘',
+    '첨부한 자료로 보고서 작성해줘',
+    '첨부한 자료를 보고서 PDF로 만들어줘',
+  ]) {
+    const attachedReport = await send(request);
+    await approve(attachedReport, preview => {
+      assert.match(preview, /자료 범위/);
+      assert.match(preview, /첨부 점검 자료\.txt/);
+      assert.match(preview, /217개/);
+    });
+    assert.equal((await receive(attachedReport)).subarray(0, 5).toString(), '%PDF-');
+  }
 
   const pptx = await send('바탕화면에서 "현장 기록.txt"를 PPTX로 변환해줘');
   await approve(pptx);

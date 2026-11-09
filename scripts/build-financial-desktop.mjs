@@ -90,6 +90,7 @@ export const desktopSources = Object.freeze([
   'lib/financial-contract.mjs',
   'scripts/init-financial-mobile-demo.mjs',
   'financial-documents/document_plan.py',
+  'financial-documents/report-request-patterns.json',
   'financial-documents/office_layout.py',
   'experiments/financial-review/evaluation-intake-v1/core.mjs',
   'experiments/financial-review/evaluation-intake-v1/schema.mjs',

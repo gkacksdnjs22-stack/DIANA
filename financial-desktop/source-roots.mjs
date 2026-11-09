@@ -3,6 +3,29 @@ import {lstat,realpath,opendir} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {checkedDirectory} from '../personal-ai/documents/files.mjs';
 import {allowedPart} from '../local-ai/files.mjs';
+import reportPatterns from '../financial-documents/report-request-patterns.json' with {type:'json'};
+
+const reportOutput = new RegExp(reportPatterns.join('|'), 'giu');
+const quotedPhrase = /"([^"]*)"|“([^”]*)”|'([^']*)'|‘([^’]*)’|`([^`]*)`/gu;
+
+export function reportOutputStart(text) {
+ const quotedStarts = new Map();
+ // Keep offsets stable while hiding quoted source phrases from the grammar.
+ const command = text.replace(quotedPhrase, (match, ...groups) => {
+  const offset = groups.at(-2);
+  const value = groups.slice(0, -2).find(group => group !== undefined)?.trim();
+  if (value !== '보고서' && value !== '리포트') return ' '.repeat(match.length);
+  const start = match.indexOf(value);
+  quotedStarts.set(offset + start, offset);
+  return ' '.repeat(start) + value + ' '.repeat(match.length - start - value.length);
+ });
+ for (const match of command.matchAll(reportOutput)) {
+  if (match.index === 0 || /\s/u.test(command[match.index - 1])) {
+   return quotedStarts.get(match.index) ?? match.index;
+  }
+ }
+ return null;
+}
 
 const privatePart=/(?:^|[\\/])(?:\.[^\\/]+|AppData|ProgramData|Program Files(?: \(x86\))?|Windows|System Volume Information|Recovery|node_modules|credentials?|secrets?|vault|암호|인증정보)(?:[\\/]|$)/i;
 const secretName=/(?:password|credential|secret|private.?key|access.?token|암호|비밀번호|인증키|\.(?:pem|p12|pfx|kdbx|key)$)/i;
@@ -79,12 +102,12 @@ function sourceName(term){
 export function sourceQuery(text){
  // Protect file names before looking for operation verbs inside the surrounding request.
  const literals=[];
- const masked=text.replace(/["“]([^"”]+\.[a-z0-9]{1,12})["”]|([^\s"'“”,]+\.[a-z0-9]{1,12})(?=\s|[,，]|$|을|를|랑|이랑|와|과)/giu,(_,quoted,bare)=>{
+ const masked=text.replace(/["“]([^"”]+\.[a-z0-9]{1,12})["”]|([^\s"'“”,]+\.[a-z0-9]{1,12})(?=\s|[,，]|$|을|를|랑|이랑|와|과|으로|로)/giu,(_,quoted,bare)=>{
   literals.push(quoted||bare);return '\u0001'+(literals.length-1)+'\u0002';
  });
- // A report format followed by an output command ends the source phrase.
- const reportOutput=/\s+(?:보고서|리포트)\s*(?:(?:형식|형태)\s*)?(?:으로|로)\s*(?=(?:(?:(?:pdf|docx|txt|md|json|pptx?|워드|텍스트|마크다운)(?:\s*파일)?(?:으로|로)?|짧게|간단히|자세히|상세히)\s*)*(?:만들어|작성해|제작해|요약해|정리해)\s*(?:줘|주세요|주십시오)?\s*[.!。]*\s*$)/iu;
- const sourceClause=masked.split(reportOutput,1)[0];
+ const reportStart=reportOutputStart(masked);
+ const sourceClause=reportStart===null?masked:masked.slice(0,reportStart)
+  .replace(/((?:자료|파일|문서)(?:들)?|\u0002)(?:으로|로)\s*$/u,'$1');
  let source=sourceClause.split(/\s*(?:(?:요약|비교|종합)(?=해|하|한|할|해서|하여|$)|읽고|읽어|읽어서|보고(?=\s|$)|찾아|찾기|정리해|정리한|변환해|바꿔|수정해|검토해)/u)[0].trim();
  source=source.replace(/^(?:첨부한|첨부된|선택한)\s+/u,'').replace(/\s+(?:TXT|MD|JSON|PPTX?|DOCX|텍스트|마크다운)(?:로|으로).*$/iu,'');
  const content=source.match(/(?:["“]([^"”]+)["”]|([가-힣A-Za-z0-9_-]+?))(?:이|가|을|를)?\s*(?:들어간|포함된|언급된|담긴)/u);

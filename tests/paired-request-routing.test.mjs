@@ -13,14 +13,27 @@ test('explicit PPTX survives routing while presentations without a format defaul
 
 test('report output clauses leave the attached source reference intact', () => {
   const files = [{ name: '분기 보고서.txt' }, { name: '점검 기록.txt' }];
-  const generic = sourceQuery('첨부한 자료를 보고서로 만들어줘');
-  assert.deepEqual(generic.terms, ['자료']);
-  assert.deepEqual(groupsFor(files, generic)[0].hits, files);
+  for (const request of [
+    '첨부한 자료를 보고서로 만들어줘',
+    '첨부한 자료로 보고서 작성해줘',
+    '첨부한 자료를 보고서 PDF로 만들어줘',
+    '첨부한 자료로 보고서를 써줘',
+    '첨부한 자료를 “보고서”로 작성하세요',
+    '첨부한 자료를 리포트 형태로 정리',
+  ]) {
+    const query = sourceQuery(request);
+    assert.equal(route(request).kind, 'summary', request);
+    assert.deepEqual(query.terms, ['자료'], request);
+    assert.deepEqual(groupsFor(files, query)[0].hits, files, request);
+  }
 
   for (const request of [
     '첨부한 "분기 보고서.txt"를 보고서로 만들어줘',
     '첨부한 "분기 보고서.txt"를 보고서 형식으로 PDF로 작성해줘',
     '첨부한 "분기 보고서.txt"를 보고서 형태로 요약해줘',
+    '첨부한 "분기 보고서.txt"로 보고서 작성해줘',
+    '첨부한 분기 보고서.txt로 보고서 작성해줘',
+    '첨부한 "분기 보고서.txt"를 리포트 PDF로 만들어줘',
     '첨부한 "분기 보고서.txt"를 요약해줘',
   ]) {
     const query = sourceQuery(request);

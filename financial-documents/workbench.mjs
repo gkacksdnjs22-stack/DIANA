@@ -1,5 +1,5 @@
 import {containsSecret} from './security/content.mjs';
-import {discover,scope,sourceQuery,groupsFor} from '../financial-desktop/source-roots.mjs';
+import {discover,scope,sourceQuery,groupsFor,reportOutputStart} from '../financial-desktop/source-roots.mjs';
 import {parseLocalDocument} from '../personal-ai/documents/parser.mjs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -17,7 +17,7 @@ export async function bytes(p,root,limit=8_000_000,stamp){await checkedDirectory
 export function route(text){const names=[...text.matchAll(/(?:["“]([^"”]+?\.[a-z0-9]{1,6})["”]|([^\s"'“”]+\.[a-z0-9]{1,6})(?=\s|[,，]|$|을|를|와|과|로|에))/giu)].map(m=>m[1]||m[2]);let q=text;for(const n of names)q=q.replaceAll(n,' ');const body=q.match(/(?:내용|본문)\s*[:：]\s*([\s\S]+)/u)?.[1]?.trim();const cmd=q.split(/(?:내용|본문)\s*[:：]/u)[0];const outputClause=cmd.split(/요약|비교|종합|읽고|읽어서|찾아서/u).at(-1);
 const fmt=outputClause.match(/(?:^|[^a-z])(pptx?|docx|json|txt|md|pdf|hwp[x]?|xlsx?|html|csv|png|jpe?g|rtf|odt|pages|keynote)(?:[^a-z]|$)/iu)?.[1]?.toLowerCase()||(outputClause.includes('마크다운')?'md':outputClause.includes('텍스트')?'txt':null);
 let kind=/발표\s*(?:자료|파일|문서|슬라이드)?(?:를|을|로|으로)?\s*(?:만들|작성|제작)|(?:pptx?|슬라이드).{0,12}(?:만들|작성|제작)/iu.test(cmd)?'slides':/비교|종합|수치.{0,12}변화/u.test(cmd)?'compare':/요약|정리해|정리한/u.test(cmd)?'summary':/새\s*(?:문서|파일|보고서|이력서|포트폴리오|메모)/u.test(cmd)?'create':/변환|바꿔/u.test(cmd)?(fmt?'convert':'edit'):/수정|고쳐|교체/u.test(cmd)?'edit':/찾아|찾기|읽어/u.test(cmd)?'read':null;
-if(!kind&&/보고서.{0,8}(?:작성|만들)/u.test(cmd))kind='summary';if(kind==='slides'&&body&&!names.length&&/새|파일 없이|첨부 없이/u.test(cmd))kind='create';
+if(!kind&&reportOutputStart(cmd)!==null)kind='summary';if(kind==='slides'&&body&&!names.length&&/새|파일 없이|첨부 없이/u.test(cmd))kind='create';
 const change=text.match(/["“']([^"”']+)["”'](?:을|를)?\s*["“']([^"”']*)["”']/u)?.slice(1,3);
 const title=cmd.match(/제목\s*[:：]\s*([^,;\n]+)/u)?.[1]?.trim();
 const term=text.match(/[“"]([^“”"]{1,60})[”"](?:이|가|을|를)?\s*(?:들어간|포함된|언급된|담긴)/u)?.[1];return {kind,term,all:/모두|전부|전체/.test(cmd),format:fmt||(['slides','summary','compare','create'].includes(kind)?'pdf':kind==='read'?'txt':'md'),names,title,body,change,unsafe:/하지\s*마|하지\s*말|하지\s*않|삭제|덮어|말고|가능한가|어떻게|알려줘|\?/.test(cmd),multi:/여러|모두|전체|전부|두\s*(?:문서|자료|파일)|비교|종합/.test(cmd)};}
