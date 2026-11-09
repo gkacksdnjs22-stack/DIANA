@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { access, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -141,6 +141,31 @@ try {
   await mobile(save, 403);
   await allow(true);
   assert(!(await pc({ op: 'state' })).files.some(file => file.id === edit));
+  const outputDir = await realpath((await pc({ op: 'settings' })).output);
+  const relativeOutput = path.relative(await realpath(fixture), outputDir);
+  assert(relativeOutput.startsWith(path.join('documents', 'DIANA', '결과') + path.sep));
+  const pausedOutput = outputDir + '-paused';
+  await rename(outputDir, pausedOutput);
+  try {
+    await mobile(save, 400);
+    await waitFor(edit, 'saving');
+    assert(!(await pc({ op: 'state' })).files.some(file => file.id === edit));
+  } finally {
+    await rename(pausedOutput, outputDir);
+  }
+  const retryable = (await mobile({ op: 'state' })).jobs.find(job => job.id === edit);
+  assert.equal(retryable.status, 'saving');
+  assert.equal(retryable.canApprove, true);
+  assert.equal(retryable.nonce, undefined);
+  const retryPreview = await mobile(preview);
+  assert.equal(retryPreview.status, 'saving');
+  assert.equal(retryPreview.nonce, shown.nonce);
+  assert.equal(retryPreview.preview, shown.preview);
+  await other(save, 403);
+  await mobile({ ...save, nonce: randomUUID() }, 409);
+  await allow(false);
+  await mobile(save, 403);
+  await allow(true);
   await mobile(save);
   await mobile(save, 409);
   assert.match((await receive(edit)).toString(), /12분/);

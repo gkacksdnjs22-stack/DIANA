@@ -71,8 +71,8 @@ export async function start(cfg){
  const canApprove=()=>dev.kind==='phone'&&!!get("SELECT 1 FROM phone_approvals a JOIN devices d ON d.id=a.device JOIN sessions s ON s.device=d.id AND s.user=d.user WHERE d.id=? AND d.active=1 AND s.h=? AND s.expires>?",dev.id,s.h,Date.now());
  if(op==='state'){
   const offset=Math.max(0,Math.floor(Number(b.offset)||0)),v=await w.view('owner',offset);
-  const approvable=canApprove()?new Set(w.db.prepare("SELECT id FROM jobs WHERE status='approval' AND request_device=?").all(dev.id).map(row=>row.id)):new Set();
-  const jobs=pc?v.jobs:v.jobs.map(({id,status,error})=>({id,status,error,canApprove:approvable.has(id)}));
+  const approvable=canApprove()?new Set(w.db.prepare("SELECT id FROM jobs WHERE status IN ('approval','saving') AND request_device=?").all(dev.id).map(row=>row.id)):new Set();
+  const jobs=pc?v.jobs:v.jobs.map(({id,status,error})=>({id,status,error,canApprove:approvable.has(id)&&!w.writing?.has(id)}));
   const files=v.files.map(f=>({...f,
    location:pc?path.join(w.fileDir(f.id),w.db.prepare('SELECT physical FROM files WHERE id=?').get(f.id).physical):undefined,
    received:!!get('SELECT 1 FROM receipts WHERE device=? AND file=?',dev.id,f.id),
@@ -93,8 +93,8 @@ export async function start(cfg){
   authorize();
   const job=typeof b.id==='string'&&w.db.prepare('SELECT status,preview,nonce,spec FROM jobs WHERE id=? AND request_device=?').get(b.id,dev.id);
   if(!job)deny('이 휴대폰에서 요청한 작업만 확인할 수 있습니다.',403);
-  if(job.status!=='approval')deny('현재 미리보기를 다시 확인하세요.',409);
-  if(op==='phone-preview')answer={id:b.id,preview:job.preview,nonce:job.nonce,format:JSON.parse(job.spec).format};
+  if(!['approval','saving'].includes(job.status)||w.writing?.has(b.id))deny('현재 작업 상태를 다시 확인하세요.',409);
+  if(op==='phone-preview')answer={id:b.id,status:job.status,preview:job.preview,nonce:job.nonce,format:JSON.parse(job.spec).format};
   else{
    if(b.confirm!==true||typeof b.nonce!=='string'||job.nonce!==b.nonce)deny('현재 미리보기를 다시 확인하세요.',409);
    await w.commit(b.id,b.nonce,authorize);

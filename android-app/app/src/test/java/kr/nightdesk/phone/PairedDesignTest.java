@@ -35,6 +35,12 @@ public class PairedDesignTest {
   a.renderJob(mobile,new JSONObject().put("status","approval").put("canApprove",true));
   assertTrue(text(mobile,"미리보기"));
   assertFalse(text(mobile,"승인 후 저장"));
+  LinearLayout saving=a.column();
+  a.renderJob(saving,new JSONObject().put("status","saving"));
+  assertFalse(text(saving,"저장 다시 시도"));
+  LinearLayout retry=a.column();
+  a.renderJob(retry,new JSONObject().put("status","saving").put("canApprove",true));
+  assertTrue(text(retry,"저장 다시 시도"));
   a.finish();
  }
 }

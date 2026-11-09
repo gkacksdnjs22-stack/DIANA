@@ -124,12 +124,14 @@ public final class PairedActivity extends Activity {
  void renderJob(LinearLayout parent,JSONObject job){
   String state=job.optString("status");
   boolean mobileApproval=state.equals("approval")&&job.optBoolean("canApprove");
+  boolean retrySave=state.equals("saving")&&job.optBoolean("canApprove");
   LinearLayout task=card(parent);
-  TextView heading=label(task,state.equals("failed")?"요청 확인이 필요해요":state.equals("reading")?"자료를 읽고 있어요":state.equals("saving")?"파일을 저장하고 있어요":mobileApproval?"저장 전 확인":"PC에서 확인을 기다려요");
+  TextView heading=label(task,state.equals("failed")?"요청 확인이 필요해요":state.equals("reading")?"자료를 읽고 있어요":retrySave?"저장 확인이 필요해요":state.equals("saving")?"파일을 저장하고 있어요":mobileApproval?"저장 전 확인":"PC에서 확인을 기다려요");
   heading.setTextSize(15);heading.setTypeface(Typeface.DEFAULT_BOLD);
-  caption(task,state.equals("failed")?job.optString("error"):state.equals("reading")?"완료되면 결과 파일을 받을 수 있습니다.":state.equals("saving")?"PC에 결과를 저장하고 있습니다.":mobileApproval?"미리보기를 확인하고 새 파일로 저장할 수 있습니다.":"미리보기와 저장 승인은 PC에서 확인하세요.");
+  caption(task,state.equals("failed")?job.optString("error"):state.equals("reading")?"완료되면 결과 파일을 받을 수 있습니다.":retrySave?"PC 저장 위치를 확인한 뒤 같은 결과를 다시 저장할 수 있습니다.":state.equals("saving")?"PC에 결과를 저장하고 있습니다.":mobileApproval?"미리보기를 확인하고 새 파일로 저장할 수 있습니다.":"미리보기와 저장 승인은 PC에서 확인하세요.");
   LinearLayout buttons=line(task);
   if(mobileApproval)button(buttons,"미리보기",()->showPhonePreview(job.optString("id")));
+  if(retrySave)button(buttons,"저장 다시 시도",()->showPhonePreview(job.optString("id")));
   if(state.equals("failed"))button(buttons,"다시 시도",()->job("desk-retry",job));
   if(!state.equals("saving"))button(buttons,state.equals("failed")?"닫기":"중단",()->job("desk-cancel",job));
  }
@@ -139,15 +141,16 @@ public final class PairedActivity extends Activity {
    if(!id.equals(result.getString("id")))throw new IOException("작업 정보를 다시 확인하세요.");
    String preview=result.getString("preview"),nonce=result.getString("nonce");
    String format=result.getString("format").toUpperCase(java.util.Locale.ROOT);
+   boolean retry=result.optString("status").equals("saving");
    runOnUiThread(()->{
     if(isDestroyed()||isFinishing()||!active||!screen.equals("work"))return;
     ScrollView scroll=new ScrollView(this);
     TextView text=new TextView(this);
     text.setText(preview);text.setTextSize(15);text.setPadding(dp(22),dp(12),dp(22),dp(12));
     scroll.addView(text);
-    new AlertDialog.Builder(this).setTitle("저장 전 미리보기 · "+format).setView(scroll)
+    new AlertDialog.Builder(this).setTitle((retry?"다시 저장할 결과":"저장 전 미리보기")+" · "+format).setView(scroll)
      .setNegativeButton("닫기",null)
-     .setPositiveButton("승인 후 저장",(dialog,which)->async(()->{
+     .setPositiveButton(retry?"다시 저장":"승인 후 저장",(dialog,which)->async(()->{
       call(obj("op","phone-approve","id",id,"nonce",nonce,"confirm",true));
       refresh();
      })).show();
