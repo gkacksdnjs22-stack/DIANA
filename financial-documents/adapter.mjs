@@ -5,6 +5,9 @@ import { createFilePolicy } from '../local-ai/files.mjs';
 import { checkedDirectory, digest } from '../personal-ai/documents/files.mjs';
 import { boundedRead, readSelectedText, verifyOpenedOutput } from './files.mjs';
 import { callCore, verifiedPython } from './python.mjs';
+import { conversionOperation } from './conversion-operation.mjs';
+import { searchOperation } from './evidence-search.mjs';
+import { draftOperation } from './draft-operation.mjs';
 import { explicitOperation } from './operation.mjs';
 import { fail, keys, strictJSON, validId } from './strict-json.mjs';
 import { storedClassification, assertCompletedCoreReview } from './saved-review.mjs';
@@ -27,7 +30,8 @@ function validateConfig(c) {
       !Array.isArray(c.documents) || c.documents.length > 100) fail('INVALID_CONFIG');
   const ids = new Set();
   for (const d of c.documents) {
-    keys(d, ['id', 'version', 'rootIndex', 'relativePath', 'classification', 'read_roles']);
+    keys(d, ['id', 'version', 'rootIndex', 'relativePath', 'classification', 'read_roles','display_name'], ['id', 'version', 'rootIndex', 'relativePath', 'classification', 'read_roles']);
+    if(d.display_name!==undefined&&(typeof d.display_name!=='string'||!d.display_name.trim()||d.display_name.length>120||/[\\/:\x00-\x1f\x7f]/u.test(d.display_name)))fail('INVALID_CONFIG');
     if (!validId(d.id) || !validId(d.version) || ids.has(d.id) || !['synthetic', 'internal'].includes(d.classification) ||
         !Array.isArray(d.read_roles) || d.read_roles.some(r => !validId(r))) fail('INVALID_CONFIG');
     ids.add(d.id);
@@ -43,14 +47,16 @@ export class FinancialDocuments {
   #configPath; #configHash; #config; #policy; #python;
   #pending = new Map(); #tokens = new Map(); #requests = new Map(); #saved = new Map(); #generation = 0;
 
-  static async create({ configPath }) {
+  static async create({ configPath, runtimePython }) {
     const instance = new FinancialDocuments();
     instance.#configPath = path.resolve(configPath);
     const loaded = await boundedRead(instance.#configPath, 100_000);
     instance.#config = validateConfig(strictJSON(loaded.content)); instance.#configHash = loaded.hash;
     const c = instance.#config;
     instance.#policy = await createFilePolicy(c.readRoots, c.outputRoot);
-    instance.#python = await verifiedPython(c.python);
+    // Only the trusted application embedding can supply its current bundled runtime.
+    // Persisted document policy, its hash and approval checks remain unchanged.
+    instance.#python = await verifiedPython(runtimePython ?? c.python);
     return instance;
   }
 
@@ -74,6 +80,21 @@ export class FinancialDocuments {
     await this.#current();
     return this.#config.documents.filter(d => d.read_roles.includes(this.#config.role))
       .map(d => ({ id: d.id, version: d.version, classification: d.classification }));
+  }
+
+  async searchSnapshot(ids){
+    await this.#current(false,ids);
+    const docs=await Promise.all(ids.map(id=>readSelectedText(this.#policy,this.#config.documents.find(d=>d.id===id))));
+    return docs.map(({content,...d})=>d);
+  }
+  async searchEvidence(input,catalog){
+    const s=searchOperation(input);await this.#current(false,s.source_ids);
+    const docs=await Promise.all(s.source_ids.map(id=>readSelectedText(this.#policy,this.#config.documents.find(d=>d.id===id))));
+    const metadata=s.source_ids.map(id=>{const d=catalog.find(d=>d.id===id);if(!d)fail('SEARCH_SCOPE_CHANGED');return{id,display_name:d.display_name,can_select:d.roles.includes('source')};});
+    const result=await callCore(this.#python,{schema_version:1,operation:s,documents:docs,catalog:metadata});
+    const fresh=await this.searchSnapshot(s.source_ids);
+    if(JSON.stringify(fresh)!==JSON.stringify(docs.map(({content,...d})=>d)))fail('SEARCH_STALE');
+    return {...result,search_snapshot:fresh};
   }
 
   #reviewSelection(input) {
@@ -119,8 +140,9 @@ export class FinancialDocuments {
   }
 
   async #readSaved(requestId, selection) {
-    if(!validId(requestId)||!['patch','convert'].includes(selection.action))fail('NO_SAVED_RESULT');
-    await this.#current(false,[selection.target_doc,...selection.source_ids,selection.guideline_id]);
+    if(!validId(requestId)||!['patch','convert','draft_review','convert_common'].includes(selection.action))fail('NO_SAVED_RESULT');
+    if(selection.action==='convert_common')await this.#conversionDoc(selection.document);
+    else await this.#current(false,[...(selection.action==='draft_review'?[]:[selection.target_doc]),...selection.source_ids,selection.guideline_id]);
     const directory=path.join(this.#policy.output,'.financial-ledger');
     const receipt=strictJSON((await boundedRead(path.join(directory,'request-'+requestId+'.json'),8192,null,true)).content);
     keys(receipt,['request_id','plan_hash','approval_id','input_hash','status','time','output_hash']);
@@ -129,6 +151,49 @@ export class FinancialDocuments {
     const outputFile=path.join(this.#policy.output,'DIANA-finance-'+receipt.plan_hash+'.'+selection.format);
     const file=await boundedRead(outputFile,2_000_000,receipt.output_hash);
     return{receipt,file,result:{status:'COMPLETED',saved:true,storage_verified:true,request_id:requestId,outputFile,output_hash:receipt.output_hash,plan_hash:receipt.plan_hash}};
+  }
+
+  /** Reconcile an exact server-held attempted plan. Never writes a file, repairs
+   * an incomplete ledger, scans guessed names, or restores an approval. */
+  async recoverSaved(requestId,input,plan) {
+    const selection=input?.action==='draft_review'?draftOperation(input):input?.action==='convert_common'?conversionOperation(input):explicitOperation(input);
+    this.#integrity(plan);
+    const s=await this.#readSaved(requestId,selection);
+    if(s.result.plan_hash!==plan.plan_hash||s.result.output_hash!==plan.approval_payload.output_hash||s.file.content!==plan.output_content)fail('RECOVERY_UNCERTAIN');
+    this.#saved.set(requestId,{selection:clone(selection),result:clone(s.result)});
+    await this.#audit('COMPLETED','RESULT_RECONFIRMED',{request_id:requestId,plan_hash:plan.plan_hash,output_hash:s.file.hash});
+    return clone(s.result);
+  }
+
+  async conversionCandidates(){
+    await this.#current();
+    const rows=this.#config.documents.filter(d=>d.read_roles.includes(this.#config.role)).map(d=>({document:{kind:'registered',id:d.id},name:d.display_name||d.id,format:path.extname(d.relativePath).slice(1).toLowerCase()}));
+    for(const [id,r]of this.#saved){try{await this.#readSaved(id,r.selection);rows.push({document:{kind:'saved',id},name:'저장 결과 '+id.slice(0,8),format:r.selection.format});}catch{}}
+    return{documents:rows};
+  }
+  async #conversionDoc(ref){
+    if(ref.kind==='registered'){
+      await this.#current(false,[ref.id]);return readSelectedText(this.#policy,this.#config.documents.find(d=>d.id===ref.id));
+    }
+    const record=this.#saved.get(ref.id);if(!record)fail('NO_SAVED_RESULT');
+    const s=await this.#readSaved(ref.id,record.selection);
+    return{id:ref.id,version:'1',format:record.selection.format,content:s.file.content,hash:s.file.hash,classification:storedClassification(s.file.content,record.selection.format)};
+  }
+  async readConversionSaved(id){
+    const r=this.#saved.get(id);if(r?.selection.action!=='convert_common')fail('NO_SAVED_RESULT');
+    const s=await this.#readSaved(id,r.selection),doc={id,version:'1',format:r.selection.format,content:s.file.content,hash:s.file.hash,classification:storedClassification(s.file.content,r.selection.format)};
+    const plan=await callCore(this.#python,{schema_version:1,request_id:id,operation:{action:'convert_common',format:doc.format},document:doc,authority:this.#conversionAuthority()});
+    if(plan.reason!=='SAME_FORMAT'||plan.output_content!==s.file.content)fail('READBACK_FAILED');this.#integrity(plan);
+    return{...s.result,body:plan.expected_body,common_document:plan.common_document,unresolved:plan.unresolved,content:s.file.content,format:doc.format};
+  }
+  #conversionAuthority(){return{principal:this.#config.principal,role:this.#config.role,policy_hash:this.#configHash,output_root:this.#policy.output};}
+
+  async readDraftSaved(id){
+    const record=this.#saved.get(id);if(record?.selection.action!=='draft_review')fail('NO_SAVED_RESULT');
+    const r=await this.#readSaved(id,record.selection),payload=await this.#payload(record.selection,id),plan=await callCore(this.#python,payload);
+    if(plan.output_content!==r.file.content||plan.plan_hash!==r.result.plan_hash)fail('CONTENT_CHANGED');
+    this.#integrity(plan);
+    return{...r.result,body:plan.expected_body,unresolved:plan.unresolved,content:r.file.content};
   }
 
   /** Restore verified completed files only, never pending plans or approvals. */
@@ -232,7 +297,9 @@ export class FinancialDocuments {
   }
 
   async #payload(selection, requestId) {
-    const ids = [selection.target_doc, ...selection.source_ids, selection.guideline_id];
+    if(selection.action==='convert_common'){await this.#current(true);return{schema_version:1,request_id:requestId,operation:{action:'convert_common',format:selection.format},document:await this.#conversionDoc(selection.document),authority:this.#conversionAuthority()};}
+    const drafting=selection.action==='draft_review';
+    const ids = [...(drafting?[]:[selection.target_doc]), ...selection.source_ids, selection.guideline_id];
     // All permissions are checked before even the first selected body is read.
     await this.#current(selection.action !== 'checklist_review', ids);
     const documents = [];
@@ -240,6 +307,7 @@ export class FinancialDocuments {
       const entry = this.#config.documents.find(d => d.id === id);
       documents.push(await readSelectedText(this.#policy, entry));
     }
+    if(drafting)return{schema_version:1,request_id:requestId,operation:{action:'draft_review',format:'md',template_version:selection.template_version},user_input:selection.user_input,source_docs:documents.slice(0,-1),guideline:documents.at(-1)};
     return { schema_version: 1, request_id: requestId, request: '',
       operation: { action: selection.action, target_doc: selection.target_doc, item_ids: selection.item_ids, format: selection.format },
       review_doc: documents[0], source_docs: documents.slice(1, -1), guideline: documents.at(-1) };
@@ -260,8 +328,8 @@ export class FinancialDocuments {
     const payload = await this.#payload(record.selection, record.plan.request_id);
     const old = record.payload;
     for (const [now, before] of [[payload.review_doc, old.review_doc], [payload.guideline, old.guideline],
-      ...payload.source_docs.map((d, i) => [d, old.source_docs[i]])]) {
-      if (now.hash !== before.hash || now.version !== before.version) fail('CONTENT_CHANGED');
+      [payload.document,old.document],...(payload.source_docs||[]).map((d, i) => [d, old.source_docs[i]])]) {
+      if ((now?.hash ?? null) !== (before?.hash ?? null) || (now?.version ?? null) !== (before?.version ?? null)) fail('CONTENT_CHANGED');
     }
     const rebuilt = await callCore(this.#python, payload);
     this.#integrity(record.plan);
@@ -273,7 +341,7 @@ export class FinancialDocuments {
     let record;
     try {
       if (!validId(requestId)) fail('INVALID_REQUEST_ID');
-      const selection = explicitOperation(input);
+      const selection = input?.action==='convert_common'?conversionOperation(input):input?.action==='draft_review'?draftOperation(input):explicitOperation(input);
       if (selection.action === 'export') { this.cancelPending(); fail('EXTERNAL_EXPORT_DENIED'); }
       const inputHash = digest(JSON.stringify(selection));
       const previous = this.#requests.get(requestId);
@@ -321,7 +389,7 @@ export class FinancialDocuments {
       await this.#recheck(record);
       const token = randomUUID();
       const approval = { token, approval_id: randomUUID(), principal: this.#config.principal,
-        request_id: record.plan.request_id, plan_hash: planHash, original_hash: record.payload.review_doc.hash,
+        request_id: record.plan.request_id, plan_hash: planHash, original_hash: (record.payload.review_doc?.hash??null),
         expires: record.expires, record, used: false };
       await this.#audit('AWAITING_APPROVAL', 'USER_APPROVED', { request_id: approval.request_id, plan_hash: planHash, approval_id: approval.approval_id });
       this.#live(record); this.#tokens.set(token, approval);
@@ -350,7 +418,7 @@ export class FinancialDocuments {
     const details = { request_id: approval.request_id, plan_hash: approval.plan_hash, approval_id: approval.approval_id };
     try {
       if (approval.principal !== this.#config.principal || approval.plan_hash !== record.plan.plan_hash ||
-          approval.original_hash !== record.payload.review_doc.hash || Date.now() > approval.expires) fail('APPROVAL_EXPIRED');
+          approval.original_hash !== (record.payload.review_doc?.hash??null) || Date.now() > approval.expires) fail('APPROVAL_EXPIRED');
       await this.#recheck(record);
       const ledger = path.join(await this.#ledgerDirectory(), `request-${approval.request_id}.json`);
       this.#live(record);

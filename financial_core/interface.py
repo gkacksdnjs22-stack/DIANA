@@ -5,6 +5,15 @@ from .state_planner import plan
 
 def handle(payload):
     try:
+        if isinstance(payload, dict) and isinstance(payload.get("operation"), dict) and payload["operation"].get("action") == "search_evidence":
+            from .search import search_evidence
+            return search_evidence(payload)
+        if isinstance(payload, dict) and isinstance(payload.get("operation"), dict) and payload["operation"].get("action") == "convert_common":
+            from .conversion import plan_conversion
+            return plan_conversion(payload)
+        if isinstance(payload, dict) and isinstance(payload.get("operation"), dict) and payload["operation"].get("action") == "draft_review":
+            from .draft import plan_draft
+            return plan_draft(payload)
         return plan(payload)
     except CoreError as exc:
         return {"schema_version": 1, "status": exc.status, "reason": exc.code,

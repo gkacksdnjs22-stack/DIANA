@@ -4,6 +4,7 @@ import { open, lstat, realpath } from 'node:fs/promises';
 import { inside, allowedPart } from '../local-ai/files.mjs';
 import { checkedDirectory, digest } from '../personal-ai/documents/files.mjs';
 import { fail, strictJSON } from './strict-json.mjs';
+import {containsSecret} from './security/content.mjs';
 
 const same = (a, b) => a.ino === b.ino && a.dev === b.dev && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
 const safeStat = stat => stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1n;
@@ -56,7 +57,7 @@ export async function readSelectedText(policy, entry) {
   const root = policy.roots[entry.rootIndex]; const filename = path.resolve(root, entry.relativePath);
   if (!inside(root, filename)) fail('PATH_DENIED');
   const result = await boundedRead(filename);
-  if (/-----BEGIN .*PRIVATE KEY-----|\b(?:sk-[A-Za-z0-9_-]{16,}|AIza[A-Za-z0-9_-]{30,})|["']?(?:api[_-]?key|private_key|client_secret|password)["']?\s*[:=]\s*\S+/iu.test(result.content)) fail('SENSITIVE_CONTENT');
+  if (containsSecret(result.content)) fail('SENSITIVE_CONTENT');
   if (path.extname(filename).toLowerCase() === '.json') strictJSON(result.content);
   return { id: entry.id, version: entry.version, classification: entry.classification,
     format: path.extname(filename).slice(1).toLowerCase(), ...result };

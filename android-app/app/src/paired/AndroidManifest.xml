@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application android:name="android.app.Application" tools:replace="android:name">
+        <activity android:name=".MainActivity" android:exported="false"
+            android:windowSoftInputMode="adjustResize" tools:node="replace" />
+        <activity android:name=".PairedActivity" android:exported="true"
+            android:windowSoftInputMode="adjustResize" tools:replace="android:exported">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

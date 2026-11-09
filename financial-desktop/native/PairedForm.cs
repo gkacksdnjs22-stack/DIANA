@@ -90,11 +90,12 @@ namespace Diana.Desktop {
   }
   async Task Start(){
    var known=D("desktop",Known("B4BFCC3A-DB2C-424C-B029-7FE99A87C641"),"documents",Known("FDD39AD0-238F-46AF-ADB4-6C85480369C7"),"downloads",Known("374DE290-123F-4565-9164-39C4925E467B"));
-   if(fixture!=null){Directory.CreateDirectory(fixture);File.WriteAllText(Path.Combine(fixture,"known-folders.json"),json.Serialize(known));foreach(var k in known.Keys.ToArray()){known[k]=Path.Combine(fixture,k);Directory.CreateDirectory((string)known[k]);}}
+   if(fixture!=null){Directory.CreateDirectory(fixture);foreach(var k in known.Keys.ToArray()){known[k]=Path.Combine(fixture,k);Directory.CreateDirectory((string)known[k]);}}
    state=fixture!=null?Path.Combine(fixture,@"AppData\Local\DIANA\paired-dev"):Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"DIANA","paired-dev");Directory.CreateDirectory(state);
    var si=new ProcessStartInfo(Path.Combine(root,@"runtime\node\node.exe"),"\""+Path.Combine(root,@"app\financial-desktop\paired-host.mjs")+"\""){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardInput=true,RedirectStandardError=true,WorkingDirectory=root,StandardOutputEncoding=Encoding.UTF8};
    si.EnvironmentVariables.Remove("NODE_OPTIONS");si.EnvironmentVariables.Remove("NODE_PATH");
    process=Process.Start(si);process.ErrorDataReceived+=delegate{};process.BeginErrorReadLine();var cfg=D("state",state,"known",known,"python",Path.Combine(root,@"runtime\python\python.exe"),"port",fixture!=null?0:43871);
+   if(fixture!=null)cfg["relayOrigin"]=false;
    var line=json.Serialize(cfg);var raw=Encoding.UTF8.GetBytes(line+"\n");process.StandardInput.BaseStream.Write(raw,0,raw.Length);process.StandardInput.BaseStream.Flush();
    var reading=process.StandardOutput.ReadLineAsync();if(await Task.WhenAny(reading,Task.Delay(20000))!=reading)throw new IOException("PC 연결 서비스의 시작 응답이 지연됩니다. 잠시 뒤 다시 시도하세요.");
    var hello=await reading;if(hello==null)throw new IOException("PC 연결 서비스를 시작하지 못했습니다. 실행 파일과 설정을 확인하세요.");var h=json.Deserialize<Dictionary<string,object>>(hello);

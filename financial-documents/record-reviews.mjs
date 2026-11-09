@@ -1,3 +1,4 @@
+import {RecordPatches} from './record-patches.mjs';
 import path from 'node:path';
 import {mkdir,open,readdir,unlink} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
@@ -16,8 +17,9 @@ const metadata=e=>({execution_id:e.execution_id,record_id:e.record_id,record_ver
 /** Called only inside RequestRecords' queue, then the existing worker lease/serial
  * boundary. These are local inspection receipts, never financial save receipts. */
 export class RecordReviews{
- #root;#protected;#withReview;#record;#tickets=new Map();
- constructor({stateDir,protectedRoots,withLocalReview,getRecord}){this.#root=path.resolve(stateDir+'.request-reviews');this.#protected=[...protectedRoots,stateDir,stateDir+'.registrations',stateDir+'.request-records'].map(p=>path.resolve(p));this.#withReview=withLocalReview;this.#record=getRecord;}
+ #patches;#root;#protected;#withReview;#record;#tickets=new Map();
+ constructor({stateDir,protectedRoots,withLocalReview,withLocalPatch,getRecord}){this.#root=path.resolve(stateDir+'.request-reviews');this.#protected=[...protectedRoots,stateDir,stateDir+'.registrations',stateDir+'.request-records'].map(p=>path.resolve(p));this.#withReview=withLocalReview;this.#record=getRecord;this.#patches=new RecordPatches({stateDir,protectedRoots,withLocalPatch,getRecord,getReview:id=>this.#existing(id)});}
+ invalidateSearch(){this.#tickets.clear();}
  async #storage(){await checkedDirectory(path.dirname(this.#root));for(const p of this.#protected)demand(!inside(p,this.#root)&&!inside(this.#root,p),'RECORD_REVIEW_STORAGE_BOUNDARY');await mkdir(this.#root,{recursive:true,mode:0o700});await checkedDirectory(this.#root);}
  async #names(){await this.#storage();const n=await readdir(this.#root);demand(n.length<=10000,'RECORD_REVIEW_LIMIT');return n;}
  async #write(name,value){await this.#storage();const filename=path.join(this.#root,name),h=await open(filename,'ax',0o600);try{await verifyOpenedOutput(h,filename,this.#root);await h.writeFile(JSON.stringify(value)+'\n');await h.sync();await verifyOpenedOutput(h,filename,this.#root);}finally{await h.close();}}
@@ -38,7 +40,9 @@ export class RecordReviews{
  async exposureForRecord(recordId){
   const names=await this.#names(),events=[];for(const name of names.filter(n=>/^[a-f0-9-]{36}-exposure\.json$/u.test(n))){const e=await this.#read(name);if(e.record_id===recordId)events.push(e);}return events;
  }
+ async close(){await this.#patches.close();}
  async deleteForRecord(recordId){
+  await this.#patches.cancelForRecord(recordId);
   for(const name of (await this.#names()).filter(n=>/^[a-f0-9-]{36}-start\.json$/u.test(n))){const id=name.slice(0,36),claim=await this.#read(name);demand(UUID.test(id)&&claim.execution_id===id,'RECORD_REVIEW_STORAGE_CHANGED');if(claim.record_id!==recordId)continue;
    for(const suffix of ['result','exposure','start']){const filename=path.join(this.#root,id+'-'+suffix+'.json');try{await boundedRead(filename,16_000_000);await checkedDirectory(this.#root);await unlink(filename);}catch(e){if(e.code!=='ENOENT')throw e;}}
   }
@@ -55,6 +59,7 @@ export class RecordReviews{
   return{action:'checklist_review',target_doc:s.target_doc,source_ids:s.source_ids,guideline_id:s.guideline_id,item_ids:[],format:s.format};
  }
  async handle(body){
+  if(body.action.startsWith('patch-'))return this.#patches.handle(body);
   if(body.action==='review-context'){
    keys(body,['action','recordId','recordVersion']);const record=await this.#record(body.recordId,body.recordVersion),history=await this.#history(body.recordId);
    return this.#locked(async(_,ctx)=>({record_id:record.record_id,record_version:record.version,request:record.input.request,original_intent:record.raw_user_confirmation.intent,original_action:record.selection.action,historical_catalog_hash:record.catalog_hash,current_context:ctx,current_context_hash:hash(ctx),history}));

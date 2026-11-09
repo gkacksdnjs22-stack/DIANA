@@ -8,12 +8,12 @@ import {createFilePolicy} from '../local-ai/files.mjs';
 import {UUID,validTask,publicTask} from '../lib/financial-contract.mjs';
 import {FinancialDocuments} from './adapter.mjs';
 import {discoverFolder} from './local-discovery.mjs';
+import {containsSecret} from './security/content.mjs';
 
 const within=(a,b)=>{const r=path.relative(a,b);return !r||r!=='..'&&!r.startsWith('..'+path.sep)&&!path.isAbsolute(r);};
 const plain=value=>JSON.parse(JSON.stringify(value));
 const hashJSON=value=>digest(JSON.stringify(value));
 const kinds=new Set(['target','source','guideline']);
-const sensitive=/-----BEGIN .*PRIVATE KEY-----|\b(?:sk-[A-Za-z0-9_-]{16,}|AIza[A-Za-z0-9_-]{30,})|["']?(?:api[_-]?key|private_key|client_secret|password)["']?\s*[:=]\s*\S+/iu;
 async function writeNew(filename,content){const parent=path.dirname(filename);await checkedDirectory(parent);const handle=await open(filename,'ax',0o600);try{await verifyOpenedOutput(handle,filename,parent);await handle.writeFile(content);await handle.sync();await verifyOpenedOutput(handle,filename,parent);}finally{await handle.close();}}
 
 /** Append-only PC catalog. Original configs and source files are never edited.
@@ -74,7 +74,7 @@ export class LocalRegistration {
       const {core,config,documents}=this.#state;
       const privateDocs=core.documents.filter(d=>d.read_roles.includes(core.role)).map(d=>{
         const added=documents.find(x=>x.id===d.id),kind=added?.kind||(config.tasks.some(t=>t.guideline_id===d.id)?'guideline':config.tasks.some(t=>t.source_ids.includes(d.id))?'source':'target');
-        return{id:d.id,name:added?.name||path.basename(d.relativePath),kind,classification:d.classification,version:d.version,registered:!!added,items:added?.items||[]};
+        return{id:d.id,name:d.display_name||added?.name||path.basename(d.relativePath),kind,classification:d.classification,version:d.version,registered:!!added,items:added?.items||[]};
       });
       // Existing guidelines also remain selectable, without returning bodies.
       const policy=await createFilePolicy(core.readRoots,core.outputRoot);
@@ -84,15 +84,20 @@ export class LocalRegistration {
   }
   async withRecordingContext(action){return this.#worker.withRecordingContext(async context=>action(await this.#recordingContext(context)));}
   async withLocalReview(action){return this.#worker.withLocalReview(async({context,...operations})=>action(operations,await this.#recordingContext(context)));}
-  async #recordingContext({allowed,config,core}){
+  async withLocalPatch(action){return this.#worker.withLocalPatch(async({context,...operations})=>action(operations,await this.#recordingContext(context)));}
+  async withEvidenceSearch(action){return this.#worker.withLocalReview(async({context,...ops})=>action(ops,await this.#recordingContext(context,true)));}
+  async #recordingContext({allowed,config,core},searchOnly=false){
     await this.#verifyHead();
+    if(!searchOnly)await this.#verifyDocuments(this.#state);
+    const policy=await createFilePolicy(core.readRoots,core.outputRoot);
+    const fileHashes=new Map(await Promise.all(allowed.map(async d=>{const entry=core.documents.find(x=>x.id===d.id);const raw=await readSelectedText(policy,entry);return[d.id,raw.hash];})));
     const documents=allowed.map(d=>{
       const entry=core.documents.find(x=>x.id===d.id),added=this.#state.documents.find(x=>x.id===d.id);
       const kind=added?.kind||(config.tasks.some(t=>t.guideline_id===d.id)?'guideline':config.tasks.some(t=>t.source_ids.includes(d.id))?'source':'target');
       // Match the existing PC selectors, plus roles already used by registered tasks.
       const roles=new Set([{target:'review',source:'source',guideline:'guideline'}[kind]]);
       for(const t of config.tasks){if(t.target_doc===d.id)roles.add('review');if(t.source_ids.includes(d.id))roles.add('source');if(t.guideline_id===d.id)roles.add('guideline');}
-      return{id:d.id,display_name:added?.name||path.basename(entry.relativePath),aliases:[],roles:[...roles].sort(),version:d.version,classification:d.classification};
+      return{id:d.id,display_name:entry.display_name||added?.name||path.basename(entry.relativePath),aliases:[],roles:[...roles].sort(),version:d.version,classification:d.classification,file_hash:fileHashes.get(d.id)};
     });
     return {revision:this.revision,documents,tasks:config.tasks.filter(t=>[t.target_doc,...t.source_ids,t.guideline_id].every(id=>allowed.some(d=>d.id===id))).map(t=>({id:t.id,label:t.label,actions:t.actions,formats:t.formats,targetId:t.target_doc,sourceIds:t.source_ids,guidelineId:t.guideline_id})),coverage:{scope:'all_current_acl_filtered_registered_documents',complete:true,aliases:'not_configured_in_existing_catalog',roles:'pc_selector_kind_and_registered_task_usage_not_new_acl_grants'}};
   }
@@ -153,7 +158,7 @@ export class LocalRegistration {
   async register(type,body){return this.#worker.withRegistration(install=>this.#change(type,body,install));}
   async #change(type,body,install,beforeCommit=async()=>{}){
       const fields=type==='document'?['requestId','revision','id','version','kind','name','classification','content']:type==='task'?['requestId','revision','label','targetId','sourceIds','guidelineId','itemIds','actions','formats']:type==='folder'?['requestId','revision','folder']:type==='bundle'?['requestId','revision','documents','task','allowPatch']:null;
-      if(!fields)fail('REGISTRATION_INVALID');keys(body,fields);
+      if(!fields)fail('REGISTRATION_INVALID');keys(body,type==='document'?[...fields,'displayName']:fields,fields);
       if(!UUID.test(body.requestId)||!Number.isSafeInteger(body.revision)||body.revision<0)fail('REGISTRATION_INVALID');
       await this.#verifyHead();
       const operationHash=hashJSON([type,body]);
@@ -178,7 +183,7 @@ export class LocalRegistration {
       const coreText=JSON.stringify(state.core);await writeNew(path.join(directory,'core.json'),coreText);
       if(type==='task'||type==='bundle'){
         const selection=type==='task'?body:body.task;
-        const adapter=await FinancialDocuments.create({configPath:state.config.coreConfig});
+        const adapter=await FinancialDocuments.create({configPath:state.config.coreConfig,runtimePython:this.#base.runtimePython});
         try{const result=await adapter.prepare({action:'checklist_review',target_doc:selection.targetId,source_ids:selection.sourceIds,guideline_id:selection.guidelineId,item_ids:[],format:selection.formats[0]});
           if(result.reason!=='REVIEW_RESULT'||!Array.isArray(result.items)||!result.items.length)fail('REGISTRATION_REVIEW_INVALID');
           if(selection.itemIds.some(id=>!result.items.some(item=>item.item_id===id)))fail('REGISTRATION_REVIEW_INVALID');
@@ -197,13 +202,14 @@ export class LocalRegistration {
   }
   async #addDocument(state,body){
     if(!validId(body.id)||!validId(body.version)||!kinds.has(body.kind)||!['synthetic','internal'].includes(body.classification)||state.core.documents.some(d=>d.id===body.id)||state.core.documents.length>=100)fail('REGISTRATION_DOCUMENT_INVALID');
-    if(typeof body.name!=='string'||!body.name||body.name.length>255||/[\\/:\x00-\x1f]/u.test(body.name)||typeof body.content!=='string'||!body.content.trim()||Buffer.byteLength(body.content)>262144||/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u.test(body.content)||sensitive.test(body.content))fail('REGISTRATION_DOCUMENT_INVALID');
+    if(typeof body.name!=='string'||!body.name||body.name.length>255||/[\\/:\x00-\x1f]/u.test(body.name)||typeof body.content!=='string'||!body.content.trim()||Buffer.byteLength(body.content)>262144||/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u.test(body.content)||containsSecret(body.content))fail('REGISTRATION_DOCUMENT_INVALID');
+    if(body.displayName!==undefined&&(typeof body.displayName!=='string'||!body.displayName.trim()||body.displayName.length>120||/[\\/:\x00-\x1f\x7f]/u.test(body.displayName)))fail('REGISTRATION_DOCUMENT_INVALID');
     const format=path.extname(body.name).slice(1).toLowerCase();if(!['md','txt','json'].includes(format)||body.kind==='guideline'&&format!=='json')fail('REGISTRATION_DOCUMENT_INVALID');
     if(format==='json')strictJSON(body.content);
     const items=body.kind==='guideline'?this.#guideline(body.content,body.id,body.version):[];
     const storage=randomUUID(),directory=path.join(this.#documentsRoot,storage);await checkedDirectory(this.#documentsRoot);await mkdir(directory,{mode:0o700});await writeNew(path.join(directory,'document.'+format),body.content);
     let rootIndex=state.core.readRoots.indexOf(this.#documentsRoot);if(rootIndex<0){rootIndex=state.core.readRoots.length;state.core.readRoots.push(this.#documentsRoot);}
-    const entry={id:body.id,version:body.version,rootIndex,relativePath:storage+'/document.'+format,classification:body.classification,read_roles:[state.core.role]};
+    const entry={id:body.id,version:body.version,rootIndex,relativePath:storage+'/document.'+format,classification:body.classification,read_roles:[state.core.role],...(body.displayName!==undefined?{display_name:body.displayName}:{})};
     const policy=await createFilePolicy(state.core.readRoots,state.core.outputRoot);await readSelectedText(policy,entry);
     state.core.documents.push(entry);state.documents.push({id:body.id,name:body.name,kind:body.kind,format,storage,hash:digest(body.content),items});
   }

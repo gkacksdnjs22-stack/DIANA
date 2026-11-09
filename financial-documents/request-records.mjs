@@ -1,3 +1,5 @@
+import {RecordConversions} from './record-conversions.mjs';
+import {RecordDrafts} from './record-drafts.mjs';
 import {Corrections} from './corrections.mjs';
 import path from 'node:path';
 import {mkdir,open,readdir,unlink} from 'node:fs/promises';
@@ -7,6 +9,7 @@ import {boundedRead,verifyOpenedOutput} from './files.mjs';
 import {keys,strictJSON,fail} from './strict-json.mjs';
 import {UUID} from '../lib/financial-contract.mjs';
 import {RecordReviews} from './record-reviews.mjs';
+import {EvidenceSearch} from './evidence-search.mjs';
 import {AiPreview} from './ai-preview.mjs';
 
 export const RECORD_VERSION='request-records-v1';
@@ -31,9 +34,9 @@ export const emptyConfirmation=()=>({intent:'uncertain',target:{state:'unknown',
 /** Private local records. Saving labels never runs a task; explicit review-* actions
  * delegate to the same worker's read-only review boundary. No model or business save. */
 export class RequestRecords{
- #root;#protected;#withContext;#app;#chain=Promise.resolve();#previews=new Map();#reviews;#ai;#corrections;
- constructor({stateDir,protectedRoots,withContext,withLocalReview=null,aiPython=null,appVersion='source-0.1.0+request-records-v1'}){this.#root=path.resolve(stateDir+'.request-records');this.#protected=[...protectedRoots,stateDir,stateDir+'.registrations'].map(p=>path.resolve(p));this.#withContext=withContext;this.#app=appVersion;this.#ai=new AiPreview({stateDir,protectedRoots,withContext,python:aiPython});this.#reviews=new RecordReviews({stateDir,protectedRoots,withLocalReview,getRecord:async(id,version)=>{const rows=await this.#versions(id);const record=version===undefined?rows.at(-1):rows.find(r=>r.version===version);demand(record,'RECORD_NOT_FOUND');return structuredClone(record);}});this.#corrections=new Corrections({stateDir,protectedRoots,getRecord:async(id,version)=>{const rows=await this.#versions(id);const record=version===undefined?rows.at(-1):rows.find(r=>r.version===version);demand(record,'RECORD_NOT_FOUND');return structuredClone(record);},getExposure:async id=>({ai:await this.#ai.exposure(id),ai_history:await this.#ai.auditHistory(id),review:await this.#reviews.exposureForRecord(id)})});}
- async close(){await this.#ai.close();}
+ #root;#protected;#withContext;#app;#chain=Promise.resolve();#previews=new Map();#reviews;#ai;#corrections;#drafts;#conversions;#search;
+ constructor({stateDir,protectedRoots,withContext,withEvidenceSearch=null,withLocalReview=null,withLocalPatch=null,aiPython=null,appVersion='source-0.1.0+request-records-v1'}){this.#search=new EvidenceSearch(withEvidenceSearch);this.#conversions=new RecordConversions(withLocalPatch);this.#drafts=new RecordDrafts(withLocalPatch);this.#root=path.resolve(stateDir+'.request-records');this.#protected=[...protectedRoots,stateDir,stateDir+'.registrations'].map(p=>path.resolve(p));this.#withContext=withContext;this.#app=appVersion;this.#ai=new AiPreview({stateDir,protectedRoots,withContext,python:aiPython});this.#reviews=new RecordReviews({stateDir,protectedRoots,withLocalReview,withLocalPatch,getRecord:async(id,version)=>{const rows=await this.#versions(id);const record=version===undefined?rows.at(-1):rows.find(r=>r.version===version);demand(record,'RECORD_NOT_FOUND');return structuredClone(record);}});this.#corrections=new Corrections({stateDir,protectedRoots,getRecord:async(id,version)=>{const rows=await this.#versions(id);const record=version===undefined?rows.at(-1):rows.find(r=>r.version===version);demand(record,'RECORD_NOT_FOUND');return structuredClone(record);},getExposure:async id=>({ai:await this.#ai.exposure(id),ai_history:await this.#ai.auditHistory(id),review:await this.#reviews.exposureForRecord(id)})});}
+ async close(){await this.#conversions.close();await this.#drafts.close();await this.#reviews.close();await this.#ai.close();}
  get directory(){return this.#root;}
  async #storage(){await checkedDirectory(path.dirname(this.#root));for(const p of this.#protected)demand(!within(p,this.#root)&&!within(this.#root,p),'RECORD_STORAGE_BOUNDARY');await mkdir(this.#root,{recursive:true,mode:0o700});await checkedDirectory(this.#root);}
  async #write(name,data){await this.#storage();const filename=path.join(this.#root,name),h=await open(filename,'ax',0o600);try{await verifyOpenedOutput(h,filename,this.#root);await h.writeFile(JSON.stringify(data)+'\n');await h.sync();await verifyOpenedOutput(h,filename,this.#root);}finally{await h.close();}}
@@ -44,8 +47,11 @@ export class RequestRecords{
  async handle(body,observedJobs=[]){body=structuredClone(body);if(body?.action?.startsWith('ai-'))return this.#ai.handle(body);observedJobs=structuredClone(observedJobs);const action=()=>this.#handle(body,observedJobs);const p=this.#chain.then(action);this.#chain=p.catch(()=>{});return p;}
  async #handle(body,jobs){
   demand(body&&typeof body==='object');
+  if(body.action?.startsWith('search-')){const r=await this.#search.handle(body);if(body.action==='search-apply'){this.#previews.clear();this.#reviews.invalidateSearch();}return r;}
+  if(typeof body.action==='string'&&body.action.startsWith('conversion-'))return this.#conversions.handle(body);
+  if(typeof body.action==='string'&&body.action.startsWith('draft-'))return this.#drafts.handle(body);
   if(typeof body.action==='string'&&body.action.startsWith('correction-'))return this.#corrections.handle(body);
-  if(typeof body.action==='string'&&body.action.startsWith('review-'))return this.#reviews.handle(body);
+  if(typeof body.action==='string'&&(body.action.startsWith('review-')||body.action.startsWith('patch-')))return this.#reviews.handle(body);
   if(body.action==='context'){keys(body,['action']);return this.#context();}
   if(body.action==='list'){keys(body,['action']);const names=await this.#names(),ids=[...new Set(names.filter(n=>/^[-a-f0-9]{36}-v[1-9][0-9]*\.json$/u.test(n)).map(n=>n.slice(0,36)))].filter(id=>!names.includes(id+'-deleted.json'));const records=[];for(const id of ids){const v=(await this.#versions(id)).at(-1);records.push({id,version:v.version,created_at:v.created_at,confirmed_at:v.confirmed_at,request:v.input.request,origin:v.data_origin,annotation:'user_self_confirmed_needs_review'});}return{records:records.sort((a,b)=>b.confirmed_at.localeCompare(a.confirmed_at))};}
   if(body.action==='detail'){keys(body,['action','id']);const versions=await this.#versions(body.id);demand(versions.length,'RECORD_NOT_FOUND');return{versions};}

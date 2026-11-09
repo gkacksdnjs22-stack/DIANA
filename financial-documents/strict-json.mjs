@@ -1,7 +1,7 @@
 // JSON.parse alone accepts duplicate keys. Parse the bounded JSON grammar first.
 export const fail = code => { throw Object.assign(new Error(code), { code }); };
-export function strictJSON(raw) {
-  if (typeof raw !== 'string' || Buffer.byteLength(raw) > 2_000_000) fail('INVALID_JSON');
+export function strictJSON(raw,maximum=2_000_000) {
+  if (typeof raw !== 'string' || Buffer.byteLength(raw) > maximum) fail('INVALID_JSON');
   let at = 0;
   const whitespace = () => { while (/[ \r\n\t]/u.test(raw[at] || 'x')) at++; };
   function string() {

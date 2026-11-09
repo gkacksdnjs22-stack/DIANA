@@ -4,10 +4,12 @@ on:
   push:
     paths:
       - 'android-app/**'
+      - 'financial-desktop/version.json'
       - '.github/workflows/android-apk.yml'
   pull_request:
     paths:
       - 'android-app/**'
+      - 'financial-desktop/version.json'
       - '.github/workflows/android-apk.yml'
   workflow_dispatch:
 
@@ -62,6 +64,14 @@ jobs:
           path: android-app/install-check/build/outputs/apk/debug/install-check-debug.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Verify the paired product launcher
+        working-directory: android-app
+        run: |
+          gradle --no-daemon -PpairedProduct=true :app:testDebugUnitTest :app:assembleDebug
+          badging="$("$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk)"
+          grep -F "package: name='kr.nightdesk.phone.paireddev'" <<< "$badging"
+          grep -F "launchable-activity: name='kr.nightdesk.phone.PairedActivity'" <<< "$badging"
 
   mobile-ui:
     name: Verify mobile screens on Android 15
