@@ -129,6 +129,8 @@ async commit(id,nonce,authorize){
  this.writing??=new Set();
  this.writing.add(id);
  try{
+  // If the approved bytes were already written, recover only their record.
+  if(job.status==='saving'&&await this.finish(id,authorize,{recordOnly:true}))return;
   try{
    for(const ref of JSON.parse(job.refs)){
     const buf=await bytes(ref.path,path.dirname(ref.path),8_000_000,ref.stamp);
@@ -149,7 +151,42 @@ async commit(id,nonce,authorize){
   this.writing.delete(id);
  }
 }
-async finish(id,authorize){const j=this.row(id);requireThat(j.status==='saving','저장 상태를 다시 확인하세요.');const s=JSON.parse(j.spec),name=(s.title||({summary:'자료 요약',compare:'자료 비교',slides:'발표 자료',create:'새 문서',edit:'수정본',convert:'변환본',read:'문서 본문'})[s.kind]).replace(/[\\/:<>|?*"\x00-\x1f]/g,' ').trim().slice(0,65)+'-'+id.slice(0,8)+'.'+s.format,physical=name,dir=this.fileDir(id),dest=path.join(dir,physical);this.set('location-'+id,dir);await checkedDirectory(dir);authorize?.();try{await writeFile(dest,j.data,{flag:'wx'});}catch(e){if(e.code!=='EEXIST')throw e;}const buf=await bytes(dest,dir);requireThat(sum(buf)===j.hash,'저장 결과가 불확실합니다. 기존 파일을 확인하세요.');this.db.exec('BEGIN');try{this.db.prepare('INSERT OR IGNORE INTO files VALUES(?,?,?,?,?,?,0)').run(id,name,physical,s.format,j.hash,buf.length);this.db.prepare("UPDATE jobs SET status='done',spec=NULL,error=NULL,data=NULL,preview=NULL,refs=NULL,nonce=NULL,hash=NULL WHERE id=?").run(id);this.set('sources-'+id,j.refs||'[]');this.set('last',id);this.db.exec('COMMIT');}catch(e){this.db.exec('ROLLBACK');throw e;}}
+async finish(id,authorize,{recordOnly=false}={}){
+ const job=this.row(id);
+ requireThat(job?.status==='saving','저장 상태를 다시 확인하세요.');
+ if(recordOnly&&!this.get('location-'+id))return false;
+ const s=JSON.parse(job.spec);
+ const name=(s.title||({summary:'자료 요약',compare:'자료 비교',slides:'발표 자료',create:'새 문서',edit:'수정본',convert:'변환본',read:'문서 본문'})[s.kind]).replace(/[\\/:<>|?*"\x00-\x1f]/g,' ').trim().slice(0,65)+'-'+id.slice(0,8)+'.'+s.format;
+ const dir=this.fileDir(id);
+ const destination=path.join(dir,name);
+ if(!recordOnly){
+  this.set('location-'+id,dir);
+  await checkedDirectory(dir);
+  authorize?.();
+  try{await writeFile(destination,job.data,{flag:'wx'});}
+  catch(e){if(e.code!=='EEXIST')throw e;}
+ }
+ let saved;
+ try{saved=await bytes(destination,dir);}
+ catch(e){
+  if(recordOnly&&e.code==='ENOENT')return false;
+  throw e;
+ }
+ requireThat(sum(saved)===job.hash,'저장 결과가 불확실합니다. 기존 파일을 확인하세요.');
+ authorize?.();
+ this.db.exec('BEGIN');
+ try{
+  this.db.prepare('INSERT OR IGNORE INTO files VALUES(?,?,?,?,?,?,0)').run(id,name,name,s.format,job.hash,saved.length);
+  this.db.prepare("UPDATE jobs SET status='done',spec=NULL,error=NULL,data=NULL,preview=NULL,refs=NULL,nonce=NULL,hash=NULL WHERE id=?").run(id);
+  this.set('sources-'+id,job.refs||'[]');
+  this.set('last',id);
+  this.db.exec('COMMIT');
+ }catch(e){
+  this.db.exec('ROLLBACK');
+  throw e;
+ }
+ return true;
+}
 fileDir(id){return this.get('location-'+id)||this.get('output')||this.base.core.outputRoot;}
 async download(id,role){const f=this.db.prepare('SELECT * FROM files WHERE id=?').get(id);if(!f)return this.old.download(id,role);requireThat(role==='owner'||f.shared,'전달이 허용되지 않았습니다.');const b=await bytes(path.join(this.fileDir(id),f.physical),this.fileDir(id));requireThat(sum(b)===f.hash,'파일이 바뀌었습니다.');return {bytes:b,name:f.name,sha256:f.hash};}
 async handle(b,role,requestDevice=null){if(b.action==='desk-start'&&uuid(b.id||b.requestId)){this.starts??=new Map();const k=b.id||b.requestId;const same=this.starts.get(k);if(same)return same.text===b.text&&same.requestDevice===requestDevice?same.promise:{ok:false,error:'같은 작업 번호의 요청 내용이 다릅니다.'};const promise=this.dispatch(b,role,requestDevice);this.starts.set(k,{text:b.text,requestDevice,promise});try{return await promise;}finally{this.starts.delete(k);}}return this.dispatch(b,role,requestDevice);}

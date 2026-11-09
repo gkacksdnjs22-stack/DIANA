@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { access, copyFile, mkdir, readdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, readdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createRelay } from '../tests/helpers/paired-relay.mjs';
@@ -201,6 +202,53 @@ try {
     await writeFile(sourcePath, original);
   }
   console.log('Phone and PC interrupted saves require a fresh preview if the source changes');
+  const jobsDatabase = path.join(known.documents, 'DIANA', '앱 설정', 'paired-dev', 'profiles',
+    path.basename(outputDir), 'local-state.workbench', 'jobs.sqlite');
+  await access(jobsDatabase);
+  for (const mode of ['phone', 'pc']) {
+    const id = await send(editText);
+    await waitFor(id, 'approval');
+    const shown = await mobile({ op: 'phone-preview', id });
+    const approval = { op: 'phone-approve', id, nonce: shown.nonce, confirm: true };
+    const db = new DatabaseSync(jobsDatabase);
+    try {
+      db.exec("CREATE TRIGGER fail_test_record BEFORE INSERT ON files BEGIN SELECT RAISE(ABORT,'test record write failure'); END");
+      try {
+        await mobile(approval, 400);
+        await waitFor(id, 'saving');
+        assert(!(await pc({ op: 'state' })).files.some(file => file.id === id));
+      } finally {
+        db.exec('DROP TRIGGER fail_test_record');
+      }
+    } finally {
+      db.close();
+    }
+    const names = (await readdir(outputDir)).filter(name => name.includes(id.slice(0, 8)));
+    assert.equal(names.length, 1);
+    const dest = path.join(outputDir, names[0]);
+    const written = await readFile(dest);
+    assert.match(written.toString(), /12분/);
+    const revised = original + '\n저장 기록 실패 이후의 새 내용입니다.';
+    if (mode === 'phone') {
+      const altered = Buffer.from('승인한 파일과 다른 내용입니다.');
+      await writeFile(dest, altered);
+      await mobile(approval, 400);
+      assert.deepEqual(await readFile(dest), altered);
+      assert(!(await pc({ op: 'state' })).files.some(file => file.id === id));
+      await writeFile(dest, written);
+    }
+    await writeFile(sourcePath, revised);
+    const before = await stat(dest, {bigint: true});
+    if (mode === 'phone') await mobile(approval);
+    else await pc({ op: 'job', action: 'desk-retry', id });
+    assert.deepEqual(await receive(id), written);
+    const after = await stat(dest, {bigint: true});
+    assert.equal(after.ino, before.ino);
+    assert.equal(after.mtimeNs, before.mtimeNs);
+    assert.equal(await readFile(sourcePath, 'utf8'), revised);
+    await writeFile(sourcePath, original);
+  }
+  console.log('Phone and PC recover the record for an already written file without rewriting it');
   await pc({ op: 'revoke', device: otherPhone.device });
   await other(preview, 403);
   const pcOnly = randomUUID();
