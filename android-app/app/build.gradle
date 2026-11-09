@@ -1,14 +1,26 @@
 plugins { id 'com.android.application' }
+def pairedProduct = providers.gradleProperty('pairedProduct').map { it == 'true' }.getOrElse(false)
+def pairedVersionFile = rootProject.file('../financial-desktop/version.json')
+def pairedVersion = pairedProduct ? new groovy.json.JsonSlurper().parse(pairedVersionFile).version : null
+def pairedVersionParts = pairedProduct ? (pairedVersion =~ /^(\d+)\.(\d+)\.(\d+)-dev-[a-z]+([1-9]\d*)$/) : null
+if (pairedProduct && !pairedVersionParts.matches()) throw new GradleException('Invalid paired product version')
 android {
     namespace 'kr.nightdesk.phone'
     compileSdk 35
     defaultConfig {
-        applicationId 'kr.nightdesk.phone'
+        applicationId pairedProduct ? 'kr.nightdesk.phone.paireddev' : 'kr.nightdesk.phone'
         minSdk 26
         targetSdk 35
-        versionCode 12
-        versionName '0.3.9'
+        versionCode pairedProduct ? (pairedVersionParts[0][1].toInteger() * 1000000 +
+            pairedVersionParts[0][2].toInteger() * 10000 + pairedVersionParts[0][3].toInteger() * 100 +
+            pairedVersionParts[0][4].toInteger()) : 12
+        versionName pairedProduct ? pairedVersion : '0.3.9'
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+    if (pairedProduct) {
+        buildTypes.configureEach { type ->
+            sourceSets.getByName(type.name).manifest.srcFile 'src/paired/AndroidManifest.xml'
+        }
     }
     buildFeatures { buildConfig true }
     testOptions { unitTests.includeAndroidResources = true }

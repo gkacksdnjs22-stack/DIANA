@@ -1,6 +1,12 @@
 """Source-grounded plans; no invented conclusions or model calls."""
-import re,collections,decimal
+import re,collections,decimal,json
+from pathlib import Path
 from document_shaping import select_outline,norm
+
+# The paired source search uses the same report output grammar.
+REPORT_OUTPUT = re.compile("|".join(json.loads(
+    Path(__file__).with_name("report-request-patterns.json").read_text(encoding="utf-8")
+)), re.I)
 
 def text_blocks(text):
     blocks=[];paragraph=[]
@@ -59,15 +65,8 @@ def requests_report(request,docs):
         if value in ('보고서','리포트'):return value
         return ' '
     command=quoted.sub(mask_quote,command)
-    # A file extension is not the end of an instruction (e.g. 보고서작성.pdf).
-    end=r'(?=\s*(?:$|[!?;,]|\.(?:\s|$)))'
-    terminal=r'(?=\s*[.!?]?\s*$)'
-    polite=r'(?:\s*(?:줘|주세요|주십시오))?'
-    author=r'(?:(?:(?:작성|제작)(?:해'+polite+r'|하세요|하십시오)|만들어'+polite+r'|써'+polite+r')'+end+r'|(?:작성|제작)'+terminal+r')'
-    qualifiers=r'(?:(?:짧게|간단히|자세히|상세히|(?:pdf|docx|txt|md|json|pptx?|워드|텍스트|마크다운)(?:\s*파일)?(?:으로|로)?)\s*)*'
-    direct=r'(?:보고서|리포트)(?:를|을)?\s*'+qualifiers+author
-    form=r'(?:보고서|리포트)\s*(?:(?:형식|형태)(?:으로|로)?|으로|로)\s*'+qualifiers+r'(?:'+author+r'|(?:요약|정리)해'+polite+end+r'|(?:요약|정리)'+terminal+r'|'+terminal+r')'
-    return bool(re.search(direct,command,re.I) or re.search(form,command,re.I))
+    return bool(REPORT_OUTPUT.search(command))
+
 
 def build_plan(op,title,docs,request,body='',change=None):
     report=op in ('summary','compare') and requests_report(request,docs)

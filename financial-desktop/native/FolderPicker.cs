@@ -9,7 +9,7 @@ class DianaFolderPicker {
     private sealed class PickerWindow : Form {
         public string SelectedFolder;
         public PickerWindow() {
-            Text="DIANA · PC 문서 폴더 허용";
+            Text=Diana.Desktop.BuildVersion.PickerTitle;
             ClientSize=new Size(570,125);StartPosition=FormStartPosition.CenterScreen;
             FormBorderStyle=FormBorderStyle.FixedDialog;MaximizeBox=false;MinimizeBox=false;
             ShowInTaskbar=true;

@@ -33,7 +33,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24.22.1'
-      - name: Fetch the published Android source revision
+      - name: Fetch published source revisions
         shell: bash
         run: |
           source_commit="$(node -p "JSON.parse(require('node:fs').readFileSync('public/downloads/releases.json', 'utf8')).android.sourceCommit")"
@@ -41,7 +41,7 @@ jobs:
             echo 'Invalid published Android source commit' >&2
             exit 1
           fi
-          git fetch --no-tags --depth=1 origin "$source_commit"
+          git fetch --no-tags --depth=1 origin "$source_commit" 7c9777b74b0826e2a3005206b92f49cd3cfa3962
       - name: Check published versions, source provenance and packaged sources
         run: node --test tests/release-packages.test.mjs tests/android-release-provenance.test.mjs tests/financial-ai-preview-view.test.mjs
       - name: Install web test dependencies

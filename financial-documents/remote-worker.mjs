@@ -52,12 +52,13 @@ export function financialTransport(env = process.env, fetchImpl = fetch) {
 }
 
 export class FinancialWorker {
-  #configPath; #configHash; #config; #coreConfig; #coreHash; #adapter; #policy; #api; #out; #onEvent; #detailOutput; #active = null; #lock; #stateRoot; #workerId = randomUUID(); #chain = Promise.resolve(); #documentRoot; #originBindings; #presentedIds=new Set(); #closing=false;
-  static async #configured({ configPath, api, output = () => {}, onEvent = () => {}, detailOutput = true, documentRoot = path.resolve('sample-documents') }) {
-    const w = new FinancialWorker(); w.#configPath = path.resolve(configPath); w.#api = api; w.#out = output; w.#onEvent = onEvent; w.#detailOutput = detailOutput;
+  #allowEmpty=false; #configPath; #configHash; #config; #coreConfig; #coreHash; #adapter; #policy; #api; #out; #onEvent; #detailOutput; #active = null; #lock; #stateRoot; #workerId = randomUUID(); #chain = Promise.resolve(); #documentRoot; #originBindings; #presentedIds=new Set(); #closing=false;
+  #runtimePython;
+  static async #configured({ allowEmpty=false, configPath, runtimePython, api, output = () => {}, onEvent = () => {}, detailOutput = true, documentRoot = path.resolve('sample-documents') }) {
+    const w = new FinancialWorker(); w.#configPath = path.resolve(configPath); w.#allowEmpty=allowEmpty; w.#api = api; w.#out = output; w.#onEvent = onEvent; w.#detailOutput = detailOutput;
     const raw = await boundedRead(w.#configPath, 100_000); w.#configHash = raw.hash; const c = strictJSON(raw.content);
     keys(c, ['schema_version','coreConfig','stateDir','tasks']);
-    if (c.schema_version !== 1 || !path.isAbsolute(c.coreConfig) || !path.isAbsolute(c.stateDir) || !Array.isArray(c.tasks) || !c.tasks.length || c.tasks.length > 20) fail('INVALID_WORKER_CONFIG');
+    if (c.schema_version !== 1 || !path.isAbsolute(c.coreConfig) || !path.isAbsolute(c.stateDir) || !Array.isArray(c.tasks) || (!allowEmpty&&!c.tasks.length) || c.tasks.length > 20) fail('INVALID_WORKER_CONFIG');
     const seen = new Set();
     for (const t of c.tasks) {
       keys(t, ['id','label','actions','formats','target_doc','source_ids','guideline_id','item_ids']);
@@ -65,7 +66,8 @@ export class FinancialWorker {
     }
     w.#config = c;
     const core = await boundedRead(c.coreConfig, 100_000); w.#coreHash = core.hash; w.#coreConfig = strictJSON(core.content);
-    w.#adapter = await FinancialDocuments.create({ configPath:c.coreConfig });
+    w.#runtimePython=runtimePython;
+    w.#adapter = await FinancialDocuments.create({ configPath:c.coreConfig, runtimePython });
     w.#stateRoot=await plannedDirectory(c.stateDir);
     await stateBoundary(w.#stateRoot,w.#coreConfig,[c.coreConfig,w.#configPath]);
     // Fail closed if the ordinary document catalog could reach finance inputs/outputs/state/config.
@@ -96,7 +98,52 @@ export class FinancialWorker {
     return w;
   }
   serial(action) { const p = this.#chain.then(action); this.#chain = p.catch(() => {}); return p; }
-  registrationBase(){return structuredClone({configPath:this.#configPath,configHash:this.#configHash,config:this.#config,core:this.#coreConfig,coreHash:this.#coreHash,documentRoot:this.#documentRoot});}
+  #localPatch=null;
+  #expireLocalPatch(){if(this.#localPatch&&!this.#localPatch.uncertain&&Date.now()>this.#localPatch.expires){this.#adapter.cancelPending();this.#localPatch=null;}}
+  /** A PC-local reservation, never a relay job or a fabricated remote approval. */
+  async withLocalPatch(action){return this.serial(async()=>{
+    if(this.#closing)fail('DESKTOP_STOPPING');
+    if(!this.#lock)fail('WORKER_LOCK_UNCERTAIN');
+    if(!await this.#policyCurrent())fail('LOCAL_POLICY_CHANGED');
+    this.#expireLocalPatch();
+    const a=this.#active;
+    if(a&&(!FINANCE_FINAL.has(a.job.state)||a.outbox||a.noJournal||a.job.state==='UNCERTAIN'||!['finished','terminal'].includes(a.phase)))fail('LOCAL_REVIEW_BUSY');
+    if(a){await this.#closeJournal(a);this.#active=null;}
+    await checkedDirectory(this.#stateRoot);
+    if(await realpath(this.#config.stateDir)!==this.#stateRoot)fail('FINANCE_STATE_OVERLAP');
+    const context={allowed:await this.#adapter.candidates(),config:structuredClone(this.#config),core:structuredClone(this.#coreConfig)};
+    return action({context,
+      inspect:input=>this.#adapter.inspectExplicitReview(input),
+      prepare:async(input,id)=>{
+        if(this.#localPatch)fail('LOCAL_PATCH_BUSY');
+        this.#localPatch={id,expires:Date.now()+this.#coreConfig.approval_ttl_ms};
+        try{const plan=await this.#adapter.prepare(input,{requestId:id});
+          if(plan.status!=='AWAITING_APPROVAL'){this.#localPatch=null;fail(plan.reason||'LOCAL_PATCH_NOT_PREPARED');}
+          return{plan,expires:this.#localPatch.expires};
+        }catch(e){this.#adapter.cancelPending();this.#localPatch=null;throw e;}
+      },
+      cancel:async id=>{if(this.#localPatch?.id===id&&!this.#localPatch.uncertain){await this.#adapter.cancel();this.#localPatch=null;}},
+      commit:async(id,plan)=>{
+        this.#expireLocalPatch();if(this.#localPatch?.id!==id||this.#localPatch.uncertain)fail('LOCAL_PATCH_EXPIRED');
+        try{const approval=await this.#adapter.approve(plan.plan_id,plan.plan_hash);
+          if(!approval.token)fail(approval.reason||'LOCAL_PATCH_APPROVAL_FAILED');
+          const result=await this.#adapter.execute(approval.token);
+          if(result.status==='UNCERTAIN')this.#localPatch.uncertain=true;else this.#localPatch=null;
+          return result;
+        }catch(e){this.#adapter.cancelPending();this.#localPatch=null;throw e;}
+      },
+      conversionCandidates:()=>this.#adapter.conversionCandidates(),
+      recover:async(id,selection,plan)=>{
+        const r=await this.#adapter.recoverSaved(id,selection,plan);
+        if(this.#localPatch?.id===id)this.#localPatch=null;
+        return r;
+      },
+      conversionSaved:id=>this.#adapter.readConversionSaved(id),
+      draftSaved:id=>this.#adapter.readDraftSaved(id),
+      saved:async(id,selection)=>{await this.#adapter.loadSavedResults([selection]);return this.#adapter.reviewSaved(id);}
+    });
+  });}
+  registrationBase(){return structuredClone({configPath:this.#configPath,configHash:this.#configHash,config:this.#config,core:this.#coreConfig,coreHash:this.#coreHash,documentRoot:this.#documentRoot,runtimePython:this.#runtimePython});}
   // Read-only recording boundary. No preparation, cancellation, approval or relay.
   async withRecordingContext(action){return this.serial(async()=>{
     if(this.#closing)fail('DESKTOP_STOPPING');
@@ -109,6 +156,7 @@ export class FinancialWorker {
    * queue. Do not reuse withRegistration/prepare: both can cancel pending work. */
   async withLocalReview(action){return this.serial(async()=>{
     const ready=async()=>{
+      this.#expireLocalPatch();if(this.#localPatch)fail('LOCAL_REVIEW_BUSY');
       if(this.#closing)fail('DESKTOP_STOPPING');
       if(!this.#lock)fail('WORKER_LOCK_UNCERTAIN');
       if(!await this.#policyCurrent())fail('LOCAL_POLICY_CHANGED');
@@ -122,6 +170,8 @@ export class FinancialWorker {
     const context={allowed:await this.#adapter.candidates(),config:structuredClone(this.#config),core:structuredClone(this.#coreConfig)};
     return action({context,
       inspect:async input=>{await ready();return this.#adapter.inspectExplicitReview(input);},
+      search:async(input,catalog)=>{await ready();return this.#adapter.searchEvidence(input,catalog);},
+      searchSnapshot:async ids=>{await ready();return this.#adapter.searchSnapshot(ids);},
       run:async(input,snapshot,requestId)=>{
         await ready();
         const result=await this.#adapter.reviewExplicit(input,snapshot,{requestId});
@@ -135,12 +185,13 @@ export class FinancialWorker {
   /** PC registrar only. No browser-supplied path reaches this method. Preserve
    * the worker lease/identity and every existing task, role and document. */
   async withRegistration(action){return this.serial(async()=>{
+    this.#expireLocalPatch();if(this.#localPatch)fail('REGISTRATION_BUSY');
     if(this.#closing)fail('DESKTOP_STOPPING');
     if(!await this.#policyCurrent())fail('LOCAL_POLICY_CHANGED');
     if(this.#active&&(!FINANCE_FINAL.has(this.#active.job.state)||this.#active.outbox))fail('REGISTRATION_BUSY');
     if(this.#active){await this.#closeJournal(this.#active);this.#active=null;this.#adapter.cancelPending();}
     return action(async(configPath,commit)=>{
-      const events=[],next=await FinancialWorker.#configured({configPath,api:this.#api,output:this.#out,onEvent:event=>events.push(event),detailOutput:this.#detailOutput,documentRoot:this.#documentRoot});
+      const events=[],next=await FinancialWorker.#configured({allowEmpty:this.#allowEmpty,configPath,runtimePython:this.#runtimePython,api:this.#api,output:this.#out,onEvent:event=>events.push(event),detailOutput:this.#detailOutput,documentRoot:this.#documentRoot});
       if(next.#stateRoot!==this.#stateRoot)fail('REGISTRATION_BOUNDARY_CHANGED');
       for(const key of ['principal','role','python','write_roles','approval_ttl_ms','outputRoot'])if(JSON.stringify(next.#coreConfig[key])!==JSON.stringify(this.#coreConfig[key]))fail('REGISTRATION_BOUNDARY_CHANGED');
       for(const key of ['readRoots','documents'])if(this.#coreConfig[key].some((entry,index)=>JSON.stringify(entry)!==JSON.stringify(next.#coreConfig[key][index])))fail('REGISTRATION_BOUNDARY_CHANGED');
@@ -289,6 +340,7 @@ export class FinancialWorker {
   }
   async tick() { return this.serial(() => this.#tick()); }
   async #tick() {
+    this.#expireLocalPatch();if(this.#localPatch)return;
     if (!await this.#policyCurrent()) {
       this.#adapter.cancelPending();
       if (this.#active && !FINANCE_FINAL.has(this.#active.job.state)) {
