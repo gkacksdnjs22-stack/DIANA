@@ -24,6 +24,7 @@ export async function start(cfg){
  const profilesRoot=await profileDirectory(state,known.documents);
  const db=new DatabaseSync(path.join(state,'devices.sqlite'));db.exec('PRAGMA journal_mode=WAL; PRAGMA secure_delete=ON; CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT UNIQUE,salt TEXT,pw TEXT);CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY,user TEXT,kind TEXT,pc TEXT,active INT);CREATE UNIQUE INDEX IF NOT EXISTS local_pc ON devices(user) WHERE kind=\'pc\';CREATE TABLE IF NOT EXISTS sessions(h TEXT PRIMARY KEY,user TEXT,device TEXT,expires INTEGER);CREATE TABLE IF NOT EXISTS codes(h TEXT PRIMARY KEY,user TEXT,pc TEXT,expires INTEGER);CREATE TABLE IF NOT EXISTS receipts(device TEXT,file TEXT,hash TEXT,at INTEGER,PRIMARY KEY(device,file));CREATE TABLE IF NOT EXISTS delivery(device TEXT,file TEXT,PRIMARY KEY(device,file));');
  db.exec('CREATE TABLE IF NOT EXISTS private_dirs(dir TEXT PRIMARY KEY,pc TEXT); CREATE TABLE IF NOT EXISTS relay_grants(id TEXT PRIMARY KEY,user TEXT,pc TEXT,expires INTEGER,claim TEXT,device TEXT)');
+ db.exec('CREATE TABLE IF NOT EXISTS phone_approvals(device TEXT PRIMARY KEY)');
  let link;
  const profiles=new Map(),owner=secret(),tries=new Map();
  const get=(sql,...args)=>db.prepare(sql).get(...args),run=(sql,...args)=>db.prepare(sql).run(...args);
@@ -67,9 +68,11 @@ export async function start(cfg){
  const id=randomUUID();db.exec('BEGIN');try{run('DELETE FROM codes WHERE h=?',h);run("INSERT INTO devices VALUES(?,?,'phone',?,1)",id,s.user,c.pc);answer=session(s.user,id);run('DELETE FROM sessions WHERE h=?',s.h);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}}
  else{const dev=get('SELECT * FROM devices WHERE id=? AND user=?',s.device,s.user);if(!dev||!dev.active)deny('기기 연결이 해제되었습니다.',403);const pc=dev.kind==='pc'&&local;if(dev.kind==='pc'&&!pc)deny('PC 기기 인증을 확인하세요.',403);
  const {w,out,reg}=await profile(dev.pc);maintain(w,dev.pc);const only=()=>{if(!pc)deny('현재 PC에서 확인하세요.',403);};
+ const canApprove=()=>dev.kind==='phone'&&!!get("SELECT 1 FROM phone_approvals a JOIN devices d ON d.id=a.device JOIN sessions s ON s.device=d.id AND s.user=d.user WHERE d.id=? AND d.active=1 AND s.h=? AND s.expires>?",dev.id,s.h,Date.now());
  if(op==='state'){
   const offset=Math.max(0,Math.floor(Number(b.offset)||0)),v=await w.view('owner',offset);
-  const jobs=pc?v.jobs:v.jobs.map(({id,status,error})=>({id,status,error}));
+  const approvable=canApprove()?new Set(w.db.prepare("SELECT id FROM jobs WHERE status IN ('approval','saving') AND request_device=?").all(dev.id).map(row=>row.id)):new Set();
+  const jobs=pc?v.jobs:v.jobs.map(({id,status,error})=>({id,status,error,canApprove:approvable.has(id)&&!w.writing?.has(id)}));
   const files=v.files.map(f=>({...f,
    location:pc?path.join(w.fileDir(f.id),w.db.prepare('SELECT physical FROM files WHERE id=?').get(f.id).physical):undefined,
    received:!!get('SELECT 1 FROM receipts WHERE device=? AND file=?',dev.id,f.id),
@@ -77,13 +80,35 @@ export async function start(cfg){
   }));
   answer={device:dev.id,jobs,legacy:pc?v.legacy:undefined,files,more:v.more};
  }
- else if(op==='settings'){only();answer={roots:w.searchConfig().roots,excluded:JSON.parse(w.get('exclusions')||'[]'),output:w.get('output')||out,devices:db.prepare("SELECT id,kind,active FROM devices WHERE user=? AND pc=?").all(s.user,dev.pc)};}
+ else if(op==='settings'){only();answer={roots:w.searchConfig().roots,excluded:JSON.parse(w.get('exclusions')||'[]'),output:w.get('output')||out,devices:db.prepare("SELECT id,kind,active,EXISTS(SELECT 1 FROM phone_approvals WHERE device=devices.id) AS mobile_approval FROM devices WHERE user=? AND pc=?").all(s.user,dev.pc)};}
+ else if(op==='phone-approval-settings'){
+  only();
+  if(typeof b.device!=='string'||typeof b.enabled!=='boolean'||!get("SELECT 1 FROM devices WHERE user=? AND pc=? AND id=? AND kind='phone' AND active=1",s.user,dev.pc,b.device))deny('연결된 휴대폰을 확인하세요.');
+  if(b.enabled)run('INSERT OR IGNORE INTO phone_approvals VALUES(?)',b.device);
+  else run('DELETE FROM phone_approvals WHERE device=?',b.device);
+  answer={ok:true};
+ }
+ else if(op==='phone-preview'||op==='phone-approve'){
+  const authorize=()=>{if(!canApprove())deny('PC 설정에서 이 휴대폰의 저장 승인을 허용해 주세요.',403);};
+  authorize();
+  const job=typeof b.id==='string'&&w.db.prepare('SELECT status,preview,nonce,spec FROM jobs WHERE id=? AND request_device=?').get(b.id,dev.id);
+  if(!job)deny('이 휴대폰에서 요청한 작업만 확인할 수 있습니다.',403);
+  if(!['approval','saving'].includes(job.status)||w.writing?.has(b.id))deny('현재 작업 상태를 다시 확인하세요.',409);
+  if(op==='phone-preview')answer={id:b.id,status:job.status,preview:job.preview,nonce:job.nonce,format:JSON.parse(job.spec).format};
+  else{
+   if(b.confirm!==true||typeof b.nonce!=='string'||job.nonce!==b.nonce)deny('현재 미리보기를 다시 확인하세요.',409);
+   await w.commit(b.id,b.nonce,authorize);
+   const result=w.db.prepare('SELECT status,error FROM jobs WHERE id=?').get(b.id);
+   if(result?.status!=='done')deny(result?.error||'작업 상태가 바뀌었습니다. 다시 확인하세요.',409);
+   answer={ok:true};
+  }
+ }
  else if(op==='code'){only();if(link){const grant=secret();run('DELETE FROM relay_grants WHERE (pc=? AND claim IS NULL) OR expires<?',dev.pc,Date.now()-600000);run('INSERT INTO relay_grants VALUES(?,?,?,?,NULL,NULL)',grant,s.user,dev.pc,Date.now()+300000);try{answer=await link.code(grant);}catch(e){run('DELETE FROM relay_grants WHERE id=?',grant);throw e;}}else{const code=randomInt(100000,1000000).toString();run('DELETE FROM codes WHERE pc=? OR expires<?',dev.pc,Date.now());run('INSERT INTO codes VALUES(?,?,?,?)',digest(s.user+'|'+code),s.user,dev.pc,Date.now()+300000);answer={code};}}
- else if(op==='revoke'){if(!pc&&b.device!==dev.id)deny('이 기기만 해제할 수 있습니다.',403);if(!run("UPDATE devices SET active=0 WHERE user=? AND pc=? AND id=? AND kind='phone'",s.user,dev.pc,b.device).changes)deny('연결된 휴대폰을 확인하세요.');answer={ok:true};}
+ else if(op==='revoke'){if(!pc&&b.device!==dev.id)deny('이 기기만 해제할 수 있습니다.',403);if(!run("UPDATE devices SET active=0 WHERE user=? AND pc=? AND id=? AND kind='phone'",s.user,dev.pc,b.device).changes)deny('연결된 휴대폰을 확인하세요.');run('DELETE FROM phone_approvals WHERE device=?',b.device);answer={ok:true};}
  else if(op==='directory'){only();const p=await safeRoot(b.path),roots=w.searchConfig().roots; if(within(state,p)||within(p,state))deny('앱 설정 위치는 지정할 수 없습니다.');if(b.kind==='output'){if(db.prepare('SELECT dir FROM private_dirs WHERE pc<>?').all(dev.pc).some(r=>within(p,r.dir)||within(r.dir,p))||within(path.join(known.documents,'DIANA'),p)||Object.values(known).some(r=>within(p,r)))deny('결과 전용 하위 폴더를 선택하세요.');run('INSERT OR IGNORE INTO private_dirs VALUES(?,?)',p,dev.pc);w.set('output',p);}else if(b.kind==='exclude'){w.set('roots',JSON.stringify(roots.filter(r=>r.path!==p)));w.set('exclusions',JSON.stringify([...new Set([...JSON.parse(w.get('exclusions')||'[]'),p])]));}else if(b.kind==='root'){w.set('exclusions',JSON.stringify(JSON.parse(w.get('exclusions')||'[]').filter(x=>x!==p)));w.set('roots',JSON.stringify([...roots.filter(r=>r.path!==p),{label:Object.entries({바탕화면:known.desktop,문서:known.documents,다운로드:known.downloads}).find(([,v])=>v?.toLowerCase()===p.toLowerCase())?.[0]||path.basename(p),path:p}]));}else deny('설정을 확인하세요.');w.invalidate();answer={ok:true};}
  else if(op==='review-options'){only();answer=await reviewOptions(w);}
  else if(op==='review-connect'){only();answer=await connectReview(w,reg,b);}
- else if(op==='job'){b.requestId??=b.id||randomUUID();const allowed=['desk-start','desk-convert','desk-upload','desk-select','desk-answer','desk-retry','desk-cancel','desk-approve','desk-invalidate','select','approve','recover'];if(!allowed.includes(b.action))deny('지원하지 않는 작업입니다.');if(['desk-convert','approve','recover','select','desk-approve','desk-select','desk-answer'].includes(b.action))only();if(b.action==='approve')await validateReview(w);answer=await w.handle(b,pc?'owner':'mobile');if(['approve','recover'].includes(b.action)&&answer?.state?.files){for(const f of answer.state.files){if(w.get('deleted-'+f.id))continue;const payload=await w.old.download(f.id,'owner');if(digest(payload.bytes)!==f.sha256)deny('저장된 검토 파일을 확인하세요.');w.set('location-'+f.id,out);w.db.prepare('INSERT OR IGNORE INTO files VALUES(?,?,?,?,?,?,0)').run(f.id,f.name,f.name,f.format,f.sha256,payload.bytes.length);}answer={ok:answer.ok!==false,notice:answer.state.messages?.at(-1)?.text};}if(answer?.ok===false)deny(answer.error||'작업을 완료하지 못했습니다.');}
+ else if(op==='job'){b.requestId??=b.id||randomUUID();const allowed=['desk-start','desk-convert','desk-upload','desk-select','desk-answer','desk-retry','desk-cancel','desk-approve','desk-invalidate','select','approve','recover'];if(!allowed.includes(b.action))deny('지원하지 않는 작업입니다.');if(['desk-convert','approve','recover','select','desk-approve','desk-select','desk-answer'].includes(b.action))only();if(b.action==='approve')await validateReview(w);answer=await w.handle(b,pc?'owner':'mobile',pc?null:dev.id);if(['approve','recover'].includes(b.action)&&answer?.state?.files){for(const f of answer.state.files){if(w.get('deleted-'+f.id))continue;const payload=await w.old.download(f.id,'owner');if(digest(payload.bytes)!==f.sha256)deny('저장된 검토 파일을 확인하세요.');w.set('location-'+f.id,out);w.db.prepare('INSERT OR IGNORE INTO files VALUES(?,?,?,?,?,?,0)').run(f.id,f.name,f.name,f.format,f.sha256,payload.bytes.length);}answer={ok:answer.ok!==false,notice:answer.state.messages?.at(-1)?.text};}if(answer?.ok===false)deny(answer.error||'작업을 완료하지 못했습니다.');}
  else if(op==='file'||op==='receipt'||op==='delete'){const f=w.db.prepare('SELECT * FROM files WHERE id=?').get(b.id);if(!f)deny('보관 파일을 찾지 못했습니다.',404);
  if(op==='receipt'){if(pc||b.hash!==f.hash||b.bytes!==f.size)deny('수신 내용이 일치하지 않습니다.');run('INSERT OR REPLACE INTO receipts VALUES(?,?,?,?)',dev.id,f.id,f.hash,Date.now());answer={ok:true};}
  else{const raw=await w.download(f.id,'owner');if(op==='file')answer={name:f.name,hash:f.hash,bytes:f.size,data:raw.bytes.toString('base64')};
@@ -99,7 +124,7 @@ export async function start(cfg){
   pair:async m=>{if(!/^[a-f0-9]{64}$/.test(m.grant)||!/^[a-f0-9]{64}$/.test(m.pairKey)||!/^[a-f0-9-]{36}$/.test(m.requestId))deny('연결 정보를 확인하세요.',403);const c=get('SELECT * FROM relay_grants WHERE id=?',m.grant);const claim=digest(m.requestId+'|'+m.pairKey);if(!c||c.expires<Date.now()&&!c.claim||c.expires+600000<Date.now()||c.claim&&c.claim!==claim)deny('연결 코드가 만료됐거나 이미 사용됐습니다.',403);if(!get("SELECT 1 FROM devices WHERE id=? AND user=? AND kind='pc' AND active=1",c.pc,c.user))deny('PC 연결을 확인하세요.',403);
    if(c.claim){if(!get('SELECT 1 FROM devices WHERE id=? AND active=1',c.device))deny('기기 연결이 해제되었습니다.',403);return{token:m.token,device:c.device};}
    const id=randomUUID();db.exec('BEGIN');try{run("INSERT INTO devices VALUES(?,?,'phone',?,1)",id,c.user,c.pc);run('INSERT INTO sessions VALUES(?,?,?,?)',digest(m.token),c.user,id,Date.now()+90*day);run('UPDATE relay_grants SET claim=?,device=? WHERE id=?',claim,id,c.id);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}return{token:m.token,device:id};},
-  dispatch:async(token,b)=>{const allowed=['state','file','receipt','revoke'].includes(b?.op)||b?.op==='job'&&['desk-start','desk-upload','desk-retry','desk-cancel','desk-invalidate'].includes(b.action);if(!allowed)return{status:403,body:{error:'현재 PC에서 확인하세요.'}};const r=await fetch(origin+'/v1',{method:'POST',redirect:'error',signal:AbortSignal.timeout(30000),headers:{'content-type':'application/json',authorization:'Bearer '+token},body:JSON.stringify(b)});return{status:r.status,body:await r.json()};}});}catch(e){clearInterval(timer);await new Promise(ok=>server.close(ok));if(tls)await new Promise(ok=>tls.close(ok));db.close();throw e;}
+  dispatch:async(token,b)=>{const allowed=['state','file','receipt','revoke','phone-preview','phone-approve'].includes(b?.op)||b?.op==='job'&&['desk-start','desk-upload','desk-retry','desk-cancel','desk-invalidate'].includes(b.action);if(!allowed)return{status:403,body:{error:'현재 PC에서 확인하세요.'}};const r=await fetch(origin+'/v1',{method:'POST',redirect:'error',signal:AbortSignal.timeout(30000),headers:{'content-type':'application/json',authorization:'Bearer '+token},body:JSON.stringify(b)});return{status:r.status,body:await r.json()};}});}catch(e){clearInterval(timer);await new Promise(ok=>server.close(ok));if(tls)await new Promise(ok=>tls.close(ok));db.close();throw e;}
  let closing;
  return {origin,owner,close:()=>closing??=(async()=>{clearInterval(timer);await link?.close();await Promise.all([new Promise(ok=>server.close(ok)),tls?new Promise(ok=>tls.close(ok)):Promise.resolve()]);for(const p of profiles.values()){try{const {worker,records,w}=await p;await records.close();await worker.close();w.db.close();}catch{}}db.close();})()};
 }

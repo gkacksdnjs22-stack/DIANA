@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { access, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, readdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createRelay } from '../tests/helpers/paired-relay.mjs';
@@ -111,10 +112,151 @@ try {
   const slides = await send('바탕화면에서 "현장 기록.txt"를 읽고 발표자료로 만들어줘');
   await approve(slides);
   assert.equal((await receive(slides)).subarray(0, 5).toString(), '%PDF-');
-  const edit = await send('바탕화면에서 "현장 기록.txt"의 "18분"을 "12분"으로 바꿔줘');
-  await approve(edit, text => assert.match(text, /12분/));
+  const editText = '바탕화면에서 "현장 기록.txt"의 "18분"을 "12분"으로 바꿔줘';
+  const edit = await send(editText);
+  await waitFor(edit, 'approval');
+  const preview = { op: 'phone-preview', id: edit };
+  const allow = enabled => pc({ op: 'phone-approval-settings', device: phone.device, enabled });
+  await mobile(preview, 403);
+  await mobile({ op: 'phone-approval-settings', device: phone.device, enabled: true }, 403);
+  await allow(true);
+  const phoneJob = (await mobile({ op: 'state' })).jobs.find(job => job.id === edit);
+  assert.equal(phoneJob.canApprove, true);
+  assert.equal(phoneJob.preview, undefined);
+  assert.equal(phoneJob.nonce, undefined);
+
+  const { code: secondCode } = await pc({ op: 'code' });
+  const otherPhone = await call(relay.origin, { ...pair, code: secondCode, requestId: randomUUID(), pairKey: randomBytes(32).toString('hex') });
+  await pc({ op: 'phone-approval-settings', device: otherPhone.device, enabled: true });
+  const other = (body, status) => call(relay.origin, body, { token: otherPhone.token, status });
+  await other(preview, 403);
+  await other({ op: 'job', action: 'desk-start', id: edit, text: editText }, 400);
+  const shown = await mobile(preview);
+  assert.match(shown.preview, /12분/);
+  assert.equal(shown.format, 'md');
+  const save = { op: 'phone-approve', id: edit, nonce: shown.nonce, confirm: true };
+  await other(save, 403);
+  await mobile({ ...save, confirm: false }, 409);
+  await mobile({ ...save, nonce: randomUUID() }, 409);
+  await allow(false);
+  await mobile(save, 403);
+  await allow(true);
+  assert(!(await pc({ op: 'state' })).files.some(file => file.id === edit));
+  const outputDir = await realpath((await pc({ op: 'settings' })).output);
+  const relativeOutput = path.relative(await realpath(fixture), outputDir);
+  assert(relativeOutput.startsWith(path.join('documents', 'DIANA', '결과') + path.sep));
+  const pausedOutput = outputDir + '-paused';
+  async function interruptSave(approval) {
+    await rename(outputDir, pausedOutput);
+    try {
+      await mobile(approval, 400);
+      await waitFor(approval.id, 'saving');
+      assert(!(await pc({ op: 'state' })).files.some(file => file.id === approval.id));
+    } finally {
+      await rename(pausedOutput, outputDir);
+    }
+  }
+  await interruptSave(save);
+  const retryable = (await mobile({ op: 'state' })).jobs.find(job => job.id === edit);
+  assert.equal(retryable.status, 'saving');
+  assert.equal(retryable.canApprove, true);
+  assert.equal(retryable.nonce, undefined);
+  const retryPreview = await mobile(preview);
+  assert.equal(retryPreview.status, 'saving');
+  assert.equal(retryPreview.nonce, shown.nonce);
+  assert.equal(retryPreview.preview, shown.preview);
+  await other(save, 403);
+  await mobile({ ...save, nonce: randomUUID() }, 409);
+  await allow(false);
+  await mobile(save, 403);
+  await allow(true);
+  await mobile(save);
+  await mobile(save, 409);
   assert.match((await receive(edit)).toString(), /12분/);
   assert.equal(await readFile(sourcePath, 'utf8'), original);
+  for (const mode of ['phone', 'pc']) {
+    const id = await send(editText);
+    await waitFor(id, 'approval');
+    const shown = await mobile({ op: 'phone-preview', id });
+    const approval = { op: 'phone-approve', id, nonce: shown.nonce, confirm: true };
+    await interruptSave(approval);
+    const revised = original + '\n현장 확인을 추가했습니다.';
+    await writeFile(sourcePath, revised);
+    if (mode === 'phone') await mobile(approval, 409);
+    else await pc({ op: 'job', action: 'desk-retry', id });
+    const stale = (await pc({ op: 'state' })).jobs.find(job => job.id === id);
+    assert.equal(stale?.status, 'failed');
+    assert.match(stale.error, /자료가 바뀌었거나/);
+    assert(!(await pc({ op: 'state' })).files.some(file => file.id === id));
+    assert(!(await readdir(outputDir)).some(name => name.includes(id.slice(0, 8))));
+    await mobile({ op: 'phone-preview', id }, 409);
+    await mobile({ op: 'job', action: 'desk-retry', id });
+    await waitFor(id, 'approval');
+    const fresh = await mobile({ op: 'phone-preview', id });
+    assert.notEqual(fresh.nonce, shown.nonce);
+    assert.match(fresh.preview, /현장 확인을 추가했습니다/);
+    await mobile(approval, 409);
+    await mobile({ ...approval, nonce: fresh.nonce });
+    assert.match((await receive(id)).toString(), /현장 확인을 추가했습니다/);
+    assert.equal(await readFile(sourcePath, 'utf8'), revised);
+    await writeFile(sourcePath, original);
+  }
+  console.log('Phone and PC interrupted saves require a fresh preview if the source changes');
+  const jobsDatabase = path.join(known.documents, 'DIANA', '앱 설정', 'paired-dev', 'profiles',
+    path.basename(outputDir), 'local-state.workbench', 'jobs.sqlite');
+  await access(jobsDatabase);
+  for (const mode of ['phone', 'pc']) {
+    const id = await send(editText);
+    await waitFor(id, 'approval');
+    const shown = await mobile({ op: 'phone-preview', id });
+    const approval = { op: 'phone-approve', id, nonce: shown.nonce, confirm: true };
+    const db = new DatabaseSync(jobsDatabase);
+    try {
+      db.exec("CREATE TRIGGER fail_test_record BEFORE INSERT ON files BEGIN SELECT RAISE(ABORT,'test record write failure'); END");
+      try {
+        await mobile(approval, 400);
+        await waitFor(id, 'saving');
+        assert(!(await pc({ op: 'state' })).files.some(file => file.id === id));
+      } finally {
+        db.exec('DROP TRIGGER fail_test_record');
+      }
+    } finally {
+      db.close();
+    }
+    const names = (await readdir(outputDir)).filter(name => name.includes(id.slice(0, 8)));
+    assert.equal(names.length, 1);
+    const dest = path.join(outputDir, names[0]);
+    const written = await readFile(dest);
+    assert.match(written.toString(), /12분/);
+    const revised = original + '\n저장 기록 실패 이후의 새 내용입니다.';
+    if (mode === 'phone') {
+      const altered = Buffer.from('승인한 파일과 다른 내용입니다.');
+      await writeFile(dest, altered);
+      await mobile(approval, 400);
+      assert.deepEqual(await readFile(dest), altered);
+      assert(!(await pc({ op: 'state' })).files.some(file => file.id === id));
+      await writeFile(dest, written);
+    }
+    await writeFile(sourcePath, revised);
+    const before = await stat(dest, {bigint: true});
+    if (mode === 'phone') await mobile(approval);
+    else await pc({ op: 'job', action: 'desk-retry', id });
+    assert.deepEqual(await receive(id), written);
+    const after = await stat(dest, {bigint: true});
+    assert.equal(after.ino, before.ino);
+    assert.equal(after.mtimeNs, before.mtimeNs);
+    assert.equal(await readFile(sourcePath, 'utf8'), revised);
+    await writeFile(sourcePath, original);
+  }
+  console.log('Phone and PC recover the record for an already written file without rewriting it');
+  await pc({ op: 'revoke', device: otherPhone.device });
+  await other(preview, 403);
+  const pcOnly = randomUUID();
+  await pc({ op: 'job', action: 'desk-start', id: pcOnly, text: editText });
+  await waitFor(pcOnly, 'approval');
+  await mobile({ op: 'phone-preview', id: pcOnly }, 403);
+  await approve(pcOnly);
+  await receive(pcOnly);
   const convert = await send('바탕화면에서 "현장 기록.txt"를 DOCX로 변환해줘');
   await approve(convert, text => assert.match(text, /18분/));
   assert.equal((await receive(convert)).subarray(0, 2).toString(), 'PK');
@@ -133,9 +275,10 @@ try {
   await receive(retry);
   assert(!(await mobile({ op: 'state' })).jobs.some(job => job.id === retry));
   const changed = await send('바탕화면에서 "현장 기록.txt"를 요약해서 TXT로 만들어줘');
-  const pending = await waitFor(changed, 'approval');
+  await waitFor(changed, 'approval');
+  const pending = await mobile({ op: 'phone-preview', id: changed });
   await writeFile(sourcePath, '승인 전에 바뀐 원문');
-  await pc({ op: 'job', action: 'desk-approve', id: changed, nonce: pending.nonce });
+  await mobile({ op: 'phone-approve', id: changed, nonce: pending.nonce, confirm: true }, 409);
   await waitFor(changed, 'failed');
   assert(!(await pc({ op: 'state' })).files.some(file => file.id === changed));
   console.log('Missing source retry and stale approval protection');
