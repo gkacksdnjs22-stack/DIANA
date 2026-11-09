@@ -13,6 +13,12 @@ class RenderWorkspace {
  static Dictionary<string,object> D(params object[] a){var d=new Dictionary<string,object>();for(int i=0;i<a.Length;i+=2)d[(string)a[i]]=a[i+1];return d;}
  static object[] files={D("id","test-only","name","프로젝트 요약 보고서.pdf","format","pdf","bytes",125600,"delivered",true)};
  static void Check(Control parent){foreach(Control child in parent.Controls){if(!child.Visible)continue;if(parent is FlowLayoutPanel && child.Right>parent.ClientSize.Width-parent.Padding.Right+2)throw new Exception("Horizontal overflow: "+child.GetType().Name+" "+child.Text+" right="+child.Right+" parent="+parent.ClientSize.Width);Check(child);}}
+ static void CheckComposer(){
+  var composer=(Control)type.GetField("composer",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(target);
+  foreach(Control child in composer.Controls)
+   if(child.Visible&&child.Bottom>composer.ClientSize.Height-composer.Padding.Bottom)
+    throw new Exception("Clipped request control: "+child.GetType().Name);
+ }
  static void CheckCaption(){
   if(SystemInformation.HighContrast)return;
   int build;
@@ -58,6 +64,7 @@ class RenderWorkspace {
     if(screen=="archive")Call("RenderArchive",D("files",files,"more",false),0);
     if(screen=="settings")Call("RenderSettings",D("devices",new object[0],"output",@"C:\Users\사용자\Documents\DIANA\결과","roots",new object[]{D("label","바탕화면","path",@"C:\Users\사용자\Desktop"),D("label","문서","path",@"C:\Users\사용자\Documents")},"excluded",new string[0]));
     form.PerformLayout();Call("FitPage");form.PerformLayout();Check(form);
+    if(screen=="work"||screen=="approval")CheckComposer();
     using(var bitmap=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(bitmap,new Rectangle(Point.Empty,bitmap.Size));bitmap.Save(Path.Combine(args[1],screen+"-"+width+".png"),ImageFormat.Png);}Console.WriteLine(screen+" "+width+": native layout passed");
    }
    Call("Work");var request=(TextBox)type.GetField("request",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(form);request.Text="문서 두 개를 요약해줘";
