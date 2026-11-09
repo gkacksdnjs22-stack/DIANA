@@ -22,10 +22,14 @@ namespace Diana.Desktop {
     using(var background=new SolidBrush(BackColor))g.FillRectangle(background,ClientRectangle);
     g.SmoothingMode=SmoothingMode.AntiAlias;
     var r=new Rectangle(1,1,Width-3,Height-3);
-    if(Active||Focused)
+    if(Active||Focused){
      using(var shape=Rounded(r,9))
-     using(var brush=new SolidBrush(Active?Color.FromArgb(18,57,64):SurfaceColor))
+     using(var brush=new SolidBrush(Active?Color.FromArgb(25,57,64):SurfaceColor)){
       g.FillPath(brush,shape);
+      if(Focused)using(var outline=new Pen(Teal))g.DrawPath(outline,shape);
+     }
+     if(Active)using(var marker=new SolidBrush(Teal))g.FillRectangle(marker,3,Height/2-9,2,18);
+    }
     TextRenderer.DrawText(g,Text,Font,new Rectangle(12,0,Width-24,Height),Active?Teal:Muted,
      TextFormatFlags.VerticalCenter|TextFormatFlags.Left|TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix);
    }
@@ -42,9 +46,9 @@ namespace Diana.Desktop {
   void FitRail(){if(rail==null)return;bool narrow=ClientSize.Width<900;rail.Width=narrow?100:180;railLogo.SetBounds(narrow?29:18,25,42,42);railBrand.Visible=railCaption.Visible=!narrow;railBrand.SetBounds(69,26,106,28);railCaption.SetBounds(18,80,155,18);int y=narrow?110:126;workChoice.Text=narrow?"작업":"작업 요청";fileChoice.Text=narrow?"파일":"보관 파일";foreach(var button in new[]{workChoice,fileChoice,settingsChoice}){button.SetBounds(12,y,rail.Width-24,46);button.Invalidate();y+=56;}railStatus.SetBounds(16,Math.Max(310,rail.Height-53),rail.Width-28,36);railStatus.Text=narrow?"내 PC":"내 PC에서 문서 작업";}
   void SelectRail(string id){if(rail==null)return;rail.Visible=new[]{"work","archive","settings","review"}.Contains(id);workChoice.Active=id=="work"||id=="review";fileChoice.Active=id=="archive";settingsChoice.Active=id=="settings";FitRail();}
   sealed class UiCard:FlowLayoutPanel {
-   public UiCard(){AutoSize=true;AutoSizeMode=AutoSizeMode.GrowAndShrink;FlowDirection=FlowDirection.TopDown;WrapContents=false;Padding=new Padding(18,12,18,14);Margin=new Padding(0,0,0,14);BackColor=SurfaceColor;Tag="card";DoubleBuffered=true;}
+   public UiCard(){AutoSize=true;AutoSizeMode=AutoSizeMode.GrowAndShrink;FlowDirection=FlowDirection.TopDown;WrapContents=false;Padding=new Padding(18,14,18,14);Margin=new Padding(0,0,0,12);BackColor=SurfaceColor;Tag="card";DoubleBuffered=true;}
    protected override void OnSizeChanged(EventArgs e){base.OnSizeChanged(e);ClipCorners(this,12);}
-   protected override void OnPaint(PaintEventArgs e){base.OnPaint(e);if(Width<30||Height<30)return;e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;using(var path=Rounded(new Rectangle(1,1,Width-3,Height-3),12))using(var line=new Pen(Color.FromArgb(39,59,79)))e.Graphics.DrawPath(line,path);}
+   protected override void OnPaint(PaintEventArgs e){base.OnPaint(e);if(Width<30||Height<30)return;e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;using(var path=Rounded(new Rectangle(1,1,Width-3,Height-3),12))using(var line=new Pen(Edge))e.Graphics.DrawPath(line,path);}
   }
   FlowLayoutPanel Card(FlowLayoutPanel parent){var card=new UiCard();int width=ColumnWidth();card.MinimumSize=new Size(width,0);card.MaximumSize=new Size(width,0);parent.Controls.Add(card);return card;}
   Label Caption(FlowLayoutPanel parent,string text){var label=LabelAt(parent,text);label.ForeColor=Muted;label.Font=new Font(Font.FontFamily,9);return label;}

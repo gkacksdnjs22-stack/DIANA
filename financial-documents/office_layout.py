@@ -22,12 +22,15 @@ def render_docx(plan):
     from docx.oxml.ns import qn
     from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
     d=Document();section=d.sections[0]
+    report=plan.get('mode')=='report'
     section.top_margin=section.bottom_margin=Inches(.8)
     section.left_margin=section.right_margin=Inches(.85)
     for name,size in [('Normal',10.5),('Title',21),('Heading 1',14),('Heading 2',12),('Heading 3',11)]:
-        style=d.styles[name];style.font.name='맑은 고딕';style.font.size=Pt(size);style.font.color.rgb=RGBColor(0,0,0)
+        style=d.styles[name];style.font.name='맑은 고딕';style.font.size=Pt(24 if report and name=='Title' else size);style.font.color.rgb=RGBColor.from_string('3E5770' if report and name.startswith('Heading') else '253042' if report else '000000')
         style.element.get_or_add_rPr().rFonts.set(qn('w:eastAsia'),'맑은 고딕')
         style.paragraph_format.space_after=Pt(7);style.paragraph_format.line_spacing=1.25
+        if report and name.startswith('Heading'):style.paragraph_format.space_before=Pt(15)
+        if report and name=='Title':style.paragraph_format.space_after=Pt(18)
         if name!='Normal':style.paragraph_format.keep_with_next=True
         for border in style.element.xpath('./w:pPr/w:pBdr'):border.getparent().remove(border)
     if not plan['preserve']:d.add_paragraph(plan['title'],'Title')
@@ -66,7 +69,14 @@ def render_pptx(plan):
     from pptx import Presentation
     from pptx.util import Inches,Pt
     from pptx.dml.color import RGBColor
+    from pptx.enum.shapes import MSO_SHAPE
     p=Presentation();p.slide_width=Inches(13.33);p.slide_height=Inches(7.5);p.core_properties.author=''
+    styled=plan.get('mode') in ('report','slides')
+    def band(slide,x,y,w,h,color):
+        shape=slide.shapes.add_shape(MSO_SHAPE.RECTANGLE,Inches(x),Inches(y),Inches(w),Inches(h))
+        shape.fill.solid()
+        shape.fill.fore_color.rgb=RGBColor.from_string(color)
+        shape.line.fill.background()
     def box(slide,x,y,w,h,text,size,color='253042',bold=False):
         frame=slide.shapes.add_textbox(Inches(x),Inches(y),Inches(w),Inches(h)).text_frame
         frame.word_wrap=True;frame.margin_left=frame.margin_right=Pt(0)
@@ -74,6 +84,9 @@ def render_pptx(plan):
         run.font.name='맑은 고딕';run.font.size=Pt(size);run.font.bold=bold;run.font.color.rgb=RGBColor.from_string(color)
     def slide(heading,only_title=False):
         s=p.slides.add_slide(p.slide_layouts[6]);fill=s.background.fill;fill.solid();fill.fore_color.rgb=RGBColor(255,255,255)
+        if styled:
+            band(s,.65,.20,.36,.055,'3E5770')
+            band(s,.65,7.08,12,.014,'D5DDE5')
         if not plan['preserve'] and not only_title and heading!=plan['title']:box(s,.65,.25,12,.65,plan['title'],11 if len(plan['title'])>100 else 14,'657080')
         if heading:box(s,.65,1.2 if only_title else .95,12,4.8 if only_title else .95,heading,27 if only_title else 20 if len(heading)>55 else 27,bold=True)
         return s
@@ -102,7 +115,10 @@ def render_pptx(plan):
                 return
             for start in range(0,len(packets),3):
                 s=slide(current_heading)
-                for i,value in enumerate(packets[start:start+3]):box(s,.7,2.05+1.55*i,12,1.48,value,19)
+                for i,value in enumerate(packets[start:start+3]):
+                    y=2.05+1.55*i
+                    if styled:band(s,.65,y-.04,12,1.44,'F3F6F9')
+                    box(s,.88 if styled else .7,y,11.55 if styled else 12,1.48,value,19)
             packets=[]
         for item in items:
             for kind,value in text_blocks(item):

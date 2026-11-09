@@ -16,13 +16,20 @@ using System.Windows.Forms;
 namespace Diana.Desktop {
  internal sealed partial class PairedForm:Form {
 
-  static readonly Color Ink=Color.FromArgb(228,239,248), Muted=Color.FromArgb(155,172,194), Teal=Color.FromArgb(76,224,214), Canvas=Color.FromArgb(10,18,32), SurfaceColor=Color.FromArgb(19,35,56);
-  static readonly Color FrameColor=Color.FromArgb(13,25,40);
+  static readonly Color Ink=Color.FromArgb(234,243,249), Muted=Color.FromArgb(165,185,202), Teal=Color.FromArgb(110,229,215), Canvas=Color.FromArgb(12,20,32), SurfaceColor=Color.FromArgb(22,36,51);
+  static readonly Color FrameColor=Color.FromArgb(16,28,42), Edge=Color.FromArgb(51,73,92);
   static GraphicsPath Rounded(Rectangle bounds,int radius){
    int n=radius*2;var shape=new GraphicsPath();shape.AddArc(bounds.Left,bounds.Top,n,n,180,90);shape.AddArc(bounds.Right-n,bounds.Top,n,n,270,90);shape.AddArc(bounds.Right-n,bounds.Bottom-n,n,n,0,90);shape.AddArc(bounds.Left,bounds.Bottom-n,n,n,90,90);shape.CloseFigure();return shape;}
   static void ClipCorners(Control control,int radius){if(control.Width<2*radius||control.Height<2*radius)return;var previous=control.Region;using(var shape=Rounded(new Rectangle(0,0,control.Width-1,control.Height-1),radius))control.Region=new Region(shape);if(previous!=null)previous.Dispose();}
   sealed class ComposerPanel:FlowLayoutPanel {
-   protected override void OnSizeChanged(EventArgs e){base.OnSizeChanged(e);ClipCorners(this,13);}
+   protected override void OnSizeChanged(EventArgs e){base.OnSizeChanged(e);ClipCorners(this,14);}
+   protected override void OnPaint(PaintEventArgs e){
+    base.OnPaint(e);
+    if(Width<32||Height<32)return;
+    e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
+    using(var shape=Rounded(new Rectangle(1,1,Width-3,Height-3),14))
+    using(var border=new Pen(Edge))e.Graphics.DrawPath(border,shape);
+   }
   }
   const int DwmDarkMode=20, DwmCaptionColor=35, DwmTextColor=36;
   [DllImport("dwmapi.dll")]static extern int DwmSetWindowAttribute(IntPtr hwnd,int attr,ref int value,int size);
@@ -41,17 +48,16 @@ namespace Diana.Desktop {
    }catch(DllNotFoundException){return false;}catch(EntryPointNotFoundException){return false;}
   }
   sealed class BrandHeader:Panel {
-   readonly Image mark;readonly Font word=new Font("Segoe UI",22,FontStyle.Bold);readonly Font caption=new Font("맑은 고딕",10);readonly string section;
-   public BrandHeader(string name){section=name;DoubleBuffered=true;Margin=new Padding(0,0,0,18);Height=84;AccessibleName="DIANA "+name;
-    using(var stream=typeof(PairedForm).Assembly.GetManifestResourceStream("diana.png"))using(var original=Image.FromStream(stream))mark=new Bitmap(original);}
-   protected override void OnPaint(PaintEventArgs e){base.OnPaint(e);var g=e.Graphics;g.SmoothingMode=SmoothingMode.AntiAlias;TextRenderer.DrawText(g,"DIANA / WORKSPACE",caption,new Point(0,3),Muted,TextFormatFlags.NoPadding);TextRenderer.DrawText(g,section,word,new Rectangle(0,28,Width,47),Ink,TextFormatFlags.NoPadding|TextFormatFlags.EndEllipsis);}
-   protected override void Dispose(bool disposing){if(disposing){mark.Dispose();word.Dispose();caption.Dispose();}base.Dispose(disposing);}
+   readonly Font word=new Font("맑은 고딕",21,FontStyle.Bold);readonly Font caption=new Font("맑은 고딕",9);readonly string section;
+   public BrandHeader(string name){section=name;DoubleBuffered=true;Margin=new Padding(0,0,0,12);Height=72;AccessibleName="DIANA "+name;}
+   protected override void OnPaint(PaintEventArgs e){base.OnPaint(e);var g=e.Graphics;TextRenderer.DrawText(g,"DIANA 문서 작업 공간",caption,new Point(0,2),Muted,TextFormatFlags.NoPadding);TextRenderer.DrawText(g,section,word,new Rectangle(0,20,Width,46),Ink,TextFormatFlags.NoPadding|TextFormatFlags.EndEllipsis|TextFormatFlags.VerticalCenter);}
+   protected override void Dispose(bool disposing){if(disposing){word.Dispose();caption.Dispose();}base.Dispose(disposing);}
   }
   sealed class BrandButton:Button {
    readonly bool primary,file;bool over,down;public BrandButton(string label,bool main,bool isFile){Text=label;primary=main;file=isFile;AccessibleName=label;FlatStyle=FlatStyle.Flat;FlatAppearance.BorderSize=0;UseVisualStyleBackColor=false;BackColor=Canvas;ForeColor=Ink;Cursor=Cursors.Hand;DoubleBuffered=true;AutoSize=false;TabStop=true;Height=file?58:42;Width=Math.Max(86,TextRenderer.MeasureText(label,Font).Width+(file?76:34));Margin=new Padding(0,2,8,5);}
    protected override void OnSizeChanged(EventArgs e){base.OnSizeChanged(e);ClipCorners(this,9);}
    protected override void OnMouseEnter(EventArgs e){over=true;Invalidate();base.OnMouseEnter(e);} protected override void OnMouseLeave(EventArgs e){over=down=false;Invalidate();base.OnMouseLeave(e);}protected override void OnMouseDown(MouseEventArgs e){down=true;Invalidate();base.OnMouseDown(e);}protected override void OnMouseUp(MouseEventArgs e){down=false;Invalidate();base.OnMouseUp(e);}
-   protected override void OnPaint(PaintEventArgs e){var g=e.Graphics;g.SmoothingMode=SmoothingMode.AntiAlias;var r=new Rectangle(1,1,Width-3,Height-3);using(var shape=Rounded(r,9))using(var fill=new LinearGradientBrush(r,primary?(down?Color.FromArgb(49,181,174):Teal):(over?Color.FromArgb(40,62,84):Color.FromArgb(28,48,70)),primary?Teal:Color.FromArgb(28,48,70),90f))using(var edge=new Pen(primary||Focused?Teal:Color.FromArgb(59,82,108))){g.FillPath(fill,shape);g.DrawPath(edge,shape);}
+   protected override void OnPaint(PaintEventArgs e){var g=e.Graphics;g.SmoothingMode=SmoothingMode.AntiAlias;var r=new Rectangle(1,1,Width-3,Height-3);using(var shape=Rounded(r,9))using(var fill=new SolidBrush(primary?(down?Color.FromArgb(80,200,190):Teal):(over?Color.FromArgb(42,63,81):FrameColor)))using(var edge=new Pen(Focused?Ink:primary?Teal:Edge,Focused?2f:1f)){g.FillPath(fill,shape);g.DrawPath(edge,shape);}
     if(file){var x=15;var y=(Height-17)/2;using(var pen=new Pen(Teal,1.4f)){g.DrawPolygon(pen,new Point[]{new Point(x,y),new Point(x+8,y),new Point(x+13,y+5),new Point(x+13,y+16),new Point(x,y+16)});g.DrawLine(pen,x+3,y+10,x+9,y+10);} }
     var content=new Rectangle(file?40:6,1,Width-(file?54:12),Height-3);TextRenderer.DrawText(g,Text,Font,content,primary?Color.FromArgb(7,42,44):Ink,TextFormatFlags.VerticalCenter|(file?TextFormatFlags.Left:TextFormatFlags.HorizontalCenter)|TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix);}
   }
@@ -70,7 +76,7 @@ namespace Diana.Desktop {
     base.OnPaint(e);if(Width<20||Height<20)return;
     e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
     using(var outline=Rounded(new Rectangle(2,2,Width-5,Height-5),7))
-    using(var stroke=new Pen(editor.Focused?Color.FromArgb(16,157,151):Color.FromArgb(135,162,183),editor.Focused?3f:2f))
+    using(var stroke=new Pen(editor.Focused?Teal:Edge,editor.Focused?2f:1f))
      e.Graphics.DrawPath(stroke,outline);
    }
   }
@@ -80,7 +86,7 @@ namespace Diana.Desktop {
   }
   BrandHeader header;FlowLayoutPanel nav,composer;
   int ColumnWidth(){return Math.Max(290,Math.Min(900,body.ClientSize.Width-SystemInformation.VerticalScrollBarWidth-56));}
-  void FitPage(){if(fittingPage)return;fittingPage=true;try{if(screen=="login"&&loginView!=null&&!loginView.IsDisposed&&loginHost!=null){FitLogin();return;}if(header==null||header.IsDisposed)return;int w=ColumnWidth();int inset=Math.Max(20,(body.ClientSize.Width-SystemInformation.VerticalScrollBarWidth-w)/2);var pad=new Padding(inset,22,20,26);if(body.Padding!=pad)body.Padding=pad;header.Width=w;header.Height=84;if(composer!=null&&!composer.IsDisposed){composer.Width=w;composer.Height=254;if(request!=null&&!request.IsDisposed)request.Parent.Width=w-42;}if(items!=null&&!items.IsDisposed){items.MinimumSize=new Size(w,0);items.MaximumSize=new Size(w,0);}FitCards(body,w);}finally{fittingPage=false;}}
+  void FitPage(){if(fittingPage)return;fittingPage=true;try{if(screen=="login"&&loginView!=null&&!loginView.IsDisposed&&loginHost!=null){FitLogin();return;}if(header==null||header.IsDisposed)return;int w=ColumnWidth();int inset=Math.Max(20,(body.ClientSize.Width-SystemInformation.VerticalScrollBarWidth-w)/2);var pad=new Padding(inset,22,20,26);if(body.Padding!=pad)body.Padding=pad;header.Width=w;if(composer!=null&&!composer.IsDisposed){composer.MinimumSize=new Size(w,0);composer.MaximumSize=new Size(w,0);if(request!=null&&!request.IsDisposed)request.Parent.Width=w-42;}if(items!=null&&!items.IsDisposed){items.MinimumSize=new Size(w,0);items.MaximumSize=new Size(w,0);}FitCards(body,w);}finally{fittingPage=false;}}
   readonly JavaScriptSerializer json=new JavaScriptSerializer{MaxJsonLength=16000000};
   string origin,owner,token,state,fixture,root,accountToken,ticket,ticketText,signature="",screen="",draftText="";
   Process process; bool busy,polling,closing; Timer timer=new Timer{Interval=1500};
@@ -144,11 +150,11 @@ namespace Diana.Desktop {
    loginHost=new Panel{Dock=DockStyle.Fill,AutoScroll=false,BackColor=Canvas};loginScroll=new VScrollBar{Dock=DockStyle.Right,Visible=false};loginHost.Controls.Add(loginView);loginHost.Controls.Add(loginScroll);loginScroll.ValueChanged+=delegate{FitLogin();};loginHost.ClientSizeChanged+=delegate{FitPage();};loginHost.MouseWheel+=delegate(object sender,MouseEventArgs e){if(loginScroll.Visible)loginScroll.Value=Math.Max(0,Math.Min(loginScroll.Maximum-loginScroll.LargeChange+1,loginScroll.Value-e.Delta/3));};loginView.FocusTarget+=EnsureLoginVisible;body.Visible=false;Controls.Add(loginHost);loginHost.BringToFront();note=loginView.Feedback;FitPage();body.ResumeLayout(true);}
   async Task Job(params object[] args){var d=D(args);d["op"]="job";if(!d.ContainsKey("requestId"))d["requestId"]=Guid.NewGuid().ToString();var v=await Api(d);if(S(v,"notice")!="")note.Text=S(v,"notice");signature="";await RefreshWork();}
   void Work(){Page("work","문서 작업");
-   composer=new ComposerPanel{BackColor=SurfaceColor,FlowDirection=FlowDirection.TopDown,WrapContents=false,AutoSize=false,Height=254,Padding=new Padding(19,14,16,14),Margin=new Padding(0,0,0,16)};
-   composer.Paint+=delegate(object sender,PaintEventArgs e){var c=(Control)sender;using(var line=new LinearGradientBrush(new Rectangle(0,0,c.Width,2),Teal,Color.FromArgb(142,133,215),0f))e.Graphics.FillRectangle(line,0,0,c.Width,2);};body.Controls.Add(composer);
+   composer=new ComposerPanel{BackColor=SurfaceColor,FlowDirection=FlowDirection.TopDown,WrapContents=false,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,Padding=new Padding(19,14,16,14),Margin=new Padding(0,0,0,18)};
+   body.Controls.Add(composer);
    var label=LabelAt(composer,"무엇을 만들까요?");label.Font=new Font(Font.FontFamily,17,FontStyle.Bold);Caption(composer,"PC 자료를 찾아 요약하거나 새 문서를 요청하세요.");
    request=new RequestField{Text=draftText,Multiline=true,BorderStyle=BorderStyle.None,BackColor=EntryFill,ForeColor=EntryInk};
-   var entryFrame=new EntryFrame(request){Width=ColumnWidth()-42,Height=110};composer.Controls.Add(entryFrame);request.AccessibleName="문서 요청";request.TextChanged+=async delegate{draftText=request.Text;if(!busy&&request.Text.Length>0&&screen=="work"&&items!=null&&HasConfirmation(items))await Perform(async delegate{await Job("action","desk-invalidate");});};var bar=Bar(composer);
+   var entryFrame=new EntryFrame(request){Width=ColumnWidth()-42,Height=96};composer.Controls.Add(entryFrame);request.AccessibleName="문서 요청";request.TextChanged+=async delegate{draftText=request.Text;if(!busy&&request.Text.Length>0&&screen=="work"&&items!=null&&HasConfirmation(items))await Perform(async delegate{await Job("action","desk-invalidate");});};var bar=Bar(composer);
    ButtonAt(bar,"보내기",async delegate{if(request.Text.Trim()=="")return;if(ticketText!=request.Text||ticket==null){ticket=Guid.NewGuid().ToString();ticketText=request.Text;}await Job("action","desk-start","id",ticket,"text",ticketText);request.Clear();ticket=null;});
    ButtonAt(bar,"파일 첨부",async delegate{using(var f=new OpenFileDialog{Filter="모든 파일 (*.*)|*.*|문서 (*.txt;*.md;*.json;*.pptx;*.docx)|*.txt;*.md;*.json;*.pptx;*.docx",FilterIndex=1,CheckFileExists=true,RestoreDirectory=true}){if(f.ShowDialog()!=DialogResult.OK)return;if(new FileInfo(f.FileName).Length>8000000)throw new IOException("첨부 한도를 넘었습니다.");var b=File.ReadAllBytes(f.FileName);using(var sha=SHA256.Create())await Job("action","desk-upload","name",Path.GetFileName(f.FileName),"base64",Convert.ToBase64String(b),"sha256",BitConverter.ToString(sha.ComputeHash(b)).Replace("-","").ToLowerInvariant());}});
    items=new FlowLayoutPanel{AutoSize=true,FlowDirection=FlowDirection.TopDown,WrapContents=false};items.Margin=Padding.Empty;body.Controls.Add(items);FitPage();timer.Start();}

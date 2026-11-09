@@ -60,7 +60,7 @@ def process(req):
     if fmt in ('txt','md','json'):raw=(json.dumps({'title':title,'body':plain,'sources':[x[0] for x in docs],'document_type':plan['mode']},ensure_ascii=False,indent=2) if fmt=='json' else md if fmt=='md' else plain).encode()
     elif fmt=='pdf':
         from pdf_theme import render_pdf
-        raw=render_pdf(title,sections,docs,slides=op=='slides',table=plan['table'],preserve=plan['preserve'])
+        raw=render_pdf(title,sections,docs,slides=op=='slides',table=plan['table'],preserve=plan['preserve'],report=plan['mode']=='report')
         if not raw.startswith(b'%PDF-') or not extract(raw,'pdf'):fail('PDF 결과를 다시 읽지 못했습니다.')
     elif fmt in ('pptx','ppt'):
         raw=render_pptx(plan)
