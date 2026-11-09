@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { readAndroidReleaseSources, verifyAndroidRelease } from './helpers/android-release.mjs';
 
 const root = new URL('../', import.meta.url);
-const published = JSON.parse(readFileSync(new URL('public/downloads/releases.json', root))).android;
+const published = JSON.parse(readFileSync(new URL('public/downloads/releases.json', root))).legacy.android;
 const apk = readFileSync(new URL('public' + published.path, root));
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 

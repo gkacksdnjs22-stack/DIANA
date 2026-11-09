@@ -36,12 +36,9 @@ jobs:
       - name: Fetch published source revisions
         shell: bash
         run: |
-          source_commit="$(node -p "JSON.parse(require('node:fs').readFileSync('public/downloads/releases.json', 'utf8')).android.sourceCommit")"
-          if [[ ! "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then
-            echo 'Invalid published Android source commit' >&2
-            exit 1
-          fi
-          git fetch --no-tags --depth=1 origin "$source_commit" 7c9777b74b0826e2a3005206b92f49cd3cfa3962
+          source_commits="$(node --input-type=module -e 'import { readFileSync } from "node:fs"; const r = JSON.parse(readFileSync("public/downloads/releases.json")); const refs = [r.android.sourceCommit, r.windows.sourceCommit, r.legacy.android.sourceCommit, r.legacy.windows.sourceCommit]; if (!refs.every(ref => /^[a-f0-9]{40}$/.test(ref))) throw Error("Invalid release source commit"); console.log([...new Set(refs)].join(" "));')"
+          read -r -a commits <<< "$source_commits"
+          git fetch --no-tags --depth=1 origin "${commits[@]}"
       - name: Check published versions, source provenance and packaged sources
         run: node --test tests/release-packages.test.mjs tests/android-release-provenance.test.mjs tests/financial-ai-preview-view.test.mjs
       - name: Install web test dependencies

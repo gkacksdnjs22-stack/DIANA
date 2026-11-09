@@ -5,8 +5,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createControlServer } from '../lib/control.mjs';
 
-const APK = '/downloads/DIANA-0.3.9.apk';
-const APK_HASH = '3535ec96209c2af6c0d081b5c00ac5335e630b5b6e746f701d99d50001672c00';
+const releases = JSON.parse(await readFile(new URL('../public/downloads/releases.json', import.meta.url), 'utf8'));
 const owner = 'landing-test-owner-' + 'a'.repeat(32);
 
 async function fixture(t) {
@@ -25,6 +24,14 @@ test('public home assets and APK work without a token; page links have real targ
   const html = await response.text();
   assert.match(html, /<title>DIANA/);
   assert.doesNotMatch(html, /<script|<form|id="token"/);
+  for (const release of [releases.android, releases.windows]) {
+    assert(html.includes('href="'+release.path+'"'), release.path);
+    assert(html.includes(release.version), release.version);
+  }
+  for (const release of [releases.legacy.android, releases.legacy.windows]) {
+    assert(!html.includes('href="'+release.path+'"'), release.path);
+    assert.equal((await fetch(url + release.path, { method: 'HEAD' })).status, 200);
+  }
   const paths = [...new Set([...html.matchAll(/(?:href|src)="(\/[^"]*)"/g)].map(match => match[1]))];
   for (const path of paths) { const asset = await fetch(url + path); assert.equal(asset.status, 200, path); await asset.body?.cancel(); }
   for (const [, id] of html.matchAll(/href="#([^"]+)"/g)) assert(html.includes(`id="${id}"`), `missing anchor: ${id}`);
@@ -35,14 +42,15 @@ test('public home assets and APK work without a token; page links have real targ
 
 test('download returns the exact signed APK with explicit filename and correct HEAD response', async t => {
   const { url } = await fixture(t);
+  const { path: APK, sha256, bytes: size } = releases.android;
   const response = await fetch(url + APK);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('content-type'), 'application/vnd.android.package-archive');
-  assert.equal(response.headers.get('content-disposition'), 'attachment; filename="DIANA-0.3.9.apk"');
+  assert.equal(response.headers.get('content-disposition'), 'attachment; filename="'+APK.split('/').at(-1)+'"');
   const bytes = Buffer.from(await response.arrayBuffer());
-  assert.equal(bytes.length, 4226534);
+  assert.equal(bytes.length, size);
   assert.equal(response.headers.get('content-length'), String(bytes.length));
-  assert.equal(createHash('sha256').update(bytes).digest('hex'), APK_HASH);
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), sha256);
   const head = await fetch(url + APK, { method: 'HEAD' });
   assert.equal(head.status, 200);
   assert.equal(head.headers.get('content-length'), String(bytes.length));
