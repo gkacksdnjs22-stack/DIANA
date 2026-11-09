@@ -11,6 +11,12 @@ const sourceScope = [
   'android-app/settings.gradle',
   'android-app/app/src/main',
 ];
+const pairedSources = [
+  'android-app/app/src/debug',
+  'android-app/app/src/paired',
+  'android-app/gradle.properties',
+  'financial-desktop/version.json',
+];
 
 export function readAndroidReleaseSources(release, repoRoot) {
   const commit = release.sourceCommit;
@@ -26,7 +32,8 @@ export function readAndroidReleaseSources(release, repoRoot) {
     throw new Error(`Android release source commit unavailable; run: git fetch --no-tags --depth=1 origin ${commit}`);
   }
   assert.equal(type, 'commit', 'Android sourceCommit must identify a commit');
-  const entries = git(['ls-tree', '-r', '-z', commit, '--', ...sourceScope])
+  const scope = release.variant === 'paired-debug' ? [...sourceScope, ...pairedSources] : sourceScope;
+  const entries = git(['ls-tree', '-r', '-z', commit, '--', ...scope])
     .toString().split('\0').filter(Boolean).map(entry => {
       const [header, path] = entry.split('\t');
       const [mode, kind, object] = header.split(' ');
@@ -62,9 +69,20 @@ export function verifyAndroidRelease(release, apk, repoRoot) {
   const sources = readAndroidReleaseSources(release, repoRoot);
   const gradle = sources.get('android-app/app/build.gradle').toString('utf8');
   const manifest = androidManifest(zipFiles(apk).get('AndroidManifest.xml')());
-  assert.equal(manifest.package, gradle.match(/applicationId\s+'([^']+)'/)[1]);
-  assert.equal(manifest.versionName, gradle.match(/versionName\s+'([^']+)'/)[1]);
-  assert.equal(manifest.versionCode, Number(gradle.match(/versionCode\s+(\d+)/)[1]));
+  if (release.variant === 'paired-debug') {
+    assert(sources.has('android-app/app/src/paired/AndroidManifest.xml'), 'Missing paired launcher manifest');
+    const { version } = JSON.parse(sources.get('financial-desktop/version.json'));
+    const parts = /^(\d+)\.(\d+)\.(\d+)-dev-[a-z]+([1-9]\d*)$/.exec(version);
+    assert(parts, 'Invalid paired release version');
+    const [, major, minor, patch, revision] = parts.map(Number);
+    assert.equal(manifest.package, gradle.match(/applicationId\s+pairedProduct\s*\?\s*'([^']+)'/)[1]);
+    assert.equal(manifest.versionName, version);
+    assert.equal(manifest.versionCode, major * 1000000 + minor * 10000 + patch * 100 + revision);
+  } else {
+    assert.equal(manifest.package, gradle.match(/applicationId\s+'([^']+)'/)[1]);
+    assert.equal(manifest.versionName, gradle.match(/versionName\s+'([^']+)'/)[1]);
+    assert.equal(manifest.versionCode, Number(gradle.match(/versionCode\s+(\d+)/)[1]));
+  }
   assert.equal(manifest.minSdk, Number(gradle.match(/minSdk\s+(\d+)/)[1]));
   assert.equal(manifest.versionName, release.version);
   assert.equal(manifest.versionCode, release.versionCode);

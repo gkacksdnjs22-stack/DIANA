@@ -11,11 +11,27 @@ namespace Diana.Desktop {
   Panel rail;PictureBox railLogo;Label railBrand,railCaption,railStatus;NavChoice workChoice,fileChoice,settingsChoice;bool fittingPage;
   sealed class NavChoice:Button {
    public bool Active;
-   public NavChoice(string title){Text=title;AccessibleName=title;FlatStyle=FlatStyle.Flat;FlatAppearance.BorderSize=0;BackColor=Canvas;ForeColor=Muted;Cursor=Cursors.Hand;DoubleBuffered=true;Height=46;}
-   protected override void OnPaint(PaintEventArgs e){var g=e.Graphics;g.SmoothingMode=SmoothingMode.AntiAlias;var r=new Rectangle(1,1,Width-3,Height-3);if(Active||Focused)using(var shape=Rounded(r,9))using(var brush=new SolidBrush(Active?Color.FromArgb(18,57,64):SurfaceColor))g.FillPath(brush,shape);TextRenderer.DrawText(g,Text,Font,new Rectangle(12,0,Width-24,Height),Active?Teal:Muted,TextFormatFlags.VerticalCenter|TextFormatFlags.Left|TextFormatFlags.EndEllipsis);}
+   public NavChoice(string title){
+    Text=title;AccessibleName=title;FlatStyle=FlatStyle.Flat;FlatAppearance.BorderSize=0;
+    UseVisualStyleBackColor=false;BackColor=FrameColor;ForeColor=Muted;Cursor=Cursors.Hand;Height=46;
+    SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|
+     ControlStyles.OptimizedDoubleBuffer|ControlStyles.Opaque|ControlStyles.ResizeRedraw,true);
+   }
+   protected override void OnPaint(PaintEventArgs e){
+    var g=e.Graphics;
+    using(var background=new SolidBrush(BackColor))g.FillRectangle(background,ClientRectangle);
+    g.SmoothingMode=SmoothingMode.AntiAlias;
+    var r=new Rectangle(1,1,Width-3,Height-3);
+    if(Active||Focused)
+     using(var shape=Rounded(r,9))
+     using(var brush=new SolidBrush(Active?Color.FromArgb(18,57,64):SurfaceColor))
+      g.FillPath(brush,shape);
+    TextRenderer.DrawText(g,Text,Font,new Rectangle(12,0,Width-24,Height),Active?Teal:Muted,
+     TextFormatFlags.VerticalCenter|TextFormatFlags.Left|TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix);
+   }
   }
   void CreateRail(){
-   rail=new Panel{Dock=DockStyle.Left,Width=180,BackColor=Color.FromArgb(13,25,40),Visible=false};Controls.Add(rail);
+   rail=new Panel{Dock=DockStyle.Left,Width=180,BackColor=FrameColor,Visible=false};Controls.Add(rail);
    railLogo=new PictureBox{SizeMode=PictureBoxSizeMode.Zoom};using(var source=typeof(PairedForm).Assembly.GetManifestResourceStream("diana.png"))using(var image=Image.FromStream(source))railLogo.Image=new Bitmap(image);rail.Controls.Add(railLogo);
    railBrand=new Label{Text="DIANA",ForeColor=Ink,AutoSize=false,Font=new Font("Segoe UI",16,FontStyle.Bold)};rail.Controls.Add(railBrand);
    railCaption=new Label{Text="DOCUMENT WORKSPACE",ForeColor=Muted,AutoSize=false,Font=new Font("Segoe UI",7)};rail.Controls.Add(railCaption);
@@ -23,7 +39,7 @@ namespace Diana.Desktop {
    workChoice.Click+=async delegate{if(busy)return;Work();await Perform(RefreshWork);};fileChoice.Click+=async delegate{await Perform(Archive);};settingsChoice.Click+=async delegate{await Perform(SettingsPage);};
    railStatus=new Label{Text="내 PC에서 작업",ForeColor=Muted,AutoSize=false,Font=new Font("맑은 고딕",8)};rail.Controls.Add(railStatus);ClientSizeChanged+=delegate{FitRail();FitPage();};rail.SizeChanged+=delegate{FitRail();};
   }
-  void FitRail(){if(rail==null)return;bool narrow=ClientSize.Width<900;rail.Width=narrow?100:180;railLogo.SetBounds(narrow?29:18,25,42,42);railBrand.Visible=railCaption.Visible=!narrow;railBrand.SetBounds(69,26,106,28);railCaption.SetBounds(18,80,155,18);int y=narrow?110:126;foreach(var button in new[]{workChoice,fileChoice,settingsChoice}){button.SetBounds(12,y,rail.Width-24,46);button.Invalidate();y+=56;}workChoice.Text=narrow?"작업":"작업 요청";railStatus.SetBounds(16,Math.Max(310,rail.Height-53),rail.Width-28,36);railStatus.Text=narrow?"내 PC":"내 PC에서 문서 작업";}
+  void FitRail(){if(rail==null)return;bool narrow=ClientSize.Width<900;rail.Width=narrow?100:180;railLogo.SetBounds(narrow?29:18,25,42,42);railBrand.Visible=railCaption.Visible=!narrow;railBrand.SetBounds(69,26,106,28);railCaption.SetBounds(18,80,155,18);int y=narrow?110:126;workChoice.Text=narrow?"작업":"작업 요청";fileChoice.Text=narrow?"파일":"보관 파일";foreach(var button in new[]{workChoice,fileChoice,settingsChoice}){button.SetBounds(12,y,rail.Width-24,46);button.Invalidate();y+=56;}railStatus.SetBounds(16,Math.Max(310,rail.Height-53),rail.Width-28,36);railStatus.Text=narrow?"내 PC":"내 PC에서 문서 작업";}
   void SelectRail(string id){if(rail==null)return;rail.Visible=new[]{"work","archive","settings","review"}.Contains(id);workChoice.Active=id=="work"||id=="review";fileChoice.Active=id=="archive";settingsChoice.Active=id=="settings";FitRail();}
   sealed class UiCard:FlowLayoutPanel {
    public UiCard(){AutoSize=true;AutoSizeMode=AutoSizeMode.GrowAndShrink;FlowDirection=FlowDirection.TopDown;WrapContents=false;Padding=new Padding(18,12,18,14);Margin=new Padding(0,0,0,14);BackColor=SurfaceColor;Tag="card";DoubleBuffered=true;}
