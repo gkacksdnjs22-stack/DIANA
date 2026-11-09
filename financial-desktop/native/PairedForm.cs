@@ -17,14 +17,29 @@ namespace Diana.Desktop {
  internal sealed partial class PairedForm:Form {
 
   static readonly Color Ink=Color.FromArgb(228,239,248), Muted=Color.FromArgb(155,172,194), Teal=Color.FromArgb(76,224,214), Canvas=Color.FromArgb(10,18,32), SurfaceColor=Color.FromArgb(19,35,56);
+  static readonly Color FrameColor=Color.FromArgb(13,25,40);
   static GraphicsPath Rounded(Rectangle bounds,int radius){
    int n=radius*2;var shape=new GraphicsPath();shape.AddArc(bounds.Left,bounds.Top,n,n,180,90);shape.AddArc(bounds.Right-n,bounds.Top,n,n,270,90);shape.AddArc(bounds.Right-n,bounds.Bottom-n,n,n,0,90);shape.AddArc(bounds.Left,bounds.Bottom-n,n,n,90,90);shape.CloseFigure();return shape;}
   static void ClipCorners(Control control,int radius){if(control.Width<2*radius||control.Height<2*radius)return;var previous=control.Region;using(var shape=Rounded(new Rectangle(0,0,control.Width-1,control.Height-1),radius))control.Region=new Region(shape);if(previous!=null)previous.Dispose();}
   sealed class ComposerPanel:FlowLayoutPanel {
    protected override void OnSizeChanged(EventArgs e){base.OnSizeChanged(e);ClipCorners(this,13);}
   }
+  const int DwmDarkMode=20, DwmCaptionColor=35, DwmTextColor=36;
   [DllImport("dwmapi.dll")]static extern int DwmSetWindowAttribute(IntPtr hwnd,int attr,ref int value,int size);
-  protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);int dark=1;try{DwmSetWindowAttribute(Handle,20,ref dark,4);}catch(DllNotFoundException){}catch(EntryPointNotFoundException){}}
+  protected override void OnHandleCreated(EventArgs e){
+   base.OnHandleCreated(e);
+   ApplyCaptionTheme();
+  }
+  bool ApplyCaptionTheme(){
+   if(SystemInformation.HighContrast)return false;
+   try{
+    int dark=1,caption=ColorTranslator.ToWin32(FrameColor),captionText=ColorTranslator.ToWin32(Ink);
+    DwmSetWindowAttribute(Handle,DwmDarkMode,ref dark,sizeof(int));
+    int backgroundStatus=DwmSetWindowAttribute(Handle,DwmCaptionColor,ref caption,sizeof(int));
+    int textStatus=DwmSetWindowAttribute(Handle,DwmTextColor,ref captionText,sizeof(int));
+    return backgroundStatus==0&&textStatus==0;
+   }catch(DllNotFoundException){return false;}catch(EntryPointNotFoundException){return false;}
+  }
   sealed class BrandHeader:Panel {
    readonly Image mark;readonly Font word=new Font("Segoe UI",22,FontStyle.Bold);readonly Font caption=new Font("맑은 고딕",10);readonly string section;
    public BrandHeader(string name){section=name;DoubleBuffered=true;Margin=new Padding(0,0,0,18);Height=84;AccessibleName="DIANA "+name;
