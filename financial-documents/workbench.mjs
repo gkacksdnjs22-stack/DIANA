@@ -120,8 +120,36 @@ const docs=[],refs=[];let total=0;
 for(const f of chosen){const item=await this.loadSource(f,ctrl.signal);total+=item.size;requireThat(total<=12_000_000,'자료 크기 한도를 넘었습니다.');docs.push(item.doc);refs.push(item.ref);}
 const r=await engine(this.python,{...s,kind:s.kind==='read'?'convert':s.kind,docs},ctrl.signal);if(ctrl.signal.aborted||this.row(id).status!=='reading')return;requireThat(typeof r.preview==='string'&&r.preview.length<180000,'미리보기 한도를 넘었습니다.');if(containsSecret(r.preview))throw Error('인증 정보가 포함된 결과는 저장할 수 없습니다.');const raw=Buffer.from(r.data,'base64');requireThat(sum(raw)===r.sha256,'작성 결과를 확인할 수 없습니다.');this.db.prepare("UPDATE jobs SET status='approval',preview=?,data=?,hash=?,refs=?,nonce=? WHERE id=?").run(r.preview,raw,r.sha256,JSON.stringify(refs),randomUUID(),id);
 }catch(e){if(!ctrl.signal.aborted&&this.row(id).status==='reading'){this.db.prepare("UPDATE jobs SET status='failed',error=?,data=NULL,preview=NULL,nonce=NULL WHERE id=?").run(safeError(e),id);await this.diag(id);}}finally{if(this.running.get(id)===ctrl)this.running.delete(id);}}
-async commit(id,nonce,authorize){let j=this.row(id);requireThat(j,'작업을 찾지 못했습니다.');if(j.status==='done')return;if(j.status==='saving'){return this.finish(id,authorize);}requireThat(j.status==='approval'&&nonce&&j.nonce===nonce,'이전 승인은 만료되었습니다.');try{for(const ref of JSON.parse(j.refs)){const buf=await bytes(ref.path,path.dirname(ref.path),8_000_000,ref.stamp);requireThat(sum(buf)===ref.hash,'자료가 바뀌었습니다.');}}catch(e){const msg=e.code==='ENOENT'?'원문이 이동하거나 삭제되었습니다. 다시 검색하세요.':['EPERM','EACCES'].includes(e.code)?'원문을 다시 읽을 권한이 없습니다.':'자료가 바뀌었거나 확인할 수 없습니다. 다시 검색하세요.';this.db.prepare("UPDATE jobs SET status='failed',error=?,data=NULL,preview=NULL,nonce=NULL WHERE id=? AND nonce=? AND status='approval'").run(msg,id,nonce);return;}authorize?.();const changed=this.db.prepare("UPDATE jobs SET status='saving' WHERE id=? AND status='approval' AND nonce=?").run(id,nonce);if(!changed.changes)return;await this.finish(id,authorize);}
-async finish(id,authorize){if(this.writing?.has(id))return;this.writing??=new Set();this.writing.add(id);try{const j=this.row(id);requireThat(j.status==='saving','저장 상태를 다시 확인하세요.');const s=JSON.parse(j.spec),name=(s.title||({summary:'자료 요약',compare:'자료 비교',slides:'발표 자료',create:'새 문서',edit:'수정본',convert:'변환본',read:'문서 본문'})[s.kind]).replace(/[\\/:<>|?*"\x00-\x1f]/g,' ').trim().slice(0,65)+'-'+id.slice(0,8)+'.'+s.format,physical=name,dir=this.fileDir(id),dest=path.join(dir,physical);this.set('location-'+id,dir);await checkedDirectory(dir);authorize?.();try{await writeFile(dest,j.data,{flag:'wx'});}catch(e){if(e.code!=='EEXIST')throw e;}const buf=await bytes(dest,dir);requireThat(sum(buf)===j.hash,'저장 결과가 불확실합니다. 기존 파일을 확인하세요.');this.db.exec('BEGIN');try{this.db.prepare('INSERT OR IGNORE INTO files VALUES(?,?,?,?,?,?,0)').run(id,name,physical,s.format,j.hash,buf.length);this.db.prepare("UPDATE jobs SET status='done',spec=NULL,error=NULL,data=NULL,preview=NULL,refs=NULL,nonce=NULL,hash=NULL WHERE id=?").run(id);this.set('sources-'+id,j.refs||'[]');this.set('last',id);this.db.exec('COMMIT');}catch(e){this.db.exec('ROLLBACK');throw e;}}finally{this.writing.delete(id);}}
+async commit(id,nonce,authorize){
+ const job=this.row(id);
+ requireThat(job,'작업을 찾지 못했습니다.');
+ if(job.status==='done')return;
+ requireThat(['approval','saving'].includes(job.status)&&nonce&&job.nonce===nonce,'이전 승인은 만료되었습니다.');
+ if(this.writing?.has(id))return;
+ this.writing??=new Set();
+ this.writing.add(id);
+ try{
+  try{
+   for(const ref of JSON.parse(job.refs)){
+    const buf=await bytes(ref.path,path.dirname(ref.path),8_000_000,ref.stamp);
+    requireThat(sum(buf)===ref.hash,'자료가 바뀌었습니다.');
+   }
+  }catch(e){
+   const msg=e.code==='ENOENT'?'원문이 이동하거나 삭제되었습니다. 다시 검색하세요.':['EPERM','EACCES'].includes(e.code)?'원문을 다시 읽을 권한이 없습니다.':'자료가 바뀌었거나 확인할 수 없습니다. 다시 검색하세요.';
+   this.db.prepare("UPDATE jobs SET status='failed',error=?,data=NULL,preview=NULL,refs=NULL,nonce=NULL,hash=NULL WHERE id=? AND nonce=? AND status=?").run(msg,id,nonce,job.status);
+   return;
+  }
+  authorize?.();
+  if(job.status==='approval'){
+   const changed=this.db.prepare("UPDATE jobs SET status='saving' WHERE id=? AND status='approval' AND nonce=?").run(id,nonce);
+   if(!changed.changes)return;
+  }
+  await this.finish(id,authorize);
+ }finally{
+  this.writing.delete(id);
+ }
+}
+async finish(id,authorize){const j=this.row(id);requireThat(j.status==='saving','저장 상태를 다시 확인하세요.');const s=JSON.parse(j.spec),name=(s.title||({summary:'자료 요약',compare:'자료 비교',slides:'발표 자료',create:'새 문서',edit:'수정본',convert:'변환본',read:'문서 본문'})[s.kind]).replace(/[\\/:<>|?*"\x00-\x1f]/g,' ').trim().slice(0,65)+'-'+id.slice(0,8)+'.'+s.format,physical=name,dir=this.fileDir(id),dest=path.join(dir,physical);this.set('location-'+id,dir);await checkedDirectory(dir);authorize?.();try{await writeFile(dest,j.data,{flag:'wx'});}catch(e){if(e.code!=='EEXIST')throw e;}const buf=await bytes(dest,dir);requireThat(sum(buf)===j.hash,'저장 결과가 불확실합니다. 기존 파일을 확인하세요.');this.db.exec('BEGIN');try{this.db.prepare('INSERT OR IGNORE INTO files VALUES(?,?,?,?,?,?,0)').run(id,name,physical,s.format,j.hash,buf.length);this.db.prepare("UPDATE jobs SET status='done',spec=NULL,error=NULL,data=NULL,preview=NULL,refs=NULL,nonce=NULL,hash=NULL WHERE id=?").run(id);this.set('sources-'+id,j.refs||'[]');this.set('last',id);this.db.exec('COMMIT');}catch(e){this.db.exec('ROLLBACK');throw e;}}
 fileDir(id){return this.get('location-'+id)||this.get('output')||this.base.core.outputRoot;}
 async download(id,role){const f=this.db.prepare('SELECT * FROM files WHERE id=?').get(id);if(!f)return this.old.download(id,role);requireThat(role==='owner'||f.shared,'전달이 허용되지 않았습니다.');const b=await bytes(path.join(this.fileDir(id),f.physical),this.fileDir(id));requireThat(sum(b)===f.hash,'파일이 바뀌었습니다.');return {bytes:b,name:f.name,sha256:f.hash};}
 async handle(b,role,requestDevice=null){if(b.action==='desk-start'&&uuid(b.id||b.requestId)){this.starts??=new Map();const k=b.id||b.requestId;const same=this.starts.get(k);if(same)return same.text===b.text&&same.requestDevice===requestDevice?same.promise:{ok:false,error:'같은 작업 번호의 요청 내용이 다릅니다.'};const promise=this.dispatch(b,role,requestDevice);this.starts.set(k,{text:b.text,requestDevice,promise});try{return await promise;}finally{this.starts.delete(k);}}return this.dispatch(b,role,requestDevice);}
@@ -136,7 +164,7 @@ if(!s.kind&&!/검토|보완|저장|취소|질문|전달|공유|휴대폰|\?|만�
 this.invalidate();await this.old.handle({action:'invalidate',requestId:randomUUID()},role);if(last&&/^(?:그\s*수정본|수정본|방금\s*(?:결과|만든)|그\s*(?:결과|문서)|최근\s*결과)/.test(b.text.trim())&&!s.names.length)s.useLast=last;s.request=b.text;this.set('request-'+id,sum(b.text));s.title=s.title?.slice(0,120);this.db.prepare("INSERT OR IGNORE INTO jobs(id,status,spec,request_device) VALUES(?,'reading',?,?)").run(id,JSON.stringify(s),requestDevice);void this.prepare(id).catch(()=>{});return{ok:true,id};}
 const j=this.row(id);requireThat(j,'작업을 찾지 못했습니다.');if(a==='desk-cancel'){requireThat(j.status!=='saving','저장 중인 결과를 먼저 확인하세요.');this.running.get(id)?.abort();this.db.prepare("UPDATE jobs SET status='cancelled',error=NULL,data=NULL,spec=NULL,refs=NULL,preview=NULL,nonce=NULL WHERE id=? AND status NOT IN ('done','saving')").run(id);}
 else if(a==='desk-approve'){owner();await this.commit(id,b.nonce);}
-else if(a==='desk-retry'){if(j.status==='saving'){owner();await this.finish(id);}else{requireThat(j.status==='failed','다시 시도할 작업이 아닙니다.');const spec=JSON.parse(j.spec);if(['summary','compare','slides','create'].includes(spec.kind)&&spec.request){const current=route(spec.request);if(current.kind===spec.kind&&supported.includes(current.format)){spec.format=current.format;this.db.prepare('UPDATE jobs SET spec=? WHERE id=? AND status=\'failed\'').run(JSON.stringify(spec),id);}}void this.prepare(id).catch(()=>{});}}
+else if(a==='desk-retry'){if(j.status==='saving'){owner();await this.commit(id,j.nonce);}else{requireThat(j.status==='failed','다시 시도할 작업이 아닙니다.');const spec=JSON.parse(j.spec);if(['summary','compare','slides','create'].includes(spec.kind)&&spec.request){const current=route(spec.request);if(current.kind===spec.kind&&supported.includes(current.format)){spec.format=current.format;this.db.prepare('UPDATE jobs SET spec=? WHERE id=? AND status=\'failed\'').run(JSON.stringify(spec),id);}}void this.prepare(id).catch(()=>{});}}
 else if(a==='desk-answer'){owner();requireThat(j.status==='question'&&typeof b.answer==='string'&&b.answer.trim()&&b.answer.length<=8000,'작성할 내용을 확인하세요.');const spec=JSON.parse(j.spec);spec.body=b.answer;this.db.prepare('UPDATE jobs SET spec=? WHERE id=?').run(JSON.stringify(spec),id);void this.prepare(id).catch(()=>{});}
 else if(a==='desk-select'){owner();requireThat(j.status==='choose'&&Array.isArray(b.ids),'선택할 자료가 없습니다.');void this.prepare(id,b.ids).catch(()=>{});}
 else throw Error('지원하지 않는 작업입니다.');return{ok:true,id};}catch(e){return {ok:false,error:safeError(e)};}}

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { access, copyFile, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, readdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -145,14 +145,17 @@ try {
   const relativeOutput = path.relative(await realpath(fixture), outputDir);
   assert(relativeOutput.startsWith(path.join('documents', 'DIANA', '결과') + path.sep));
   const pausedOutput = outputDir + '-paused';
-  await rename(outputDir, pausedOutput);
-  try {
-    await mobile(save, 400);
-    await waitFor(edit, 'saving');
-    assert(!(await pc({ op: 'state' })).files.some(file => file.id === edit));
-  } finally {
-    await rename(pausedOutput, outputDir);
+  async function interruptSave(approval) {
+    await rename(outputDir, pausedOutput);
+    try {
+      await mobile(approval, 400);
+      await waitFor(approval.id, 'saving');
+      assert(!(await pc({ op: 'state' })).files.some(file => file.id === approval.id));
+    } finally {
+      await rename(pausedOutput, outputDir);
+    }
   }
+  await interruptSave(save);
   const retryable = (await mobile({ op: 'state' })).jobs.find(job => job.id === edit);
   assert.equal(retryable.status, 'saving');
   assert.equal(retryable.canApprove, true);
@@ -170,6 +173,34 @@ try {
   await mobile(save, 409);
   assert.match((await receive(edit)).toString(), /12분/);
   assert.equal(await readFile(sourcePath, 'utf8'), original);
+  for (const mode of ['phone', 'pc']) {
+    const id = await send(editText);
+    await waitFor(id, 'approval');
+    const shown = await mobile({ op: 'phone-preview', id });
+    const approval = { op: 'phone-approve', id, nonce: shown.nonce, confirm: true };
+    await interruptSave(approval);
+    const revised = original + '\n현장 확인을 추가했습니다.';
+    await writeFile(sourcePath, revised);
+    if (mode === 'phone') await mobile(approval, 409);
+    else await pc({ op: 'job', action: 'desk-retry', id });
+    const stale = (await pc({ op: 'state' })).jobs.find(job => job.id === id);
+    assert.equal(stale?.status, 'failed');
+    assert.match(stale.error, /자료가 바뀌었거나/);
+    assert(!(await pc({ op: 'state' })).files.some(file => file.id === id));
+    assert(!(await readdir(outputDir)).some(name => name.includes(id.slice(0, 8))));
+    await mobile({ op: 'phone-preview', id }, 409);
+    await mobile({ op: 'job', action: 'desk-retry', id });
+    await waitFor(id, 'approval');
+    const fresh = await mobile({ op: 'phone-preview', id });
+    assert.notEqual(fresh.nonce, shown.nonce);
+    assert.match(fresh.preview, /현장 확인을 추가했습니다/);
+    await mobile(approval, 409);
+    await mobile({ ...approval, nonce: fresh.nonce });
+    assert.match((await receive(id)).toString(), /현장 확인을 추가했습니다/);
+    assert.equal(await readFile(sourcePath, 'utf8'), revised);
+    await writeFile(sourcePath, original);
+  }
+  console.log('Phone and PC interrupted saves require a fresh preview if the source changes');
   await pc({ op: 'revoke', device: otherPhone.device });
   await other(preview, 403);
   const pcOnly = randomUUID();
