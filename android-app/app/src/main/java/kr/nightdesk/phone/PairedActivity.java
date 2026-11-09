@@ -120,7 +120,40 @@ public final class PairedActivity extends Activity {
  rows=column();rows.setPadding(0,dp(4),0,0);page.addView(rows);}
  void refresh()throws Exception{JSONObject r=call(obj("op","state"));JSONArray all=new JSONArray();int offset=0;
  while(true){JSONArray batch=r.getJSONArray("files");for(int i=0;i<batch.length();i++){JSONObject f=batch.getJSONObject(i);receive(f);all.put(f);}if(!r.optBoolean("more"))break;offset+=20;r=call(obj("op","state","offset",offset));}
- final JSONArray jobs=r.getJSONArray("jobs");String sig=jobs.toString()+all.toString();runOnUiThread(()->{if(!screen.equals("work")||isDestroyed())return;connection.setText("PC 연결됨");if(signature.equals(sig))return;signature=sig;rows.removeAllViews();for(int i=0;i<jobs.length();i++){JSONObject j=jobs.optJSONObject(i);String st=j.optString("status");LinearLayout task=card(rows);TextView heading=label(task,st.equals("failed")?"요청 확인이 필요해요":st.equals("reading")?"자료를 읽고 있어요":st.equals("saving")?"파일을 저장하고 있어요":"PC에서 확인을 기다려요");heading.setTextSize(15);heading.setTypeface(Typeface.DEFAULT_BOLD);caption(task,st.equals("failed")?j.optString("error"):st.equals("reading")?"완료되면 결과 파일을 받을 수 있습니다.":"미리보기와 저장 승인은 PC에서 확인하세요.");LinearLayout buttons=line(task);if(st.equals("failed"))button(buttons,"다시 시도",()->job("desk-retry",j));if(!st.equals("saving"))button(buttons,st.equals("failed")?"닫기":"중단",()->job("desk-cancel",j));}if(all.length()>0){TextView recent=label(rows,"최근 파일");recent.setTextSize(17);recent.setTypeface(Typeface.DEFAULT_BOLD);recent.setPadding(0,dp(8),0,dp(12));int shown=0;for(int i=0;i<all.length()&&shown<3;i++){JSONObject f=all.optJSONObject(i);if(local.contains("file-"+f.optString("id"))){fileRow(rows,f.optString("name"),"휴대폰에 저장됨",()->open(f.optString("id")),null);shown++;}}}else if(jobs.length()==0)caption(rows,"만든 파일은 ‘파일’에 모아둘게요.");});}
+ final JSONArray jobs=r.getJSONArray("jobs");String sig=jobs.toString()+all.toString();runOnUiThread(()->{if(!screen.equals("work")||isDestroyed())return;connection.setText("PC 연결됨");if(signature.equals(sig))return;signature=sig;rows.removeAllViews();for(int i=0;i<jobs.length();i++)renderJob(rows,jobs.optJSONObject(i));if(all.length()>0){TextView recent=label(rows,"최근 파일");recent.setTextSize(17);recent.setTypeface(Typeface.DEFAULT_BOLD);recent.setPadding(0,dp(8),0,dp(12));int shown=0;for(int i=0;i<all.length()&&shown<3;i++){JSONObject f=all.optJSONObject(i);if(local.contains("file-"+f.optString("id"))){fileRow(rows,f.optString("name"),"휴대폰에 저장됨",()->open(f.optString("id")),null);shown++;}}}else if(jobs.length()==0)caption(rows,"만든 파일은 ‘파일’에 모아둘게요.");});}
+ void renderJob(LinearLayout parent,JSONObject job){
+  String state=job.optString("status");
+  boolean mobileApproval=state.equals("approval")&&job.optBoolean("canApprove");
+  LinearLayout task=card(parent);
+  TextView heading=label(task,state.equals("failed")?"요청 확인이 필요해요":state.equals("reading")?"자료를 읽고 있어요":state.equals("saving")?"파일을 저장하고 있어요":mobileApproval?"저장 전 확인":"PC에서 확인을 기다려요");
+  heading.setTextSize(15);heading.setTypeface(Typeface.DEFAULT_BOLD);
+  caption(task,state.equals("failed")?job.optString("error"):state.equals("reading")?"완료되면 결과 파일을 받을 수 있습니다.":state.equals("saving")?"PC에 결과를 저장하고 있습니다.":mobileApproval?"미리보기를 확인하고 새 파일로 저장할 수 있습니다.":"미리보기와 저장 승인은 PC에서 확인하세요.");
+  LinearLayout buttons=line(task);
+  if(mobileApproval)button(buttons,"미리보기",()->showPhonePreview(job.optString("id")));
+  if(state.equals("failed"))button(buttons,"다시 시도",()->job("desk-retry",job));
+  if(!state.equals("saving"))button(buttons,state.equals("failed")?"닫기":"중단",()->job("desk-cancel",job));
+ }
+ void showPhonePreview(String id){
+  async(()->{
+   JSONObject result=call(obj("op","phone-preview","id",id));
+   if(!id.equals(result.getString("id")))throw new IOException("작업 정보를 다시 확인하세요.");
+   String preview=result.getString("preview"),nonce=result.getString("nonce");
+   String format=result.getString("format").toUpperCase(java.util.Locale.ROOT);
+   runOnUiThread(()->{
+    if(isDestroyed()||isFinishing()||!active||!screen.equals("work"))return;
+    ScrollView scroll=new ScrollView(this);
+    TextView text=new TextView(this);
+    text.setText(preview);text.setTextSize(15);text.setPadding(dp(22),dp(12),dp(22),dp(12));
+    scroll.addView(text);
+    new AlertDialog.Builder(this).setTitle("저장 전 미리보기 · "+format).setView(scroll)
+     .setNegativeButton("닫기",null)
+     .setPositiveButton("승인 후 저장",(dialog,which)->async(()->{
+      call(obj("op","phone-approve","id",id,"nonce",nonce,"confirm",true));
+      refresh();
+     })).show();
+   });
+  });
+ }
  void job(String action,JSONObject j){async(()->{call(obj("op","job","action",action,"id",j.getString("id")));refresh();});}
  void receive(JSONObject f)throws Exception{new PairedFiles(this,session).receive(f);}
  void open(String id){try{JSONObject r=new JSONObject(local.getString("file-"+id,""));Uri uri=Uri.parse(r.getString("uri"));String name=r.getString("name"),ext=name.substring(name.lastIndexOf('.')+1);String type=android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);if(type==null)type="text/plain";startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(uri,type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION));}catch(Exception e){note.setText("파일을 열 앱과 저장 위치를 확인하세요.");}}

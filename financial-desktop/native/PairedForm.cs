@@ -178,7 +178,17 @@ namespace Diana.Desktop {
   async Task SettingsPage(){var v=await Api(D("op","settings"));RenderSettings(v);}
   void RenderSettings(Dictionary<string,object> v){Page("settings","설정");
    var pair=Card(body);var h=LabelAt(pair,"휴대폰 연결");h.Font=new Font(Font.FontFamily,13,FontStyle.Bold);Caption(pair,"모바일 DIANA에 6자리 코드를 입력하세요.");var code=LabelAt(pair,"••••••");code.Font=new Font("Consolas",28,FontStyle.Bold);code.ForeColor=Teal;var buttons=Bar(pair);ButtonAt(buttons,"연결 코드 만들기",async delegate{note.Text="연결 코드를 만드는 중입니다.";var r=await Api(D("op","code"));code.Text=S(r,"code");note.Text="5분 동안 사용할 수 있으며 한 번만 연결됩니다.";});ButtonAt(buttons,"코드 복사",delegate{if(code.Text.Length==6&&code.Text.All(Char.IsDigit))Clipboard.SetText(code.Text);return Task.FromResult(0);});
-   foreach(var dev in Rows(v,"devices").Where(x=>S(x,"kind")=="phone"&&S(x,"active")=="1")){var row=Bar(pair);Caption(row,"연결된 휴대폰 · "+S(dev,"id").Substring(0,6));ButtonAt(row,"연결 해제",async delegate{if(MessageBox.Show("이 휴대폰 연결을 해제할까요?","기기 연결",MessageBoxButtons.YesNo)==DialogResult.Yes){await Api(D("op","revoke","device",S(dev,"id")));await SettingsPage();}});}
+   foreach(var dev in Rows(v,"devices").Where(x=>S(x,"kind")=="phone"&&S(x,"active")=="1")){
+    bool enabled=S(dev,"mobile_approval")=="1";
+    Caption(pair,"연결된 휴대폰 · "+S(dev,"id").Substring(0,6));
+    var row=Bar(pair);
+    ButtonAt(row,enabled?"모바일 승인 끄기":"모바일 승인 허용",async delegate{
+     if(!enabled&&MessageBox.Show("이 휴대폰에서 요청한 작업의 미리보기를 중계 서버로 보내고, 휴대폰에서 승인하면 PC에 결과를 저장합니다. 허용할까요?","모바일 저장 승인",MessageBoxButtons.YesNo)!=DialogResult.Yes)return;
+     await Api(D("op","phone-approval-settings","device",S(dev,"id"),"enabled",!enabled));
+     await SettingsPage();
+    });
+    ButtonAt(row,"연결 해제",async delegate{if(MessageBox.Show("이 휴대폰 연결을 해제할까요?","기기 연결",MessageBoxButtons.YesNo)==DialogResult.Yes){await Api(D("op","revoke","device",S(dev,"id")));await SettingsPage();}});
+   }
    var output=Card(body);LabelAt(output,"결과 저장").Font=new Font(Font.FontFamily,13,FontStyle.Bold);Caption(output,S(v,"output"));var storage=Bar(output);ButtonAt(storage,"결과 폴더 열기",delegate{Process.Start("explorer.exe","\""+S(v,"output")+"\"");return Task.FromResult(0);});ButtonAt(storage,"저장 폴더 변경",()=>ChooseDirectory("output"));
    var search=Card(body);LabelAt(search,"자료 검색").Font=new Font(Font.FontFamily,13,FontStyle.Bold);Caption(search,"아래 위치에서 요청에 맞는 자료를 찾습니다.");foreach(var r in Rows(v,"roots")){LabelAt(search,S(r,"label"));Caption(search,S(r,"path"));}foreach(string excluded in v["excluded"] as System.Collections.IEnumerable)Caption(search,"제외 · "+excluded);var roots=Bar(search);ButtonAt(roots,"검색 폴더 추가",()=>ChooseDirectory("root"));ButtonAt(roots,"검색에서 제외",()=>ChooseDirectory("exclude"));
    var app=Card(body);LabelAt(app,"DIANA");Caption(app,"버전 "+BuildVersion.ProductVersion);FitPage();}

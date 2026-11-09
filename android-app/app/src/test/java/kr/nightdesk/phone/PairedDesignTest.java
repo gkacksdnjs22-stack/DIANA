@@ -25,4 +25,16 @@ public class PairedDesignTest {
  @Test public void workAndFilesAndSettingsAreDistinctScreens()throws Exception{PairedActivity a=activity();setupWork(a);View root=a.findViewById(android.R.id.content);assertTrue(text(root,"무엇을 만들까요?"));assertTrue(text(root,"작업"));assertTrue(text(root,"파일"));assertTrue(text(root,"설정"));image(a,"work-360",360,800);a.archive();image(a,"files-empty-360",360,800);a.settings();image(a,"settings-360",360,800);a.finish();}
  @Test public void fileRowsAndNarrowScreensDoNotCrash()throws Exception{PairedActivity a=activity();setupWork(a);a.getSharedPreferences("paired-00000000-0000-4000-8000-000000000001",0).edit().putString("file-00000000-0000-4000-8000-000000000002",new JSONObject().put("name","프로젝트 핵심 요약 보고서.pdf").put("uri","content://example.invalid/result").toString()).commit();a.archive();image(a,"files-360",360,800);a.work();image(a,"work-320",320,640);image(a,"work-600",600,900);a.finish();}
  @Test public void switchingTabsPreservesUnsentRequest()throws Exception{PairedActivity a=activity();setupWork(a);Field f=PairedActivity.class.getDeclaredField("editor");f.setAccessible(true);((EditText)f.get(a)).setText("문서 두 개를 요약해줘");a.settings();a.archive();a.work();assertEquals("문서 두 개를 요약해줘",((EditText)f.get(a)).getText().toString());a.finish();}
+ @Test public void onlyApprovableJobsOfferAPhonePreview()throws Exception{
+  PairedActivity a=activity();
+  LinearLayout pcOnly=a.column();
+  a.renderJob(pcOnly,new JSONObject().put("status","approval"));
+  assertTrue(text(pcOnly,"PC에서 확인을 기다려요"));
+  assertFalse(text(pcOnly,"미리보기"));
+  LinearLayout mobile=a.column();
+  a.renderJob(mobile,new JSONObject().put("status","approval").put("canApprove",true));
+  assertTrue(text(mobile,"미리보기"));
+  assertFalse(text(mobile,"승인 후 저장"));
+  a.finish();
+ }
 }

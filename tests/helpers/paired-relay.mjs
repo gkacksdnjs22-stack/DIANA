@@ -10,7 +10,7 @@ const fail=(status,error)=>{throw Object.assign(Error(error),{status});};
 const same=(a,b)=>typeof a==='string'&&typeof b==='string'&&a.length===b.length&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
 export function mobileAllowed(b){
  if(!b||typeof b!=='object'||Array.isArray(b))return false;
- if(['state','file','receipt','revoke'].includes(b.op))return true;
+ if(['state','file','receipt','revoke','phone-preview','phone-approve'].includes(b.op))return true;
  return b.op==='job'&&['desk-start','desk-upload','desk-retry','desk-cancel','desk-invalidate'].includes(b.action);
 }
 export async function createRelay({port=0,host='127.0.0.1',clock=Date.now,codeTtl=300000,pollMs=20000,requestMs=35000,renderProxy=false}={}){
