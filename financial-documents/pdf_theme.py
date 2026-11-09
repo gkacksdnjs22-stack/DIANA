@@ -7,7 +7,7 @@ from document_plan import text_blocks
 def render_pdf(title,sections,docs,slides=False,table=None,preserve=False,report=False):
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
-    from reportlab.platypus import SimpleDocTemplate,Paragraph,Spacer,PageBreak,Table,TableStyle
+    from reportlab.platypus import SimpleDocTemplate,Paragraph,Spacer,Table,TableStyle
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.colors import HexColor
     from reportlab.lib.pagesizes import A4
@@ -18,11 +18,11 @@ def render_pdf(title,sections,docs,slides=False,table=None,preserve=False,report
     ink=HexColor('#253042');muted=HexColor('#657080')
     accent=HexColor('#3e5770');rule=HexColor('#d5dde5')
     styled=slides or report
-    margin=60 if slides else 48 if report else 42
+    margin=48 if report else 42
     base=dict(fontName='DocumentText',textColor=ink,wordWrap='CJK')
-    body=ParagraphStyle('body',fontSize=19 if slides else 10.5,leading=28 if slides else 17,spaceAfter=14 if slides else 8,**base)
-    heading=ParagraphStyle('heading',fontName='DocumentTitle',textColor=accent if styled else ink,fontSize=24 if slides else 14,leading=32 if slides else 21,spaceBefore=14 if styled else 12,spaceAfter=12,keepWithNext=True,wordWrap='CJK')
-    title_style=ParagraphStyle('title',parent=heading,textColor=ink,fontSize=30 if slides else 24 if report else 22,leading=38 if slides else 32 if report else 30,spaceBefore=0,spaceAfter=18 if styled else 15)
+    body=ParagraphStyle('body',fontSize=16 if slides else 10.5,leading=24 if slides else 17,spaceAfter=12 if slides else 8,**base)
+    heading=ParagraphStyle('heading',fontName='DocumentTitle',textColor=accent if styled else ink,fontSize=22 if slides else 14,leading=29 if slides else 21,spaceBefore=14 if report else 12,spaceAfter=12,keepWithNext=True,wordWrap='CJK')
+    title_style=ParagraphStyle('title',parent=heading,textColor=ink,fontSize=26 if slides else 24 if report else 22,leading=34 if slides else 32 if report else 30,spaceBefore=0,spaceAfter=18 if report else 15)
     small=ParagraphStyle('source',parent=body,fontSize=11 if slides else 9,leading=17 if slides else 14,spaceAfter=6)
     def frame(c,doc):
         c.saveState()
@@ -37,8 +37,8 @@ def render_pdf(title,sections,docs,slides=False,table=None,preserve=False,report
         c.restoreState()
     story=[]
     if not preserve:story.append(Paragraph(escape(title),title_style))
-    for index,(name,items) in enumerate((section for section in sections if section[1])):
-        if slides and index:story.append(PageBreak())
+    for name,items in sections:
+        if not items:continue
         if name:story.append(Paragraph(escape(name),heading))
         if table and name==table['heading']:
             data=[[Paragraph(escape(str(v)),small) for v in row] for row in [table['headers']]+table['rows']]
@@ -56,5 +56,5 @@ def render_pdf(title,sections,docs,slides=False,table=None,preserve=False,report
     if docs and not preserve and not any(h=='출처' for h,_ in sections):
         story.append(Paragraph('출처',heading))
         for i,(name,_) in enumerate(docs,1):story.append(Paragraph(escape(f'[{i}] {name}'),small))
-    stream=io.BytesIO();SimpleDocTemplate(stream,pagesize=(width,height),leftMargin=margin,rightMargin=margin,topMargin=58 if styled else 48,bottomMargin=42,title=title,author='',pageCompression=1).build(story,onFirstPage=frame,onLaterPages=frame)
+    stream=io.BytesIO();SimpleDocTemplate(stream,pagesize=(width,height),leftMargin=margin,rightMargin=margin,topMargin=58 if report else 48,bottomMargin=42,title=title,author='',pageCompression=1).build(story,onFirstPage=frame,onLaterPages=frame)
     return stream.getvalue()

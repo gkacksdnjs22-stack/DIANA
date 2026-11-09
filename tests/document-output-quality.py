@@ -1,6 +1,6 @@
 """Synthetic content checks; no user documents, model calls, or file approval."""
 from pathlib import Path
-import sys,unittest,io,json,base64,subprocess
+import sys,unittest,io,json,base64,re,subprocess
 root=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(root/'financial-documents'))
 sys.path.insert(0,str(Path(sys.executable).resolve().parent.parent/'office'))
@@ -53,6 +53,28 @@ class Quality(unittest.TestCase):
         pdf=PdfReader(io.BytesIO(render_pdf('보고서',[('점검',facts)],[('원문.txt','')],False)))
         text=''.join(p.extract_text() for p in pdf.pages)
         self.assertIn('기록 17번',text);self.assertGreater(len(pdf.pages),1)
+    def test_long_presentation_stays_readable_with_all_sections(self):
+        from pypdf import PdfReader
+        docs=[]
+        for i in range(1,9):
+            sections=[]
+            for j in range(1,10):
+                fact=f'{i}번 자료의 {j}번 장비는 '+('시험 조건과 부품 교체 및 성능 결과를 확인하고 '*32)+'정상 작동했습니다.'
+                sections.extend((f'장비 시험 결과 {j}',fact))
+            docs.append({'name':f'정기 점검 {i}.txt','decoded':'\n\n'.join(sections)})
+        request={'kind':'slides','format':'pdf','request':'첨부한 자료를 발표자료로 만들어줘','docs':docs}
+        completed=subprocess.run([sys.executable,'-I','-B',str(root/'financial-documents/workbench-content.py')],input=json.dumps(request).encode(),stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=45,check=True)
+        value=json.loads(completed.stdout)
+        self.assertNotIn('error',value)
+        pdf=PdfReader(io.BytesIO(base64.b64decode(value['data'])))
+        self.assertGreater(len(pdf.pages),1)
+        self.assertLessEqual(len(pdf.pages),120)
+        text=re.sub(r'\s+','',''.join(page.extract_text() for page in pdf.pages))
+        self.assertEqual(text.count('정상작동했습니다.'),72)
+        for i in range(1,9):
+            self.assertIn(f'[{i}]정기점검{i}.txt',text)
+            for j in range(1,10):
+                self.assertIn(f'{i}번자료의{j}번장비는',text)
     def test_docx_has_reference_filename_list(self):
         from docx import Document
         for kind in ('summary','compare','slides'):
