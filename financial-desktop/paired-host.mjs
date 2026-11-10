@@ -71,8 +71,13 @@ export async function start(cfg){
  const canApprove=()=>dev.kind==='phone'&&!!get("SELECT 1 FROM phone_approvals a JOIN devices d ON d.id=a.device JOIN sessions s ON s.device=d.id AND s.user=d.user WHERE d.id=? AND d.active=1 AND s.h=? AND s.expires>?",dev.id,s.h,Date.now());
  if(op==='state'){
   const offset=Math.max(0,Math.floor(Number(b.offset)||0)),v=await w.view('owner',offset);
-  const approvable=canApprove()?new Set(w.db.prepare("SELECT id FROM jobs WHERE status IN ('approval','saving') AND request_device=?").all(dev.id).map(row=>row.id)):new Set();
-  const jobs=pc?v.jobs:v.jobs.map(({id,status,error,pdfPages})=>({id,status,error,canApprove:approvable.has(id)&&!w.writing?.has(id),pdfPages:approvable.has(id)?pdfPages:undefined}));
+  const permission=!pc&&canApprove();
+  const own=pc?null:new Set(w.db.prepare("SELECT id FROM jobs WHERE status IN ('choose','approval','saving') AND request_device=?").all(dev.id).map(row=>row.id));
+  const jobs=pc?v.jobs:v.jobs.map(({id,status,error,pdfPages})=>{
+   const allowed=own.has(id)&&permission;
+   const canApprove=allowed&&(status==='approval'||status==='saving')&&!w.writing?.has(id);
+   return {id,status,error,canApprove,canChoose:allowed&&status==='choose',mobileApprovalNeeded:own.has(id)&&!permission,pdfPages:canApprove?pdfPages:undefined};
+  });
   const files=v.files.map(f=>({...f,
    location:pc?path.join(w.fileDir(f.id),w.db.prepare('SELECT physical FROM files WHERE id=?').get(f.id).physical):undefined,
    received:!!get('SELECT 1 FROM receipts WHERE device=? AND file=?',dev.id,f.id),
@@ -95,8 +100,26 @@ export async function start(cfg){
   const loadJob=()=>typeof b.id==='string'&&w.db.prepare('SELECT status,preview,nonce,spec FROM jobs WHERE id=? AND (? OR request_device=?)').get(b.id,ownerPreview?1:0,dev.id);
   const job=loadJob();
   if(!job)deny('이 휴대폰에서 요청한 작업만 확인할 수 있습니다.',403);
-  if(!['approval','saving'].includes(job.status)||w.writing?.has(b.id))deny('현재 작업 상태를 다시 확인하세요.',409);
-  if(op==='phone-preview'){
+  if(b.step==='choose'){
+   if(job.status!=='choose')deny('선택할 자료가 바뀌었습니다. 작업을 다시 확인하세요.',409);
+   if(op==='phone-preview'){
+    const nonce=job.nonce||randomUUID();
+    if(!job.nonce)w.db.prepare("UPDATE jobs SET nonce=? WHERE id=? AND status='choose' AND nonce IS NULL").run(nonce,b.id);
+    const roots=w.searchConfig().roots.slice().sort((a,b)=>b.path.length-a.path.length);
+    const choices=JSON.parse(job.preview).map(({id,name,location,modified,group})=>{
+     const root=roots.find(r=>within(r.path,location));
+     const folder=root?[root.label,...path.relative(root.path,location).split(path.sep).filter(Boolean)].join(' / '):'첨부 파일';
+     return {id,name,folder,modified,group};
+    });
+    answer={id:b.id,status:'choose',nonce,choices,single:JSON.parse(job.spec).kind==='send'};
+   }else{
+    if(b.confirm!==true||typeof b.nonce!=='string'||job.nonce!==b.nonce)deny('선택할 자료를 다시 확인하세요.',409);
+    answer=await w.handle({action:'desk-select',id:b.id,ids:b.ids,nonce:b.nonce},'mobile',dev.id);
+    if(answer?.ok===false)deny(answer.error||'선택할 자료를 다시 확인하세요.');
+   }
+  }
+  else if(!['approval','saving'].includes(job.status)||w.writing?.has(b.id))deny('현재 작업 상태를 다시 확인하세요.',409);
+  else if(op==='phone-preview'){
    const spec=JSON.parse(job.spec);
    answer={id:b.id,status:job.status,preview:job.preview,nonce:job.nonce,format:spec.format};
    if(spec.pdfPages){

@@ -101,7 +101,7 @@ async resolveSources(s,j,selection,signal){
  }
  if(ambiguous){
   const items=choices.map(f=>({id:f.id,name:f.name,location:path.dirname(f.path),stamp:f.stamp||'',modified:f.mtime===undefined?'':new Date(f.mtime).toLocaleString('ko-KR'),group:groups.filter(g=>g.hits.some(x=>x.id===f.id)).map(g=>g.label).join(', ')}));
-  signal.throwIfAborted();this.db.prepare("UPDATE jobs SET status='choose',preview=? WHERE id=? AND status='reading'").run(JSON.stringify(items),j.id);
+  signal.throwIfAborted();this.db.prepare("UPDATE jobs SET status='choose',preview=?,nonce=? WHERE id=? AND status='reading'").run(JSON.stringify(items),randomUUID(),j.id);
   return null;
  }
  requireThat(choices.length>=groups.length,'서로 다른 원천 자료를 구별할 수 없습니다. 이름을 더 구체적으로 입력하세요.');
@@ -258,7 +258,16 @@ const j=this.row(id);requireThat(j,'작업을 찾지 못했습니다.');if(a==='
 else if(a==='desk-approve'){owner();await this.commit(id,b.nonce);}
 else if(a==='desk-retry'){if(j.status==='saving'){owner();await this.commit(id,j.nonce);}else{requireThat(j.status==='failed','다시 시도할 작업이 아닙니다.');const spec=JSON.parse(j.spec);if(['summary','compare','slides','create'].includes(spec.kind)&&spec.request){const current=route(spec.request);if(current.kind===spec.kind&&supported.includes(current.format)){spec.format=current.format;this.db.prepare('UPDATE jobs SET spec=? WHERE id=? AND status=\'failed\'').run(JSON.stringify(spec),id);}}void this.prepare(id).catch(()=>{});}}
 else if(a==='desk-answer'){owner();requireThat(j.status==='question'&&typeof b.answer==='string'&&b.answer.trim()&&b.answer.length<=8000,'작성할 내용을 확인하세요.');const spec=JSON.parse(j.spec);spec.body=b.answer;this.db.prepare('UPDATE jobs SET spec=? WHERE id=?').run(JSON.stringify(spec),id);void this.prepare(id).catch(()=>{});}
-else if(a==='desk-select'){owner();requireThat(j.status==='choose'&&Array.isArray(b.ids),'선택할 자료가 없습니다.');void this.prepare(id,b.ids).catch(()=>{});}
+else if(a==='desk-select'){
+ requireThat(j.status==='choose'&&Array.isArray(b.ids),'선택할 자료가 없습니다.');
+ if(role!=='owner'){
+  requireThat(requestDevice&&j.request_device===requestDevice&&j.nonce&&j.nonce===b.nonce,'선택할 자료를 다시 확인하세요.');
+  const choices=new Set(JSON.parse(j.preview).map(item=>item.id));
+  requireThat(b.ids.length>0&&b.ids.length<=12&&new Set(b.ids).size===b.ids.length&&b.ids.every(id=>choices.has(id)),'목록에서 사용할 자료를 선택하세요.');
+  requireThat(JSON.parse(j.spec).kind!=='send'||b.ids.length===1,'보낼 파일을 한 개 선택하세요.');
+ }
+ void this.prepare(id,b.ids).catch(()=>{});
+}
 else throw Error('지원하지 않는 작업입니다.');return{ok:true,id};}catch(e){return {ok:false,error:safeError(e)};}}
 legacyResult(r){const t=r.state?.messages?.at(-1);if(r.state?.latest&&r.executed)this.set('last','');return {ok:r.ok!==false,notice:t?.text||null,legacyError:r.ok===false||r.interpreted===false,reviewItems:t?.items||null};}
 }

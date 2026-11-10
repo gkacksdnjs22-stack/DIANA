@@ -292,6 +292,33 @@ try {
   const ambiguousResume = await send('바탕화면에 이력서파일 보내줘');
   const choice = await waitFor(ambiguousResume, 'choose');
   assert.deepEqual(choice.choices.map(file => file.name).sort(), ['이력서.pdf', '이력서.txt']);
+  const choiceRequest = {op:'phone-preview',id:ambiguousResume,step:'choose'};
+  const choiceState = async ()=>(await mobile({op:'state'})).jobs.find(job=>job.id===ambiguousResume);
+  assert.equal((await choiceState()).canChoose,true);
+  assert.equal((await choiceState()).choices,undefined);
+  await other(choiceRequest,403);
+  await allow(false);
+  assert.equal((await choiceState()).mobileApprovalNeeded,true);
+  await mobile(choiceRequest,403);
+  await allow(true);
+  const offered = await mobile(choiceRequest);
+  assert.equal(offered.single,true);
+  assert.deepEqual(offered.choices.map(file=>file.name).sort(),['이력서.pdf','이력서.txt']);
+  assert(offered.choices.every(file=>file.folder==='바탕화면'&&file.location===undefined&&file.stamp===undefined));
+  const selectFile = {op:'phone-approve',id:ambiguousResume,step:'choose',confirm:true,nonce:offered.nonce,
+    ids:[offered.choices.find(file=>file.name==='이력서.pdf').id]};
+  await other(selectFile,403);
+  await mobile({...selectFile,nonce:randomUUID()},409);
+  await mobile({...selectFile,ids:[randomUUID()]},400);
+  await mobile(selectFile);
+  await waitFor(ambiguousResume,'approval');
+  await mobile(selectFile,409);
+  assert(!(await mobile({op:'state'})).files.some(file=>file.id===ambiguousResume));
+  const selectedPreview = await mobile({op:'phone-preview',id:ambiguousResume,page:1});
+  assert.match(selectedPreview.preview,/이력서\.pdf/);
+  await mobile({op:'phone-approve',id:ambiguousResume,nonce:selectedPreview.nonce,confirm:true});
+  assert.deepEqual(await receive(ambiguousResume),reportBytes);
+  console.log('Requesting phone selects a file, previews and approves it separately, and receives the original');
 
   await rename(resumePath, path.join(known.desktop, '2026 이력서.pdf'));
   await rename(secondResume, path.join(known.desktop, '시나리오 메모.txt'));

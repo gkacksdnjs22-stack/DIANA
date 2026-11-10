@@ -123,17 +123,62 @@ public final class PairedActivity extends Activity {
  final JSONArray jobs=r.getJSONArray("jobs");String sig=jobs.toString()+all.toString();runOnUiThread(()->{if(!screen.equals("work")||isDestroyed())return;connection.setText("PC 연결됨");if(signature.equals(sig))return;signature=sig;rows.removeAllViews();for(int i=0;i<jobs.length();i++)renderJob(rows,jobs.optJSONObject(i));if(all.length()>0){TextView recent=label(rows,"최근 파일");recent.setTextSize(17);recent.setTypeface(Typeface.DEFAULT_BOLD);recent.setPadding(0,dp(8),0,dp(12));int shown=0;for(int i=0;i<all.length()&&shown<3;i++){JSONObject f=all.optJSONObject(i);if(local.contains("file-"+f.optString("id"))){fileRow(rows,f.optString("name"),"휴대폰에 저장됨",()->open(f.optString("id")),null);shown++;}}}else if(jobs.length()==0)caption(rows,"만든 파일은 ‘파일’에 모아둘게요.");});}
  void renderJob(LinearLayout parent,JSONObject job){
   String state=job.optString("status");
+  boolean choose=state.equals("choose")&&job.optBoolean("canChoose");
+  boolean approvalNeeded=job.optBoolean("mobileApprovalNeeded");
   boolean mobileApproval=state.equals("approval")&&job.optBoolean("canApprove");
   boolean retrySave=state.equals("saving")&&job.optBoolean("canApprove");
   LinearLayout task=card(parent);
-  TextView heading=label(task,state.equals("failed")?"요청 확인이 필요해요":state.equals("reading")?"자료를 읽고 있어요":retrySave?"저장 확인이 필요해요":state.equals("saving")?"파일을 저장하고 있어요":mobileApproval?"저장 전 확인":"PC에서 확인을 기다려요");
+  TextView heading=label(task,choose?"보낼 파일을 골라 주세요":approvalNeeded?"모바일 승인을 켜 주세요":state.equals("failed")?"요청 확인이 필요해요":state.equals("reading")?"자료를 읽고 있어요":retrySave?"저장 확인이 필요해요":state.equals("saving")?"파일을 저장하고 있어요":mobileApproval?"저장 전 확인":"PC에서 확인을 기다려요");
   heading.setTextSize(15);heading.setTypeface(Typeface.DEFAULT_BOLD);
-  caption(task,state.equals("failed")?job.optString("error"):state.equals("reading")?"완료되면 결과 파일을 받을 수 있습니다.":retrySave?"PC 저장 위치를 확인한 뒤 같은 결과를 다시 저장할 수 있습니다.":state.equals("saving")?"PC에 결과를 저장하고 있습니다.":mobileApproval?"미리보기를 확인하고 새 파일로 저장할 수 있습니다.":"미리보기와 저장 승인은 PC에서 확인하세요.");
+  caption(task,choose?"찾은 파일의 이름과 폴더를 비교한 뒤 선택하세요.":approvalNeeded?"PC 앱의 기기 연결 설정에서 이 휴대폰의 모바일 저장 승인을 허용하세요.":state.equals("failed")?job.optString("error"):state.equals("reading")?"완료되면 결과 파일을 받을 수 있습니다.":retrySave?"PC 저장 위치를 확인한 뒤 같은 결과를 다시 저장할 수 있습니다.":state.equals("saving")?"PC에 결과를 저장하고 있습니다.":mobileApproval?"미리보기를 확인하고 새 파일로 저장할 수 있습니다.":"이 작업은 PC나 요청한 기기에서 확인하세요.");
   LinearLayout buttons=line(task);
+  if(choose)button(buttons,"파일 고르기",()->showPhoneChoices(job.optString("id")));
   if(mobileApproval)button(buttons,job.optInt("pdfPages")>0?"PDF 내용 보기":"미리보기",()->showPhonePreview(job.optString("id")));
   if(retrySave)button(buttons,"저장 다시 시도",()->showPhonePreview(job.optString("id")));
   if(state.equals("failed"))button(buttons,"다시 시도",()->job("desk-retry",job));
   if(!state.equals("saving"))button(buttons,state.equals("failed")?"닫기":"중단",()->job("desk-cancel",job));
+ }
+ void showPhoneChoices(String id){
+  async(()->{
+   JSONObject result=call(obj("op","phone-preview","id",id,"step","choose"));
+   if(!id.equals(result.optString("id"))||!"choose".equals(result.optString("status")))
+    throw new IOException("선택할 자료가 바뀌었습니다.");
+   String nonce=result.getString("nonce");
+   JSONArray choices=result.getJSONArray("choices");
+   String[] ids=new String[choices.length()],labels=new String[choices.length()];
+   for(int i=0;i<ids.length;i++){
+    JSONObject item=choices.getJSONObject(i);ids[i]=item.getString("id");
+    labels[i]=item.getString("name")+"\n"+item.getString("folder")
+     +(item.optString("modified").isEmpty()?"":" · "+item.optString("modified"))
+     +(result.optBoolean("single")||item.optString("group").isEmpty()?"":"\n"+item.optString("group"));
+   }
+   runOnUiThread(()->{
+    if(isDestroyed()||isFinishing()||!active||!screen.equals("work"))return;
+    boolean[] selected=new boolean[ids.length];
+    AlertDialog.Builder builder=new AlertDialog.Builder(this).setTitle("사용할 파일 선택")
+     .setNegativeButton("닫기",null).setPositiveButton("선택 확인",null);
+    if(result.optBoolean("single"))builder.setSingleChoiceItems(labels,-1,(dialog,index)->{
+     Arrays.fill(selected,false);selected[index]=true;
+     ((AlertDialog)dialog).getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+    });
+    else builder.setMultiChoiceItems(labels,selected,(dialog,index,checked)->{
+     selected[index]=checked;
+     boolean any=false;for(boolean item:selected)any|=item;
+     ((AlertDialog)dialog).getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(any);
+    });
+    AlertDialog dialog=builder.show();
+    Button submit=dialog.getButton(AlertDialog.BUTTON_POSITIVE);submit.setEnabled(false);
+    submit.setOnClickListener(v->{
+     if(pending)return;
+     JSONArray picked=new JSONArray();for(int i=0;i<ids.length;i++)if(selected[i])picked.put(ids[i]);
+     dialog.dismiss();
+     async(()->{
+      call(obj("op","phone-approve","id",id,"step","choose","nonce",nonce,"ids",picked,"confirm",true));
+      refresh();
+     });
+    });
+   });
+  });
  }
  void showPhonePreview(String id){
   async(()->{
