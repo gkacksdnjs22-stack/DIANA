@@ -51,6 +51,7 @@ test('sending a named original keeps the file query inside the named folder', ()
   const files = [{ name: '샘플 이력서.pdf' }, { name: '샘플 포트폴리오.pdf' }];
   for (const request of [
     '바탕화면에 이력서 파일 보내줘',
+    '바탕화면에 이력서파일 보내줘',
     '바탕화면에 있는 "샘플 이력서.pdf"를 휴대폰으로 보내 주세요',
     '바탕화면에서 이력서 파일을 찾아서 보내줘',
   ]) {
@@ -60,6 +61,8 @@ test('sending a named original keeps the file query inside the named folder', ()
     assert.deepEqual(groupsFor(files, sourceQuery(location.query))[0].hits, files.slice(0, 1));
   }
   assert.equal(route('바탕화면에 있는 이력서를 요약해서 보내줘').kind, 'summary');
+  const literal = { name: '이력서파일.pdf' };
+  assert.deepEqual(groupsFor([...files, literal], sourceQuery('이력서파일 보내줘'))[0].hits, [literal]);
 });
 
 test('a specified delivery format is separate from the source name', () => {
@@ -78,4 +81,16 @@ test('forwarding the latest result is distinct from searching for a named file',
   assert.equal(route('결과를 전달해줘').recentResult, true);
   assert.equal(route('최근 결과를 TXT로 보내줘').recentResult, true);
   assert.equal(route('결과.pdf를 전달해줘').recentResult, false);
+});
+
+test('a supported partial match outranks an unsupported exact name for delivery', () => {
+  const unsupported = {name:'직원명부.png'};
+  const supported = {name:'2026 직원명부.pdf'};
+  const canUseFile = file => file.name.endsWith('.pdf');
+  const query = sourceQuery('직원명부 보내줘');
+  const files = [unsupported, supported, {name:'다른 문서.pdf'}];
+  assert.deepEqual(groupsFor(files, query, false, canUseFile)[0].hits, [supported]);
+  assert.deepEqual(groupsFor(files, query)[0].hits, [unsupported]);
+  assert.deepEqual(groupsFor(files, sourceQuery('"직원명부.png" 보내줘'), false, canUseFile)[0].hits, [unsupported]);
+  assert.deepEqual(groupsFor(files.filter(file => file !== supported), query, false, canUseFile)[0].hits, [unsupported]);
 });
