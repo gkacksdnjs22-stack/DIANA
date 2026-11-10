@@ -58,13 +58,17 @@ class RenderWorkspace {
    form.Opacity=0;form.ShowInTaskbar=false;form.Show();
    CheckNavigationRepaint();
    CheckCaption();
-   foreach(int width in new[]{1100,680})foreach(string screen in new[]{"work","approval","archive","settings"}){
+   foreach(int width in new[]{1100,680})foreach(string screen in new[]{"work","approval","pdf-approval","archive","settings"}){
     form.ClientSize=new Size(width,760);
     if(screen=="work"||screen=="approval"){Call("Work");((Timer)type.GetField("timer",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(form)).Stop();Call("RenderWork",D("jobs",screen=="approval"?new object[]{D("id","test-only","status","approval","preview","자료를 확인한 결과입니다. 원문에 확인된 내용만 보존했습니다.\r\n\r\n미해결: 근거가 없는 내용은 추가하지 않았습니다.","nonce","test-only")}:new object[0],"files",screen=="work"?files:new object[0],"legacy",null));}
+    if(screen=="pdf-approval"){
+     Call("Work");((Timer)type.GetField("timer",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(form)).Stop();
+     Call("RenderWork",D("jobs",new object[]{D("id","test-pdf","status","approval","pdfPages",2,"nonce","test-only")},"files",new object[0],"legacy",null));
+    }
     if(screen=="archive")Call("RenderArchive",D("files",files,"more",false),0);
     if(screen=="settings")Call("RenderSettings",D("devices",new object[]{D("id","test-device","kind","phone","active",1,"mobile_approval",0)},"output",@"C:\Users\사용자\Documents\DIANA\결과","roots",new object[]{D("label","바탕화면","path",@"C:\Users\사용자\Desktop"),D("label","문서","path",@"C:\Users\사용자\Documents")},"excluded",new string[0]));
     form.PerformLayout();Call("FitPage");form.PerformLayout();Check(form);
-    if(screen=="work"||screen=="approval")CheckComposer();
+    if(screen=="work"||screen=="approval"||screen=="pdf-approval")CheckComposer();
     using(var bitmap=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(bitmap,new Rectangle(Point.Empty,bitmap.Size));bitmap.Save(Path.Combine(args[1],screen+"-"+width+".png"),ImageFormat.Png);}Console.WriteLine(screen+" "+width+": native layout passed");
    }
    Call("Work");var request=(TextBox)type.GetField("request",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(form);request.Text="문서 두 개를 요약해줘";

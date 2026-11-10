@@ -37,13 +37,14 @@ namespace Diana.Desktop {
    base.OnHandleCreated(e);
    ApplyCaptionTheme();
   }
-  bool ApplyCaptionTheme(){
+  bool ApplyCaptionTheme(){return ApplyCaptionColors(Handle);}
+  static bool ApplyCaptionColors(IntPtr handle){
    if(SystemInformation.HighContrast)return false;
    try{
     int dark=1,caption=ColorTranslator.ToWin32(FrameColor),captionText=ColorTranslator.ToWin32(Ink);
-    DwmSetWindowAttribute(Handle,DwmDarkMode,ref dark,sizeof(int));
-    int backgroundStatus=DwmSetWindowAttribute(Handle,DwmCaptionColor,ref caption,sizeof(int));
-    int textStatus=DwmSetWindowAttribute(Handle,DwmTextColor,ref captionText,sizeof(int));
+    DwmSetWindowAttribute(handle,DwmDarkMode,ref dark,sizeof(int));
+    int backgroundStatus=DwmSetWindowAttribute(handle,DwmCaptionColor,ref caption,sizeof(int));
+    int textStatus=DwmSetWindowAttribute(handle,DwmTextColor,ref captionText,sizeof(int));
     return backgroundStatus==0&&textStatus==0;
    }catch(DllNotFoundException){return false;}catch(EntryPointNotFoundException){return false;}
   }
@@ -159,8 +160,77 @@ namespace Diana.Desktop {
    ButtonAt(bar,"파일 첨부",async delegate{using(var f=new OpenFileDialog{Filter="모든 파일 (*.*)|*.*|문서 (*.txt;*.md;*.json;*.pptx;*.docx)|*.txt;*.md;*.json;*.pptx;*.docx",FilterIndex=1,CheckFileExists=true,RestoreDirectory=true}){if(f.ShowDialog()!=DialogResult.OK)return;if(new FileInfo(f.FileName).Length>8000000)throw new IOException("첨부 한도를 넘었습니다.");var b=File.ReadAllBytes(f.FileName);using(var sha=SHA256.Create())await Job("action","desk-upload","name",Path.GetFileName(f.FileName),"base64",Convert.ToBase64String(b),"sha256",BitConverter.ToString(sha.ComputeHash(b)).Replace("-","").ToLowerInvariant());}});
    items=new FlowLayoutPanel{AutoSize=true,FlowDirection=FlowDirection.TopDown,WrapContents=false};items.Margin=Padding.Empty;body.Controls.Add(items);FitPage();timer.Start();}
   async Task RefreshWork(){var v=await Api(D("op","state"));RenderWork(v);}
+  async Task ShowPdfPreview(string id,string nonce){
+   var first=await Api(D("op","phone-preview","id",id,"page",1));
+   int pages;
+   if(S(first,"id")!=id||S(first,"nonce")!=nonce||!int.TryParse(S(first,"pages"),out pages)||pages<1)
+    throw new IOException("미리보기가 바뀌었습니다. 작업을 다시 확인하세요.");
+   using(var dialog=new Form{Text="DIANA · PDF 내용 확인",StartPosition=FormStartPosition.CenterParent,
+    BackColor=Canvas,ForeColor=Ink,Font=Font,Icon=Icon,MinimizeBox=false,ShowInTaskbar=false,MinimumSize=new Size(440,400)}){
+    var area=Screen.FromControl(this).WorkingArea;
+    dialog.Size=new Size(Math.Min(900,area.Width-24),Math.Min(840,area.Height-24));
+    dialog.HandleCreated+=delegate{ApplyCaptionColors(dialog.Handle);};
+    var layout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Padding=new Padding(18)};
+    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+    layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+    dialog.Controls.Add(layout);
+    var summary=new Label{AutoSize=true,Text=S(first,"preview"),ForeColor=Muted,Padding=new Padding(0,0,0,10)};
+    layout.Controls.Add(summary,0,0);
+    dialog.Resize+=delegate{summary.MaximumSize=new Size(Math.Max(200,layout.ClientSize.Width-44),0);};
+    summary.MaximumSize=new Size(dialog.ClientSize.Width-44,0);
+    var paper=new Panel{Dock=DockStyle.Fill,BackColor=FrameColor};
+    var picture=new PictureBox{Dock=DockStyle.Fill,BackColor=FrameColor,SizeMode=PictureBoxSizeMode.Zoom,AccessibleName="PDF 페이지"};
+    paper.Controls.Add(picture);layout.Controls.Add(paper,0,1);
+    var nav=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,WrapContents=true,Padding=new Padding(0,6,0,0)};
+    layout.Controls.Add(nav,0,2);
+    var prev=new BrandButton("이전 쪽",false,false);
+    var status=new Label{AutoSize=true,ForeColor=Muted,Padding=new Padding(6,12,6,0)};
+    var next=new BrandButton("다음 쪽",false,false);
+    var zoom=new BrandButton("확대",false,false){Width=108};
+    var close=new BrandButton("닫기",false,false){DialogResult=DialogResult.Cancel};
+    var approve=new BrandButton("승인 후 저장",true,false){DialogResult=DialogResult.OK};
+    nav.Controls.AddRange(new Control[]{prev,status,next,zoom,close,approve});
+    dialog.CancelButton=close;
+    int current=1;bool enlarged=false;
+    Action fit=delegate{
+     paper.AutoScroll=enlarged;paper.AutoScrollPosition=Point.Empty;
+     picture.Dock=enlarged?DockStyle.None:DockStyle.Fill;picture.Location=Point.Empty;
+     picture.SizeMode=enlarged?PictureBoxSizeMode.Normal:PictureBoxSizeMode.Zoom;
+     if(enlarged&&picture.Image!=null)picture.Size=picture.Image.Size;
+     zoom.Text=zoom.AccessibleName=enlarged?"화면에 맞춤":"확대";
+    };
+    zoom.Click+=delegate{enlarged=!enlarged;fit();};
+    Action<Dictionary<string,object>> display=delegate(Dictionary<string,object> result){
+     byte[] bytes=Convert.FromBase64String(S(result,"image"));
+     using(var stream=new MemoryStream(bytes))
+     using(var image=Image.FromStream(stream)){
+      var previous=picture.Image;picture.Image=new Bitmap(image);if(previous!=null)previous.Dispose();
+     }
+     fit();
+     status.Text=current+" / "+pages+"쪽";
+     prev.Enabled=current>1;next.Enabled=current<pages;approve.Enabled=true;
+    };
+    Func<int,Task> turn=async delegate(int requested){
+     prev.Enabled=false;next.Enabled=false;approve.Enabled=false;status.Text="페이지 불러오는 중";
+     try{
+      var result=await Api(D("op","phone-preview","id",id,"page",requested));
+      if(dialog.IsDisposed||!dialog.Visible)return;
+      if(S(result,"id")!=id||S(result,"nonce")!=nonce||S(result,"pages")!=pages.ToString()||S(result,"page")!=requested.ToString())
+       throw new IOException("미리보기가 바뀌었습니다.");
+      current=requested;display(result);
+     }catch{if(!dialog.IsDisposed)status.Text="페이지를 불러오지 못했습니다. 닫고 다시 확인하세요.";}
+    };
+    prev.Click+=async delegate{await turn(current-1);};
+    next.Click+=async delegate{await turn(current+1);};
+    DialogResult decision;
+    try{display(first);decision=dialog.ShowDialog(this);}
+    finally{if(picture.Image!=null){picture.Image.Dispose();picture.Image=null;}}
+    if(decision==DialogResult.OK)await Job("action","desk-approve","id",id,"nonce",nonce);
+   }
+  }
   void RenderWork(Dictionary<string,object> v){if(screen!="work"||closing)return;string sig=json.Serialize(v);if(sig==signature)return;signature=sig;while(items.Controls.Count>0)items.Controls[0].Dispose();
-   foreach(var j in Rows(v,"jobs")){var jobCard=Card(items);string id=S(j,"id"),st=S(j,"status");if(st=="approval"){LabelAt(jobCard,"저장 전 미리보기");var text=Field(jobCard);text.Multiline=true;text.ReadOnly=true;text.ScrollBars=ScrollBars.Vertical;text.Height=170;text.Width=480;text.Text=S(j,"preview");ButtonAt(jobCard,"승인 후 저장",()=>Job("action","desk-approve","id",id,"nonce",S(j,"nonce")));}
+   foreach(var j in Rows(v,"jobs")){var jobCard=Card(items);string id=S(j,"id"),st=S(j,"status");if(st=="approval"){LabelAt(jobCard,"저장 전 미리보기");if(S(j,"pdfPages")!=""){Caption(jobCard,"PDF "+S(j,"pdfPages")+"쪽 · 페이지를 보고 승인하세요.");ButtonAt(jobCard,"PDF 내용 보기",()=>ShowPdfPreview(id,S(j,"nonce")));}else{var text=Field(jobCard);text.Multiline=true;text.ReadOnly=true;text.ScrollBars=ScrollBars.Vertical;text.Height=170;text.Width=480;text.Text=S(j,"preview");ButtonAt(jobCard,"승인 후 저장",()=>Job("action","desk-approve","id",id,"nonce",S(j,"nonce")));}}
    else if(st=="question"){LabelAt(jobCard,"작성할 내용을 입력하세요.");var t=Field(jobCard);ButtonAt(jobCard,"내용 확인",()=>Job("action","desk-answer","id",id,"answer",t.Text));}
    else if(st=="choose"){LabelAt(jobCard,"사용할 자료를 선택하세요.");var choices=new CheckedListBox{Width=500,Height=90,HorizontalScrollbar=true,CheckOnClick=true};var rows=Rows(j,"choices").ToArray();foreach(var c in rows)choices.Items.Add(S(c,"name")+"  ·  "+S(c,"modified")+"  ·  "+S(c,"location"));jobCard.Controls.Add(choices);ButtonAt(jobCard,"선택 확인",()=>Job("action","desk-select","id",id,"ids",choices.CheckedIndices.Cast<int>().Select(i=>S(rows[i],"id")).ToArray()));}
    else if(st=="failed"||st=="saving"){LabelAt(jobCard,st=="failed"?S(j,"error"):"저장 확인 중");ButtonAt(jobCard,"다시 시도",()=>Job("action","desk-retry","id",id));}else LabelAt(jobCard,"자료 읽는 중");if(st!="saving")ButtonAt(jobCard,"중단",()=>Job("action","desk-cancel","id",id));}

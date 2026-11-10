@@ -257,7 +257,7 @@ try {
   await writeFile(resumePath, reportBytes);
   const originalFile = await send('바탕화면에 이력서파일 보내줘');
   await waitFor(originalFile, 'approval');
-  const sendPreview = await mobile({ op: 'phone-preview', id: originalFile });
+  const sendPreview = await mobile({ op: 'phone-preview', id: originalFile, page: 1 });
   assert.match(sendPreview.preview, /이력서\.pdf/);
   assert.equal(sendPreview.format, 'pdf');
   assert(!(await mobile({ op: 'state' })).files.some(file => file.id === originalFile));
@@ -297,7 +297,7 @@ try {
   await rename(secondResume, path.join(known.desktop, '시나리오 메모.txt'));
   const partialResume = await send('이력서 파일 보내줘');
   await waitFor(partialResume, 'approval');
-  const partialPreview = await mobile({ op: 'phone-preview', id: partialResume });
+  const partialPreview = await mobile({ op: 'phone-preview', id: partialResume, page: 1 });
   assert.equal(partialPreview.preview.split('\n')[0], '보낼 원본 파일 · 2026 이력서.pdf');
   assert.match(partialPreview.preview, /검색 깊이 한도 안에서 찾은 파일/);
   assert(!(await mobile({ op: 'state' })).files.some(file => file.id === partialResume));
@@ -326,7 +326,7 @@ try {
   ]) {
     const id = await send(request);
     await waitFor(id, 'approval');
-    const preview = await mobile({ op: 'phone-preview', id });
+    const preview = await mobile({ op: 'phone-preview', id, page: 1 });
     assert.equal(preview.preview.split('\n')[0], '보낼 원본 파일 · ' + expectedName);
     assert(!(await mobile({ op: 'state' })).files.some(file => file.id === id));
     await mobile({ op: 'phone-approve', id, nonce: preview.nonce, confirm: true });
@@ -336,10 +336,14 @@ try {
   await pc({ op: 'directory', kind: 'exclude', path: deepBranch });
 
   execFileSync(config.python, ['-I', '-B', '-c', `
-import sys
+import io, random, sys
 sys.path.insert(0, sys.argv[1])
 from docx import Document
+from PIL import Image
 from reportlab.pdfgen import canvas
+from reportlab.lib.utils import ImageReader
+from pypdf import PdfWriter
+from pypdf.annotations import FreeText
 doc = Document()
 doc.add_paragraph('Example document')
 doc.sections[0].header.paragraphs[0].text = 'password: fixture-only-secret'
@@ -349,13 +353,115 @@ pdf = canvas.Canvas(sys.argv[3])
 pdf.setTitle('password: fixture-only-secret')
 pdf.drawString(72, 720, 'Example document')
 pdf.save()
-`, path.join(bundle, 'runtime/office'), path.join(known.desktop, '숨은 속성.docx'), path.join(known.desktop, '숨은 속성.pdf')]);
+portrait = canvas.Canvas(sys.argv[4])
+portrait.drawString(72, 720, 'Sample resume - first page')
+portrait.drawImage(ImageReader(Image.new('RGB', (180, 200), (62, 124, 165))), 72, 500)
+portrait.showPage()
+portrait.drawString(72, 720, 'Sample resume - second page')
+photo = io.BytesIO()
+Image.new('RGB', (150, 200), (171, 113, 42)).save(photo, format='JPEG')
+photo.seek(0)
+portrait.drawImage(ImageReader(photo), 72, 500)
+portrait.save()
+writer = PdfWriter()
+writer.append(sys.argv[4])
+writer.add_attachment('fixture.txt', b'fixture')
+writer.write(sys.argv[5])
+annotated = PdfWriter(clone_from=sys.argv[4])
+annotated.add_annotation(0, FreeText(text='Visible review note', rect=(65, 300, 300, 355),
+    font_size='18pt', font_color='102060', background_color='fff0b0'))
+annotated.write(sys.argv[6])
+for name,first in [(sys.argv[7],True),(sys.argv[8],False)]:
+    wide = canvas.Canvas(name,pagesize=(14401,400) if first else (400,400))
+    wide.drawString(72,300,'First page')
+    if not first:
+        wide.showPage()
+        wide.setPageSize((14401,400))
+        wide.drawString(72,300,'Oversize second page')
+    wide.save()
+dense = canvas.Canvas(sys.argv[9],pagesize=(600,600))
+dense.drawString(60,550,'First page')
+dense.showPage()
+tile = ImageReader(Image.frombytes('RGB',(120,120),random.Random(45).randbytes(120*120*3)))
+for x in range(0,600,40):
+    for y in range(0,600,40):
+        dense.drawImage(tile,x,y,40,40)
+dense.save()
+`, path.join(bundle, 'runtime/office'), path.join(known.desktop, '숨은 속성.docx'), path.join(known.desktop, '숨은 속성.pdf'),
+  path.join(known.desktop, '사진 이력서.pdf'), path.join(known.desktop, '첨부 이력서.pdf'), path.join(known.desktop, '주석 이력서.pdf'),
+  path.join(known.desktop, '첫 쪽 한도.pdf'), path.join(known.desktop, '둘째 쪽 한도.pdf'), path.join(known.desktop, '고밀도 미리보기.pdf')]);
   for (const [extension, expected] of [['docx', /원본 전송을 지원하지/], ['pdf', /인증 정보/]]) {
     const blocked = await send(`바탕화면에 "숨은 속성.${extension}" 파일 보내줘`);
     assert.match((await waitFor(blocked, 'failed')).error, expected);
     assert(!(await mobile({ op: 'state' })).files.some(file => file.id === blocked));
   }
   console.log('Office originals and PDF metadata credentials are blocked before approval');
+  const withAttachment = await send('바탕화면에서 "첨부 이력서.pdf" 파일 보내줘');
+  assert.match((await waitFor(withAttachment, 'failed')).error, /첨부.*원본으로 보낼 수 없습니다/);
+  for (const name of ['첫 쪽 한도.pdf', '둘째 쪽 한도.pdf']) {
+    const tooLarge = await send(`바탕화면에서 "${name}" 파일 보내줘`);
+    const failed = await waitFor(tooLarge, 'failed');
+    assert.match(failed.error, /PDF 페이지 크기가 미리보기 한도/);
+    assert.equal(failed.nonce, null);
+    assert(!(await mobile({op:'state'})).files.some(file => file.id === tooLarge));
+    await mobile({op:'phone-preview',id:tooLarge,page:1},409);
+  }
+
+  const photoJob = await send('바탕화면에서 "사진 이력서.pdf" 파일 보내줘');
+  await waitFor(photoJob, 'approval');
+  const phonePage = page => ({op:'phone-preview',id:photoJob,page});
+  await other(phonePage(1), 403);
+  await mobile({op:'phone-preview',id:photoJob}, 409);
+  await mobile(phonePage(3), 400);
+  const photoFirst = await mobile(phonePage(1));
+  const photoSecond = await mobile(phonePage(2));
+  const localFirst = await pc(phonePage(1));
+  assert.equal(photoFirst.pages, 2);
+  assert.equal(photoFirst.page, 1);
+  assert.equal(photoSecond.page, 2);
+  assert.equal(photoFirst.nonce, photoSecond.nonce);
+  assert.match(photoFirst.preview, /이미지 속 글자/);
+  assert.deepEqual(localFirst, photoFirst);
+  assert.deepEqual(Buffer.from(photoFirst.image,'base64').subarray(0,3), Buffer.from([255,216,255]));
+  assert.notEqual(photoFirst.image, photoSecond.image);
+  assert(!(await mobile({op:'state'})).files.some(file => file.id === photoJob));
+  await mobile({op:'phone-approve',id:photoJob,nonce:photoFirst.nonce,confirm:true});
+  assert.deepEqual(await receive(photoJob), await readFile(path.join(known.desktop,'사진 이력서.pdf')));
+  const localPhotoJob = randomUUID();
+  await pc({op:'job',action:'desk-start',id:localPhotoJob,text:'바탕화면에서 "사진 이력서.pdf" 파일 보내줘'});
+  await waitFor(localPhotoJob, 'approval');
+  await mobile({op:'phone-preview',id:localPhotoJob,page:1},403);
+  const localPhoto = await pc({op:'phone-preview',id:localPhotoJob,page:2});
+  assert.equal(localPhoto.image,photoSecond.image);
+  await pc({op:'job',action:'desk-approve',id:localPhotoJob,nonce:localPhoto.nonce});
+  assert.deepEqual(await receive(localPhotoJob),await readFile(path.join(known.desktop,'사진 이력서.pdf')));
+  console.log('Two PDF pages are visible on both clients before approval; the original matches after delivery');
+  const annotated = await send('바탕화면에서 "주석 이력서.pdf" 파일 보내줘');
+  await waitFor(annotated,'approval');
+  const annotationPreview = {op:'phone-preview',id:annotated,page:1};
+  const annotatedPage = await mobile(annotationPreview);
+  assert.notEqual(annotatedPage.image,photoFirst.image);
+  assert.equal((await pc(annotationPreview)).image,annotatedPage.image);
+  assert.equal((await mobile({...annotationPreview,page:2})).image,photoSecond.image);
+  await mobile({op:'phone-approve',id:annotated,nonce:annotatedPage.nonce,confirm:true});
+  assert.deepEqual(await receive(annotated),await readFile(path.join(known.desktop,'주석 이력서.pdf')));
+  console.log('Visible annotations appear in both previews; oversize pages fail before approval');
+  const denseJob = await send('바탕화면에서 "고밀도 미리보기.pdf" 파일 보내줘');
+  await waitFor(denseJob,'approval');
+  const densePage = {op:'phone-preview',id:denseJob,page:2};
+  const denseFirst = await mobile({...densePage,page:1});
+  const densePreview = await mobile(densePage);
+  assert.equal(densePreview.page,2);
+  assert.equal(densePreview.pages,2);
+  assert.equal(densePreview.nonce,denseFirst.nonce);
+  const denseJpeg = Buffer.from(densePreview.image,'base64');
+  assert.deepEqual(denseJpeg.subarray(0,3),Buffer.from([255,216,255]));
+  assert(denseJpeg.length<=1_500_000);
+  assert.equal((await pc(densePage)).image,densePreview.image);
+  assert(!(await mobile({op:'state'})).files.some(file => file.id === denseJob));
+  await mobile({op:'phone-approve',id:denseJob,nonce:densePreview.nonce,confirm:true});
+  assert.deepEqual(await receive(denseJob),await readFile(path.join(known.desktop,'고밀도 미리보기.pdf')));
+  console.log('High-density second page is within the preview byte limit without changing the approved original');
   await pc({ op: 'revoke', device: otherPhone.device });
   await other(preview, 403);
   const pcOnly = randomUUID();
