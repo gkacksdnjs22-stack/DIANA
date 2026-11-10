@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "android": {
-    "version": "0.8.0-dev-paired7",
-    "versionCode": 80007,
+    "version": "0.8.0-dev-paired8",
+    "versionCode": 80008,
     "minSdk": 26,
     "variant": "paired-debug",
-    "path": "/downloads/DIANA-Android-0.8.0-dev-paired7.apk",
-    "bytes": 4394422,
-    "sha256": "32e2a3ac4cbdba11fcd9a5503acbc4ab1dc3aacb8f265417d5dd9d96b13fe215",
-    "sourceCommit": "9e1f3ba33efdd20f3505fde021abba5efbe0a972",
+    "path": "/downloads/DIANA-Android-0.8.0-dev-paired8.apk",
+    "bytes": 4397246,
+    "sha256": "ae591e979287a51d689ae6b27079043ce105704937d3675ee4ea0eef436de09b",
+    "sourceCommit": "665b1ed9afe5477c641202bfa61bd53e94cf0848",
     "sourceFiles": [
       {
         "path": "android-app/app/build.gradle",
@@ -68,7 +68,7 @@
       },
       {
         "path": "android-app/app/src/main/java/kr/nightdesk/phone/PairedActivity.java",
-        "sha256": "adf2939a866f2fb0cd7c5a8d91544249f70200d2015a77605861f0da419be02d"
+        "sha256": "831e82049ce6b7ede97cfe1000f37c8391c3fddbd15c274db6582a7ad7d65659"
       },
       {
         "path": "android-app/app/src/main/java/kr/nightdesk/phone/PairedFiles.java",
@@ -276,18 +276,18 @@
       },
       {
         "path": "financial-desktop/version.json",
-        "sha256": "e9ccfc2e61630182d2a00e16cc45657317ea1217ceac264baa4bf906abdf38f3"
+        "sha256": "7de92fb190a74a856e8a119010f25707b3830ed00d29cc3281ce3653d0dce128"
       }
     ]
   },
   "windows": {
-    "version": "0.8.0-dev-paired7",
-    "numericVersion": "0.8.0.7",
+    "version": "0.8.0-dev-paired8",
+    "numericVersion": "0.8.0.8",
     "platform": "win-x64",
-    "path": "/downloads/DIANA-PC-0.8.0-dev-paired7-win-x64.zip",
-    "bytes": 77334127,
-    "sha256": "fee855a4f60971d267159002c5405279e9d3d198d6105ca1654f1c6f0d0d2fc0",
-    "sourceCommit": "9e1f3ba33efdd20f3505fde021abba5efbe0a972",
+    "path": "/downloads/DIANA-PC-0.8.0-dev-paired8-win-x64.zip",
+    "bytes": 81196821,
+    "sha256": "1bc7757cbc84d495244aca0b0a12be9016f43c413112de5d379fabef5ff3ee3b",
+    "sourceCommit": "665b1ed9afe5477c641202bfa61bd53e94cf0848",
     "crlfBuildInputs": [
       "personal-ai/documents/parser.mjs",
       "personal-ai/documents/worker.mjs",
