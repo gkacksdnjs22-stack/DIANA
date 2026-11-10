@@ -51,8 +51,85 @@ def extract(raw,ext):
     if not text.strip() or not re.search(r'\w',text) or re.search('[\x00-\x08\x0b\x0c\x0e-\x1f]',text): fail('읽을 수 있는 본문이 없습니다. 이미지 문서는 지원하지 않습니다.')
     return text if ext in ('txt','md','json','csv','tsv') else text.strip()
 def words(s): return set(re.findall(r'[가-힣A-Za-z0-9]{2,}',s.lower()))
+def inspect_original_pdf(raw):
+    from pypdf import PdfReader
+    from pypdf.generic import ArrayObject, ByteStringObject, DictionaryObject, IndirectObject, StreamObject
+    unsupported='첨부나 이미지 등 검사할 수 없는 요소가 있는 PDF는 원본으로 보낼 수 없습니다. 출력 형식을 지정해 변환해 주세요.'
+    if not raw.startswith(b'%PDF-') or not re.search(rb'%%EOF\s*$',raw) or len(re.findall(rb'(?m)^startxref\s*$',raw))!=1:
+        fail(unsupported)
+    blocked={'/AcroForm','/AF','/EF','/EmbeddedFile','/EmbeddedFiles','/Filespec','/Image','/JavaScript','/JS',
+             '/Launch','/OpenAction','/Prev','/RichMedia','/Thumb','/XFA'}
+    filters={'/FlateDecode','/ASCIIHexDecode','/ASCII85Decode','/RunLengthDecode'}
+    parts=[]
+    remaining=1_900_000
+    def add(text):
+        nonlocal remaining
+        remaining-=len(text.encode('utf-8'))+1
+        if remaining<0:fail('PDF 원본 검사 분량 한도를 넘었습니다. 출력 형식을 지정해 변환해 주세요.')
+        parts.append(text)
+    def scan_bytes(data):
+        add(data.decode('latin-1'))
+        if data.startswith((b'\xff\xfe',b'\xfe\xff')):add(data.decode('utf-16'))
+    try:
+        pdf=PdfReader(io.BytesIO(raw),strict=True)
+        if pdf.is_encrypted or len(pdf.pages)>120:fail(unsupported)
+        indexed={(number,generation) for generation,entries in pdf.xref.items() for number in entries
+                 if number and not pdf.xref_free_entry.get(generation,{}).get(number)}
+        indexed.update((number,0) for number in pdf.xref_objStm)
+        for match in re.finditer(rb'(?<!\S)(\d+)\s+(\d+)\s+obj(?=\s)',raw):
+            number,generation=int(match[1]),int(match[2])
+            if (number,generation) not in indexed or pdf.xref.get(generation,{}).get(number)!=match.start(1):
+                fail(unsupported)
+        seen=set()
+        def visit(obj):
+            if isinstance(obj,IndirectObject):
+                key=(obj.idnum,obj.generation)
+                if key in seen:return
+                if key not in indexed:fail(unsupported)
+                seen.add(key)
+                visit(obj.get_object())
+            elif isinstance(obj,DictionaryObject):
+                for key,value in obj.items():
+                    if key in blocked:fail(unsupported)
+                    resolved=value.get_object() if isinstance(value,IndirectObject) else value
+                    if isinstance(resolved,str):add(key.lstrip('/')+': '+resolved)
+                    visit(value)
+                if isinstance(obj,StreamObject):
+                    active_filters=obj.get('/Filter',[])
+                    if isinstance(active_filters,str):active_filters=[active_filters]
+                    if '/F' in obj or any(value not in filters for value in active_filters):fail(unsupported)
+                    data=obj.get_data()
+                    if re.search(rb'(?<!\S)BI(?=\s)',data):fail(unsupported)
+                    scan_bytes(data)
+                    if obj.get('/Type')=='/Metadata' or obj.get('/Subtype')=='/XML':
+                        xml=data.decode('utf-16' if data.startswith((b'\xff\xfe',b'\xfe\xff')) else 'utf-8-sig')
+                        if re.search(r'<!DOCTYPE|<!ENTITY',xml,re.I):fail(unsupported)
+                        for element in ET.fromstring(xml).iter():
+                            add(partname(element.tag)+': '+''.join(element.itertext()))
+                            for key,value in element.attrib.items():add(partname(key)+': '+value)
+            elif isinstance(obj,ArrayObject):
+                for value in obj:visit(value)
+            elif isinstance(obj,str):
+                if obj in blocked:fail(unsupported)
+                add(obj)
+            elif isinstance(obj,ByteStringObject):scan_bytes(obj)
+        visit(pdf.trailer)
+        for number,generation in sorted(indexed):visit(IndirectObject(number,generation,pdf))
+        scan_bytes(raw)
+        has_text=False
+        for page in pdf.pages:
+            text=page.extract_text() or ''
+            has_text=has_text or bool(re.search(r'\w',text))
+            add(text)
+        if not has_text:fail(unsupported)
+    except ValueError:raise
+    except Exception:fail(unsupported)
+    return {'preview':'\n'.join(parts)}
+
 def process(req):
-    op=req['kind']; fmt=req['format']; docs=[]
+    op=req['kind']
+    if op=='inspect-original-pdf':return inspect_original_pdf(base64.b64decode(req['data'],validate=True))
+    fmt=req['format']; docs=[]
     for f in req.get('docs',[]):
         docs.append((f['name'],f['decoded'] if 'decoded' in f else extract(base64.b64decode(f['data'],validate=True),f['name'].rsplit('.',1)[-1].lower())))
     plan=build_plan(op,req.get('title'),docs,req.get('request',''),req.get('body',''),req.get('change'))

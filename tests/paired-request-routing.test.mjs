@@ -61,3 +61,21 @@ test('sending a named original keeps the file query inside the named folder', ()
   }
   assert.equal(route('바탕화면에 있는 이력서를 요약해서 보내줘').kind, 'summary');
 });
+
+test('a specified delivery format is separate from the source name', () => {
+  const roots = [{ label: '바탕화면', path: 'desktop' }];
+  for (const [request, term] of [
+    ['바탕화면에 이력서를 TXT로 보내줘', '이력서'],
+    ['바탕화면에 있는 "샘플 이력서.pdf"를 TXT로 휴대폰으로 보내 주세요', '샘플 이력서.pdf'],
+  ]) {
+    assert.equal(route(request).kind, 'convert');
+    assert.equal(route(request).format, 'txt');
+    assert.deepEqual(sourceQuery(scope(roots, request).query).terms, [term]);
+  }
+});
+
+test('forwarding the latest result is distinct from searching for a named file', () => {
+  assert.equal(route('결과를 전달해줘').recentResult, true);
+  assert.equal(route('최근 결과를 TXT로 보내줘').recentResult, true);
+  assert.equal(route('결과.pdf를 전달해줘').recentResult, false);
+});

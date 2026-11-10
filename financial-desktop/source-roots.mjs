@@ -100,6 +100,10 @@ function sourceName(term){
   .replace(/^["“]|["”]$/gu,'').trim();
 }
 export const fileSendSuffix=/(?:보내|전송해|전달해|공유해)\s*(?:줘요?|주세요|주십시오)\s*[.!]?\s*$/u;
+export const fileSendFormatSuffix=/(?:^|\s)(pptx?|docx?|json|txt|md|pdf|hwp[x]?|xlsx?|html|csv|png|jpe?g|rtf|odt|pages|keynote|텍스트|마크다운)\s*(?:으로|로)\s*$/iu;
+export function fileSendPrefix(text){
+ return text.replace(fileSendSuffix,'').trim().replace(/\s+(?:내\s+)?(?:휴대폰|폰|모바일)(?:으로|로|에)$/u,'').trim();
+}
 export function sourceQuery(text){
  // Protect file names before looking for operation verbs inside the surrounding request.
  const literals=[];
@@ -109,8 +113,8 @@ export function sourceQuery(text){
  const reportStart=reportOutputStart(masked);
  const sourceClause=reportStart===null?masked:masked.slice(0,reportStart)
   .replace(/((?:자료|파일|문서)(?:들)?|\u0002)(?:으로|로)\s*$/u,'$1');
- let source=sourceClause.replace(fileSendSuffix,'').split(/\s*(?:(?:요약|비교|종합)(?=해|하|한|할|해서|하여|$)|읽고|읽어|읽어서|보고(?=\s|$)|찾아|찾기|정리해|정리한|변환해|바꿔|수정해|검토해)/u)[0].trim();
- if(fileSendSuffix.test(masked))source=source.replace(/\s+(?:내\s+)?(?:휴대폰|폰|모바일)(?:으로|로|에)$/u,'').trim();
+ const inputClause=fileSendSuffix.test(sourceClause)?fileSendPrefix(sourceClause).replace(fileSendFormatSuffix,''):sourceClause;
+ let source=inputClause.split(/\s*(?:(?:요약|비교|종합)(?=해|하|한|할|해서|하여|$)|읽고|읽어|읽어서|보고(?=\s|$)|찾아|찾기|정리해|정리한|변환해|바꿔|수정해|검토해)/u)[0].trim();
  source=source.replace(/^(?:첨부한|첨부된|선택한)\s+/u,'').replace(/\s+(?:TXT|MD|JSON|PPTX?|DOCX|텍스트|마크다운)(?:로|으로).*$/iu,'');
  const content=source.match(/(?:["“]([^"”]+)["”]|([가-힣A-Za-z0-9_-]+?))(?:이|가|을|를)?\s*(?:들어간|포함된|언급된|담긴)/u);
  if(content)source=source.replace(content[0],'');
