@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { access, copyFile, mkdir, readdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -100,7 +101,8 @@ try {
   }
   const report = await send('다운로드에서 1~4분기 자료를 찾아 핵심 수치와 변화를 정리한 보고서를 작성해줘');
   await approve(report, preview => { assert.match(preview, /40/); assert.match(preview, /4분기 관측/); });
-  assert.equal((await receive(report)).subarray(0, 5).toString(), '%PDF-');
+  const reportBytes = await receive(report);
+  assert.equal(reportBytes.subarray(0, 5).toString(), '%PDF-');
   console.log('Six-digit pairing and report: discovery, preview, owner approval, download and receipt');
 
   const sourcePath = path.join(known.desktop, '현장 기록.txt');
@@ -249,6 +251,60 @@ try {
     await writeFile(sourcePath, original);
   }
   console.log('Phone and PC recover the record for an already written file without rewriting it');
+  const resumePath = path.join(known.desktop, '샘플 이력서.pdf');
+  await writeFile(resumePath, reportBytes);
+  const originalFile = await send('바탕화면에 이력서 파일 보내줘');
+  await waitFor(originalFile, 'approval');
+  const sendPreview = await mobile({ op: 'phone-preview', id: originalFile });
+  assert.match(sendPreview.preview, /샘플 이력서\.pdf/);
+  assert.equal(sendPreview.format, 'pdf');
+  assert(!(await mobile({ op: 'state' })).files.some(file => file.id === originalFile));
+  await mobile({ op: 'phone-approve', id: originalFile, nonce: sendPreview.nonce, confirm: true });
+  assert.deepEqual(await receive(originalFile), reportBytes);
+  assert.deepEqual(await readFile(resumePath), reportBytes);
+  const unnamed = await send('바탕화면에 파일 보내줘');
+  assert.match((await waitFor(unnamed, 'failed')).error, /보낼 파일 이름/);
+  assert(!(await mobile({ op: 'state' })).files.some(file => file.id === unnamed));
+  console.log('Named Desktop PDF is sent byte-for-byte only after approval');
+  const asText = await send('바탕화면에 이력서를 TXT로 보내줘');
+  await waitFor(asText, 'approval');
+  const textPreview = await mobile({ op: 'phone-preview', id: asText });
+  assert.equal(textPreview.format, 'txt');
+  await mobile({ op: 'phone-approve', id: asText, nonce: textPreview.nonce, confirm: true });
+  const textBytes = await receive(asText);
+  assert.notEqual(textBytes.subarray(0, 5).toString(), '%PDF-');
+  assert(textBytes.toString('utf8').trim());
+
+  const forwardId = randomUUID();
+  const forwarded = await mobile({ op: 'job', action: 'desk-start', id: forwardId, text: '결과를 전달해줘' });
+  assert.match(forwarded.notice, /연결한 화면/);
+  assert.deepEqual(Buffer.from((await mobile({ op: 'file', id: asText })).data, 'base64'), textBytes);
+  const forwardedState = await mobile({ op: 'state' });
+  assert(!forwardedState.files.some(file => file.id === forwardId));
+  assert(!forwardedState.jobs.some(job => job.id === forwardId));
+  console.log('Explicit TXT delivery and forwarding the latest result');
+
+  execFileSync(config.python, ['-I', '-B', '-c', `
+import sys
+sys.path.insert(0, sys.argv[1])
+from docx import Document
+from reportlab.pdfgen import canvas
+doc = Document()
+doc.add_paragraph('Example document')
+doc.sections[0].header.paragraphs[0].text = 'password: fixture-only-secret'
+doc.core_properties.comments = 'password: fixture-only-secret'
+doc.save(sys.argv[2])
+pdf = canvas.Canvas(sys.argv[3])
+pdf.setTitle('password: fixture-only-secret')
+pdf.drawString(72, 720, 'Example document')
+pdf.save()
+`, path.join(bundle, 'runtime/office'), path.join(known.desktop, '숨은 속성.docx'), path.join(known.desktop, '숨은 속성.pdf')]);
+  for (const [extension, expected] of [['docx', /원본 전송을 지원하지/], ['pdf', /인증 정보/]]) {
+    const blocked = await send(`바탕화면에 "숨은 속성.${extension}" 파일 보내줘`);
+    assert.match((await waitFor(blocked, 'failed')).error, expected);
+    assert(!(await mobile({ op: 'state' })).files.some(file => file.id === blocked));
+  }
+  console.log('Office originals and PDF metadata credentials are blocked before approval');
   await pc({ op: 'revoke', device: otherPhone.device });
   await other(preview, 403);
   const pcOnly = randomUUID();
