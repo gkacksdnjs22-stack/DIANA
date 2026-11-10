@@ -603,6 +603,48 @@ dense.save()
   assert.match((await receive(mixed)).toString('utf8'),/317개/);
   console.log('A conversion accepts one source and labels an attachment without an internal path');
 
+  const summaryResume = '가상 이력서의 프로젝트는 27개입니다.';
+  const supplement = '보충 메모에 기록된 발표는 63회입니다.';
+  await writeFile(path.join(known.downloads,'이력서.pdf'),reportBytes);
+  await writeFile(path.join(known.downloads,'이력서.txt'),summaryResume);
+  await writeFile(path.join(known.downloads,'보충 메모.txt'),supplement);
+
+  const resumeSummary = await send('다운로드에서 이력서를 요약해줘');
+  assert.equal((await waitFor(resumeSummary,'choose')).single,true);
+  const summaryOptions = {op:'phone-preview',id:resumeSummary,step:'choose'};
+  const summaryChoice = await mobile(summaryOptions);
+  assert.equal(summaryChoice.single,true);
+  assert.deepEqual(summaryChoice.choices.map(file=>file.name).sort(),['이력서.pdf','이력서.txt']);
+  const submitSummary = {op:'phone-approve',id:resumeSummary,step:'choose',nonce:summaryChoice.nonce,confirm:true};
+  await mobile({...submitSummary,ids:summaryChoice.choices.map(file=>file.id)},400);
+  assert.deepEqual(await mobile(summaryOptions),summaryChoice);
+  const summarySource = summaryChoice.choices.find(file=>file.name==='이력서.txt');
+  await mobile({...submitSummary,ids:[summarySource.id]});
+  await waitFor(resumeSummary,'approval');
+  const summaryPreview = await mobile({op:'phone-preview',id:resumeSummary});
+  assert.match(summaryPreview.preview,/27개/);
+  await mobile({op:'phone-approve',id:resumeSummary,nonce:summaryPreview.nonce,confirm:true});
+  assert.equal((await receive(resumeSummary)).subarray(0,5).toString(),'%PDF-');
+
+  const twoSources = await send('다운로드에서 이력서와 보충 메모를 요약해서 TXT로 만들어줘');
+  assert.equal((await waitFor(twoSources,'choose')).single,false);
+  const twoOptions = {op:'phone-preview',id:twoSources,step:'choose'};
+  const twoChoice = await mobile(twoOptions);
+  assert.equal(twoChoice.single,false);
+  const submitTwo = {op:'phone-approve',id:twoSources,step:'choose',nonce:twoChoice.nonce,confirm:true};
+  await mobile({...submitTwo,ids:twoChoice.choices.filter(file=>file.name.startsWith('이력서')).map(file=>file.id)},400);
+  assert.deepEqual(await mobile(twoOptions),twoChoice);
+  await mobile({...submitTwo,ids:twoChoice.choices.filter(file=>file.name.endsWith('.txt')).map(file=>file.id)});
+  await waitFor(twoSources,'approval');
+  const twoPreview = await mobile({op:'phone-preview',id:twoSources});
+  assert.match(twoPreview.preview,/27개/);
+  assert.match(twoPreview.preview,/63회/);
+  await mobile({op:'phone-approve',id:twoSources,nonce:twoPreview.nonce,confirm:true});
+  const twoBytes = (await receive(twoSources)).toString('utf8');
+  assert.match(twoBytes,/27개/);
+  assert.match(twoBytes,/63회/);
+  console.log('A one-source summary stays selectable after a rejected pair; a two-source summary accepts one file per group');
+
 } finally {
   await host?.close();
   await relay.close();
