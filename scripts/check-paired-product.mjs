@@ -293,6 +293,20 @@ try {
   const choice = await waitFor(ambiguousResume, 'choose');
   assert.deepEqual(choice.choices.map(file => file.name).sort(), ['이력서.pdf', '이력서.txt']);
 
+  await rename(resumePath, path.join(known.desktop, '2026 이력서.pdf'));
+  await rename(secondResume, path.join(known.desktop, '시나리오 메모.txt'));
+  const partialResume = await send('이력서 파일 보내줘');
+  await waitFor(partialResume, 'approval');
+  const partialPreview = await mobile({ op: 'phone-preview', id: partialResume });
+  assert.equal(partialPreview.preview.split('\n')[0], '보낼 원본 파일 · 2026 이력서.pdf');
+  assert.match(partialPreview.preview, /검색 깊이 한도 안에서 찾은 파일/);
+  assert(!(await mobile({ op: 'state' })).files.some(file => file.id === partialResume));
+  await mobile({ op: 'phone-approve', id: partialResume, nonce: partialPreview.nonce, confirm: true });
+  assert.deepEqual(await receive(partialResume), reportBytes);
+  const latestResume = await send('최근 이력서 파일 보내줘');
+  assert.match((await waitFor(latestResume, 'failed')).error, /깊이 한도/);
+  console.log('A named partial match remains available after the depth cap, but latest searches still require full coverage');
+
   const personnel = path.join(known.desktop, '인사');
   const downloadArchive = path.join(known.downloads, '보관');
   await mkdir(personnel);

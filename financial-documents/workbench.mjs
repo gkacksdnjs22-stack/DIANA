@@ -58,7 +58,7 @@ async resolveSources(s,j,selection,signal){
  if(attachmentOnly&&!all.length)throw Error('현재 요청에 지정한 첨부 자료가 없습니다.');
  if(!attachmentOnly&&(where.named||!all.length||!referent)){
   if(config){
-   const disk=await discover(config.roots,config.excluded,s.request,{signal,exactQuery:fileDelivery?q:undefined,canUseFile});
+   const disk=await discover(config.roots,config.excluded,s.request,{signal,exactQuery:fileDelivery?q:undefined,canUseFile,allowPartial:s.kind==='send'});
    all=where.named?disk:[...all,...disk];
   }
   else all=await this.list(s.request);
@@ -142,7 +142,9 @@ if(s.kind==='send'){
  requireThat(!containsSecret(inspection),'인증 정보가 포함된 파일은 보낼 수 없습니다.');
  s.format=format;
  s.title=path.parse(source.ref.name).name;
- preview='보낼 원본 파일 · '+source.ref.name+'\n'+source.size+'바이트\n승인하면 연결된 휴대폰에서 받을 수 있습니다.';
+ preview='보낼 원본 파일 · '+source.ref.name+'\n'+source.size+'바이트\n'
+  +(chosen[0].searchLimited?'검색 깊이 한도 안에서 찾은 파일입니다. 파일 이름을 확인해 주세요.\n':'')
+  +'승인하면 연결된 휴대폰에서 받을 수 있습니다.';
  raw=source.raw;
  hash=source.ref.hash;
  refs.push(source.ref);
