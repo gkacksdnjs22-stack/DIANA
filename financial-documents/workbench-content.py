@@ -1,5 +1,6 @@
 """Bounded, offline document extraction, comparison and Office output. JSON pipe only."""
 import sys, os, io, json, re, base64, hashlib, zipfile, collections, decimal, tempfile, subprocess
+from contextlib import closing
 from xml.etree import ElementTree as ET
 from pathlib import Path
 lib=Path(sys.executable).resolve().parents[1]/'office'
@@ -54,10 +55,10 @@ def words(s): return set(re.findall(r'[가-힣A-Za-z0-9]{2,}',s.lower()))
 def inspect_original_pdf(raw):
     from pypdf import PdfReader
     from pypdf.generic import ArrayObject, ByteStringObject, DictionaryObject, IndirectObject, StreamObject
-    unsupported='첨부나 이미지 등 검사할 수 없는 요소가 있는 PDF는 원본으로 보낼 수 없습니다. 출력 형식을 지정해 변환해 주세요.'
+    unsupported='첨부, 암호화 또는 검사할 수 없는 구조가 있는 PDF는 원본으로 보낼 수 없습니다.'
     if not raw.startswith(b'%PDF-') or not re.search(rb'%%EOF\s*$',raw) or len(re.findall(rb'(?m)^startxref\s*$',raw))!=1:
         fail(unsupported)
-    blocked={'/AcroForm','/AF','/EF','/EmbeddedFile','/EmbeddedFiles','/Filespec','/Image','/JavaScript','/JS',
+    blocked={'/AA','/AcroForm','/AF','/EF','/EmbeddedFile','/EmbeddedFiles','/Filespec','/JavaScript','/JS',
              '/Launch','/OpenAction','/Prev','/RichMedia','/Thumb','/XFA'}
     filters={'/FlateDecode','/ASCIIHexDecode','/ASCII85Decode','/RunLengthDecode'}
     parts=[]
@@ -72,7 +73,7 @@ def inspect_original_pdf(raw):
         if data.startswith((b'\xff\xfe',b'\xfe\xff')):add(data.decode('utf-16'))
     try:
         pdf=PdfReader(io.BytesIO(raw),strict=True)
-        if pdf.is_encrypted or len(pdf.pages)>120:fail(unsupported)
+        if pdf.is_encrypted or not 1<=len(pdf.pages)<=120:fail(unsupported)
         indexed={(number,generation) for generation,entries in pdf.xref.items() for number in entries
                  if number and not pdf.xref_free_entry.get(generation,{}).get(number)}
         indexed.update((number,0) for number in pdf.xref_objStm)
@@ -81,7 +82,9 @@ def inspect_original_pdf(raw):
             if (number,generation) not in indexed or pdf.xref.get(generation,{}).get(number)!=match.start(1):
                 fail(unsupported)
         seen=set()
+        has_images=False
         def visit(obj):
+            nonlocal has_images
             if isinstance(obj,IndirectObject):
                 key=(obj.idnum,obj.generation)
                 if key in seen:return
@@ -97,7 +100,13 @@ def inspect_original_pdf(raw):
                 if isinstance(obj,StreamObject):
                     active_filters=obj.get('/Filter',[])
                     if isinstance(active_filters,str):active_filters=[active_filters]
-                    if '/F' in obj or any(value not in filters for value in active_filters):fail(unsupported)
+                    image=obj.get('/Subtype')=='/Image'
+                    allowed_filters=filters|{'/DCTDecode'} if image else filters
+                    if '/F' in obj or any(value not in allowed_filters for value in active_filters):fail(unsupported)
+                    if image:
+                        has_images=True
+                        if '/DCTDecode' in active_filters:scan_bytes(obj.get_data())
+                        return
                     data=obj.get_data()
                     if re.search(rb'(?<!\S)BI(?=\s)',data):fail(unsupported)
                     scan_bytes(data)
@@ -121,14 +130,29 @@ def inspect_original_pdf(raw):
             text=page.extract_text() or ''
             has_text=has_text or bool(re.search(r'\w',text))
             add(text)
-        if not has_text:fail(unsupported)
+        if not has_text and not has_images:fail(unsupported)
     except ValueError:raise
     except Exception:fail(unsupported)
-    return {'preview':'\n'.join(parts)}
+    return {'preview':'\n'.join(parts),'pages':len(pdf.pages),'images':has_images}
+
+def render_pdf_preview(raw,page_number,expected_pages):
+    import pypdfium2 as pdfium
+    with pdfium.PdfDocument(raw) as pdf:
+        if len(pdf)!=expected_pages:fail('PDF 쪽수를 다시 확인해 주세요.')
+        with closing(pdf[page_number-1]) as page:
+            width,height=page.get_size()
+            if min(width,height)<=0 or not 1<=max(width,height)<=14400:fail('PDF 페이지 크기를 확인해 주세요.')
+            scale=min(3,1800/max(width,height))
+            with closing(page.render(scale=scale,may_draw_forms=False,draw_annots=False)) as bitmap:
+                out=io.BytesIO()
+                bitmap.to_pil().convert('RGB').save(out,format='JPEG',quality=85)
+                if out.tell()>1_500_000:fail('PDF 미리보기 크기 한도를 넘었습니다.')
+                return {'image':base64.b64encode(out.getvalue()).decode('ascii')}
 
 def process(req):
     op=req['kind']
     if op=='inspect-original-pdf':return inspect_original_pdf(base64.b64decode(req['data'],validate=True))
+    if op=='render-pdf-preview':return render_pdf_preview(base64.b64decode(req['data'],validate=True),req['page'],req['pages'])
     fmt=req['format']; docs=[]
     for f in req.get('docs',[]):
         docs.append((f['name'],f['decoded'] if 'decoded' in f else extract(base64.b64decode(f['data'],validate=True),f['name'].rsplit('.',1)[-1].lower())))

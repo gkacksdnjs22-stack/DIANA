@@ -35,6 +35,10 @@ public class PairedDesignTest {
   a.renderJob(mobile,new JSONObject().put("status","approval").put("canApprove",true));
   assertTrue(text(mobile,"미리보기"));
   assertFalse(text(mobile,"승인 후 저장"));
+  LinearLayout pdf=a.column();
+  a.renderJob(pdf,new JSONObject().put("status","approval").put("canApprove",true).put("pdfPages",2));
+  assertTrue(text(pdf,"PDF 내용 보기"));
+  assertFalse(text(pdf,"승인 후 저장"));
   LinearLayout saving=a.column();
   a.renderJob(saving,new JSONObject().put("status","saving"));
   assertFalse(text(saving,"저장 다시 시도"));
@@ -42,5 +46,30 @@ public class PairedDesignTest {
   a.renderJob(retry,new JSONObject().put("status","saving").put("canApprove",true));
   assertTrue(text(retry,"저장 다시 시도"));
   a.finish();
+ }
+ @Test public void pdfDialogDisplaysPageControlsAndBlocksNetworkLoads()throws Exception{
+  PairedActivity a=activity();
+  Bitmap bitmap=Bitmap.createBitmap(16,20,Bitmap.Config.ARGB_8888);
+  ByteArrayOutputStream bytes=new ByteArrayOutputStream();
+  assertTrue(bitmap.compress(Bitmap.CompressFormat.JPEG,85,bytes));bitmap.recycle();
+  JSONObject page=new JSONObject().put("page",1).put("pages",2)
+    .put("image",android.util.Base64.encodeToString(bytes.toByteArray(),android.util.Base64.NO_WRAP));
+  Class<?> type=Class.forName(PairedActivity.class.getName()+"$PdfPreview");
+  Constructor<?> constructor=type.getDeclaredConstructor(PairedActivity.class,String.class,String.class,String.class,boolean.class,JSONObject.class);
+  constructor.setAccessible(true);
+  Object preview=constructor.newInstance(a,"job","nonce","가상 PDF",false,page);
+  Method show=type.getDeclaredMethod("show");show.setAccessible(true);show.invoke(preview);
+  Field dialogField=type.getDeclaredField("dialog");dialogField.setAccessible(true);
+  android.app.AlertDialog dialog=(android.app.AlertDialog)dialogField.get(preview);
+  View content=dialog.getWindow().getDecorView();
+  assertTrue(text(content,"1 / 2쪽"));
+  assertTrue(text(content,"이전 쪽"));
+  assertTrue(text(content,"다음 쪽"));
+  assertTrue(text(content,"승인 후 저장"));
+  Field viewerField=type.getDeclaredField("viewer");viewerField.setAccessible(true);
+  android.webkit.WebView viewer=(android.webkit.WebView)viewerField.get(preview);
+  assertTrue(viewer.getSettings().getBlockNetworkLoads());
+  assertFalse(viewer.getSettings().getAllowFileAccess());
+  dialog.dismiss();a.finish();
  }
 }

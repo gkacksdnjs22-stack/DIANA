@@ -72,7 +72,7 @@ export async function start(cfg){
  if(op==='state'){
   const offset=Math.max(0,Math.floor(Number(b.offset)||0)),v=await w.view('owner',offset);
   const approvable=canApprove()?new Set(w.db.prepare("SELECT id FROM jobs WHERE status IN ('approval','saving') AND request_device=?").all(dev.id).map(row=>row.id)):new Set();
-  const jobs=pc?v.jobs:v.jobs.map(({id,status,error})=>({id,status,error,canApprove:approvable.has(id)&&!w.writing?.has(id)}));
+  const jobs=pc?v.jobs:v.jobs.map(({id,status,error,pdfPages})=>({id,status,error,canApprove:approvable.has(id)&&!w.writing?.has(id),pdfPages:approvable.has(id)?pdfPages:undefined}));
   const files=v.files.map(f=>({...f,
    location:pc?path.join(w.fileDir(f.id),w.db.prepare('SELECT physical FROM files WHERE id=?').get(f.id).physical):undefined,
    received:!!get('SELECT 1 FROM receipts WHERE device=? AND file=?',dev.id,f.id),
@@ -89,12 +89,26 @@ export async function start(cfg){
   answer={ok:true};
  }
  else if(op==='phone-preview'||op==='phone-approve'){
-  const authorize=()=>{if(!canApprove())deny('PC 설정에서 이 휴대폰의 저장 승인을 허용해 주세요.',403);};
+  const ownerPreview=pc&&op==='phone-preview';
+  const authorize=()=>{if(!ownerPreview&&!canApprove())deny('PC 설정에서 이 휴대폰의 저장 승인을 허용해 주세요.',403);};
   authorize();
-  const job=typeof b.id==='string'&&w.db.prepare('SELECT status,preview,nonce,spec FROM jobs WHERE id=? AND request_device=?').get(b.id,dev.id);
+  const loadJob=()=>typeof b.id==='string'&&w.db.prepare('SELECT status,preview,nonce,spec FROM jobs WHERE id=? AND (? OR request_device=?)').get(b.id,ownerPreview?1:0,dev.id);
+  const job=loadJob();
   if(!job)deny('이 휴대폰에서 요청한 작업만 확인할 수 있습니다.',403);
   if(!['approval','saving'].includes(job.status)||w.writing?.has(b.id))deny('현재 작업 상태를 다시 확인하세요.',409);
-  if(op==='phone-preview')answer={id:b.id,status:job.status,preview:job.preview,nonce:job.nonce,format:JSON.parse(job.spec).format};
+  if(op==='phone-preview'){
+   const spec=JSON.parse(job.spec);
+   answer={id:b.id,status:job.status,preview:job.preview,nonce:job.nonce,format:spec.format};
+   if(spec.pdfPages){
+    if(b.page===undefined)deny('PDF 페이지를 보려면 DIANA 앱을 최신 버전으로 업데이트하세요.',409);
+    if(!Number.isInteger(b.page)||b.page<1||b.page>spec.pdfPages)deny('PDF 쪽 번호를 확인하세요.');
+    const image=await w.renderPdfPage(b.id,job.nonce,b.page,spec.pdfPages);
+    authorize();
+    const current=loadJob();
+    if(current?.nonce!==job.nonce||current.status!==job.status||w.writing?.has(b.id))deny('미리보기가 바뀌었습니다. 작업을 다시 확인하세요.',409);
+    Object.assign(answer,{image,page:b.page,pages:spec.pdfPages});
+   }
+  }
   else{
    if(b.confirm!==true||typeof b.nonce!=='string'||job.nonce!==b.nonce)deny('현재 미리보기를 다시 확인하세요.',409);
    await w.commit(b.id,b.nonce,authorize);

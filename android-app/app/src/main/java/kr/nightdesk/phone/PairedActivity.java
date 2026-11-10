@@ -130,32 +130,103 @@ public final class PairedActivity extends Activity {
   heading.setTextSize(15);heading.setTypeface(Typeface.DEFAULT_BOLD);
   caption(task,state.equals("failed")?job.optString("error"):state.equals("reading")?"완료되면 결과 파일을 받을 수 있습니다.":retrySave?"PC 저장 위치를 확인한 뒤 같은 결과를 다시 저장할 수 있습니다.":state.equals("saving")?"PC에 결과를 저장하고 있습니다.":mobileApproval?"미리보기를 확인하고 새 파일로 저장할 수 있습니다.":"미리보기와 저장 승인은 PC에서 확인하세요.");
   LinearLayout buttons=line(task);
-  if(mobileApproval)button(buttons,"미리보기",()->showPhonePreview(job.optString("id")));
+  if(mobileApproval)button(buttons,job.optInt("pdfPages")>0?"PDF 내용 보기":"미리보기",()->showPhonePreview(job.optString("id")));
   if(retrySave)button(buttons,"저장 다시 시도",()->showPhonePreview(job.optString("id")));
   if(state.equals("failed"))button(buttons,"다시 시도",()->job("desk-retry",job));
   if(!state.equals("saving"))button(buttons,state.equals("failed")?"닫기":"중단",()->job("desk-cancel",job));
  }
  void showPhonePreview(String id){
   async(()->{
-   JSONObject result=call(obj("op","phone-preview","id",id));
+   JSONObject result=call(obj("op","phone-preview","id",id,"page",1));
    if(!id.equals(result.getString("id")))throw new IOException("작업 정보를 다시 확인하세요.");
    String preview=result.getString("preview"),nonce=result.getString("nonce");
    String format=result.getString("format").toUpperCase(java.util.Locale.ROOT);
    boolean retry=result.optString("status").equals("saving");
    runOnUiThread(()->{
     if(isDestroyed()||isFinishing()||!active||!screen.equals("work"))return;
+    if(result.has("image")){new PdfPreview(id,nonce,preview,retry,result).show();return;}
     ScrollView scroll=new ScrollView(this);
     TextView text=new TextView(this);
     text.setText(preview);text.setTextSize(15);text.setPadding(dp(22),dp(12),dp(22),dp(12));
     scroll.addView(text);
     new AlertDialog.Builder(this).setTitle((retry?"다시 저장할 결과":"저장 전 미리보기")+" · "+format).setView(scroll)
      .setNegativeButton("닫기",null)
-     .setPositiveButton(retry?"다시 저장":"승인 후 저장",(dialog,which)->async(()->{
-      call(obj("op","phone-approve","id",id,"nonce",nonce,"confirm",true));
-      refresh();
-     })).show();
+     .setPositiveButton(retry?"다시 저장":"승인 후 저장",(dialog,which)->approvePhone(id,nonce)).show();
    });
   });
+ }
+ void approvePhone(String id,String nonce){async(()->{
+  call(obj("op","phone-approve","id",id,"nonce",nonce,"confirm",true));
+  refresh();
+ });}
+ private final class PdfPreview {
+  final String id,nonce,summary;
+  final boolean retry;
+  final JSONObject first;
+  final int pages;
+  int pageNumber;
+  AlertDialog dialog;
+  TextView pageStatus;
+  Button previous,next;
+  android.webkit.WebView viewer;
+  PdfPreview(String id,String nonce,String summary,boolean retry,JSONObject first){
+   this.id=id;this.nonce=nonce;this.summary=summary;this.retry=retry;this.first=first;
+   pages=first.optInt("pages");
+  }
+  void show(){
+   LinearLayout content=column();content.setPadding(dp(18),dp(4),dp(18),dp(8));content.setBackgroundColor(SURFACE);
+   caption(content,summary);
+   viewer=new android.webkit.WebView(PairedActivity.this);
+   viewer.setContentDescription("PDF 페이지 이미지. 두 손가락으로 확대할 수 있습니다.");
+   viewer.getSettings().setAllowFileAccess(false);
+   viewer.getSettings().setAllowContentAccess(false);
+   viewer.getSettings().setBlockNetworkLoads(true);
+   viewer.getSettings().setBuiltInZoomControls(true);
+   viewer.getSettings().setDisplayZoomControls(false);
+   viewer.getSettings().setUseWideViewPort(true);
+   viewer.getSettings().setLoadWithOverviewMode(true);
+   int height=Math.min(dp(450),getResources().getDisplayMetrics().heightPixels*45/100);
+   content.addView(viewer,new LinearLayout.LayoutParams(-1,height));
+   pageStatus=caption(content,"");pageStatus.setGravity(Gravity.CENTER);pageStatus.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+   LinearLayout nav=line(content);
+   button(nav,"이전 쪽",()->load(pageNumber-1));previous=(Button)nav.getChildAt(0);
+   button(nav,"다음 쪽",()->load(pageNumber+1));next=(Button)nav.getChildAt(1);
+   dialog=new AlertDialog.Builder(PairedActivity.this).setTitle("PDF 내용 확인").setView(content)
+    .setNegativeButton("닫기",null)
+    .setPositiveButton(retry?"다시 저장":"승인 후 저장",(d,w)->approvePhone(id,nonce)).create();
+   dialog.setOnDismissListener(d->{viewer.stopLoading();viewer.destroy();});
+   dialog.show();
+   display(first);
+  }
+  void display(JSONObject result){
+   pageNumber=result.optInt("page");
+   String image=result.optString("image");
+   if(image.isEmpty()||!image.matches("[A-Za-z0-9+/=]+")){
+    pageStatus.setText("PDF 페이지를 표시하지 못했습니다.");
+    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+    return;
+   }
+   viewer.loadDataWithBaseURL(null,"<!doctype html><meta name='viewport' content='width=device-width,initial-scale=1'><body style='margin:0;background:#fff'><img alt='PDF 페이지' style='width:100%;height:auto;display:block' src='data:image/jpeg;base64,"+image+"'></body>","text/html","UTF-8",null);
+   pageStatus.setText(pageNumber+" / "+pages+"쪽");
+   previous.setEnabled(pageNumber>1);next.setEnabled(pageNumber<pages);
+   dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+  }
+  void load(int page){
+   if(pending||page<1||page>pages)return;
+   previous.setEnabled(false);next.setEnabled(false);
+   dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+   pageStatus.setText("페이지를 불러오는 중입니다.");
+   async(()->{
+    try{
+     JSONObject result=call(obj("op","phone-preview","id",id,"page",page));
+     if(!id.equals(result.optString("id"))||!nonce.equals(result.optString("nonce"))||result.optInt("page")!=page||result.optInt("pages")!=pages)
+      throw new IOException("미리보기가 바뀌었습니다. 닫고 다시 확인하세요.");
+     runOnUiThread(()->{if(dialog.isShowing()&&!isDestroyed())display(result);});
+    }catch(Exception e){runOnUiThread(()->{if(dialog.isShowing()&&!isDestroyed()){
+     pageStatus.setText("페이지를 불러오지 못했습니다. 닫고 다시 확인하세요.");
+    }});throw e;}
+   });
+  }
  }
  void job(String action,JSONObject j){async(()->{call(obj("op","job","action",action,"id",j.getString("id")));refresh();});}
  void receive(JSONObject f)throws Exception{new PairedFiles(this,session).receive(f);}

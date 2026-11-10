@@ -37,7 +37,7 @@ set(k,v){this.db.prepare('INSERT OR REPLACE INTO settings VALUES(?,?)').run(k,v)
 row(id){return this.db.prepare('SELECT * FROM jobs WHERE id=?').get(id);}
 async diag(id){const dir=path.join(this.dir,'diagnostics');await writeFile(path.join(dir,'d-'+Date.now()+'-'+randomUUID()+'.log'),JSON.stringify({id,event:'failed',at:Date.now()}),{flag:'wx'});await trimDiagnostics(dir,this.logConfig);}
 async list(request=''){const all=this.db.prepare('SELECT id,name,path,1 AS attached FROM attachments WHERE selected=1 ORDER BY rowid').all();if(this.searchConfig){const c=this.searchConfig();return [...all,...await discover(c.roots,c.excluded,request)];}const root=this.get('folder');if(root){await checkedDirectory(root);let n=0;for(const e of await readdir(root,{withFileTypes:true})){if(!e.isFile()||!fileName(e.name)||!supported.includes(ext(e.name)))continue;requireThat(++n<=1000,'문서가 너무 많습니다. 더 작은 작업 폴더를 허용하세요.');all.push({id:sum(root+'\0'+e.name),name:e.name,path:path.join(root,e.name)});}}return all;}
-async view(role,offset=0){const old=await this.old.view(role);const files=this.db.prepare('SELECT id,name,fmt AS format,hash AS sha256,size AS bytes,shared FROM files '+(role==='owner'?'':'WHERE shared=1 ')+' ORDER BY rowid DESC LIMIT 21 OFFSET ?').all(offset);const recent=old.messages.at(-1);return {role,folder:!!this.get('folder'),files:files.slice(0,20).map(f=>({...f,canDownload:true})),more:files.length>20,legacyFiles:old.files.filter(f=>f.canDownload).reverse().slice(offset,offset+20),jobs:this.db.prepare("SELECT id,status,error,preview,nonce FROM jobs WHERE status NOT IN ('done','cancelled') ORDER BY rowid DESC").all().map(j=>({...j,choices:j.status==='choose'?JSON.parse(j.preview):undefined,preview:j.status==='approval'?j.preview:undefined})),legacy:{pending:old.pending,awaiting:old.awaiting,suggestion:old.suggestion,documents:old.awaiting||old.draft?.stage==='materials'?old.documents:[],draft:old.draft?{stage:old.draft.stage}:null,uncertain:old.uncertain,question:old.awaiting||old.draft&&['title','investment','memo','materials'].includes(old.draft.stage)?recent?.text:null,review:old.review?.review?.items||old.review?.items||null}};}
+async view(role,offset=0){const old=await this.old.view(role);const files=this.db.prepare('SELECT id,name,fmt AS format,hash AS sha256,size AS bytes,shared FROM files '+(role==='owner'?'':'WHERE shared=1 ')+' ORDER BY rowid DESC LIMIT 21 OFFSET ?').all(offset);const recent=old.messages.at(-1);return {role,folder:!!this.get('folder'),files:files.slice(0,20).map(f=>({...f,canDownload:true})),more:files.length>20,legacyFiles:old.files.filter(f=>f.canDownload).reverse().slice(offset,offset+20),jobs:this.db.prepare("SELECT id,status,error,preview,nonce,json_extract(spec,'$.pdfPages') AS pdfPages FROM jobs WHERE status NOT IN ('done','cancelled') ORDER BY rowid DESC").all().map(j=>({...j,choices:j.status==='choose'?JSON.parse(j.preview):undefined,preview:j.status==='approval'?j.preview:undefined})),legacy:{pending:old.pending,awaiting:old.awaiting,suggestion:old.suggestion,documents:old.awaiting||old.draft?.stage==='materials'?old.documents:[],draft:old.draft?{stage:old.draft.stage}:null,uncertain:old.uncertain,question:old.awaiting||old.draft&&['title','investment','memo','materials'].includes(old.draft.stage)?recent?.text:null,review:old.review?.review?.items||old.review?.items||null}};}
 invalidate(except=''){for(const [id,controller] of this.running)if(id!==except)controller.abort();this.db.prepare("UPDATE jobs SET status='cancelled',spec=NULL,preview=NULL,data=NULL,refs=NULL,nonce=NULL,error=NULL WHERE status IN ('reading','choose','question','approval') AND id<>?").run(except);}
 async resolveSources(s,j,selection,signal){
  if(s.useLast){
@@ -137,13 +137,15 @@ if(s.kind==='send'){
  const source=await this.loadSource(chosen[0],ctrl.signal);
  requireThat(format==='pdf'||source.size<=2_000_000,'원본 검사 분량 한도를 넘었습니다. 출력 형식을 지정해 변환해 주세요.');
  const inspection=format==='pdf'
-  ? (await engine(this.python,{kind:'inspect-original-pdf',data:source.doc.data},ctrl.signal)).preview
-  : new TextDecoder('utf-8',{fatal:true}).decode(source.raw);
- requireThat(!containsSecret(inspection),'인증 정보가 포함된 파일은 보낼 수 없습니다.');
+  ? await engine(this.python,{kind:'inspect-original-pdf',data:source.doc.data},ctrl.signal)
+  : {preview:new TextDecoder('utf-8',{fatal:true}).decode(source.raw)};
+ requireThat(!containsSecret(inspection.preview),'인증 정보가 포함된 파일은 보낼 수 없습니다.');
+ if(format==='pdf')s.pdfPages=inspection.pages;
  s.format=format;
  s.title=path.parse(source.ref.name).name;
  preview='보낼 원본 파일 · '+source.ref.name+'\n'+source.size+'바이트\n'
   +(chosen[0].searchLimited?'검색 깊이 한도 안에서 찾은 파일입니다. 파일 이름을 확인해 주세요.\n':'')
+  +(inspection.images?'이미지 속 글자는 자동 검사 범위 밖입니다. 페이지를 직접 확인해 주세요.\n':'')
   +'승인하면 연결된 휴대폰에서 받을 수 있습니다.';
  raw=source.raw;
  hash=source.ref.hash;
@@ -162,6 +164,17 @@ if(containsSecret(preview))throw Error('인증 정보가 포함된 결과는 저
 requireThat(sum(raw)===hash,'작성 결과를 확인할 수 없습니다.');
 this.db.prepare("UPDATE jobs SET status='approval',spec=?,preview=?,data=?,hash=?,refs=?,nonce=? WHERE id=?").run(JSON.stringify(s),preview,raw,hash,JSON.stringify(refs),randomUUID(),id);
 }catch(e){if(!ctrl.signal.aborted&&this.row(id).status==='reading'){this.db.prepare("UPDATE jobs SET status='failed',error=?,data=NULL,preview=NULL,nonce=NULL WHERE id=?").run(safeError(e),id);await this.diag(id);}}finally{if(this.running.get(id)===ctrl)this.running.delete(id);}}
+async renderPdfPage(id,nonce,page,pages){
+ requireThat(!this.renderingPdf,'다른 PDF 페이지를 불러오는 중입니다. 잠시 뒤 다시 시도하세요.');
+ const job=this.db.prepare("SELECT data FROM jobs WHERE id=? AND nonce=? AND status IN ('approval','saving')").get(id,nonce);
+ requireThat(job?.data,'미리보기가 바뀌었습니다. 작업을 다시 확인하세요.');
+ this.renderingPdf=true;
+ try{
+  const result=await engine(this.python,{kind:'render-pdf-preview',data:Buffer.from(job.data).toString('base64'),page,pages});
+  requireThat(typeof result.image==='string'&&result.image.length<=2_000_000,'PDF 페이지를 불러오지 못했습니다.');
+  return result.image;
+ }finally{this.renderingPdf=false;}
+}
 async commit(id,nonce,authorize){
  const job=this.row(id);
  requireThat(job,'작업을 찾지 못했습니다.');
