@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "android": {
-    "version": "0.8.0-dev-paired4",
-    "versionCode": 80004,
+    "version": "0.8.0-dev-paired5",
+    "versionCode": 80005,
     "minSdk": 26,
     "variant": "paired-debug",
-    "path": "/downloads/DIANA-Android-0.8.0-dev-paired4.apk",
+    "path": "/downloads/DIANA-Android-0.8.0-dev-paired5.apk",
     "bytes": 4394418,
-    "sha256": "0057187659ba184591b83d27f978bcdcf8343e9c86f64fff4eedff3e20c65649",
-    "sourceCommit": "19b79158d09e919a958bfdc3c2e329aae2765a16",
+    "sha256": "dd900193342d8f291d85c2a9f52395fe1b7a0ef3d147e07b8ad554af32d90515",
+    "sourceCommit": "5c2ec8252c9c6c6958fcdf8669bb9f097e465208",
     "sourceFiles": [
       {
         "path": "android-app/app/build.gradle",
@@ -276,18 +276,18 @@
       },
       {
         "path": "financial-desktop/version.json",
-        "sha256": "d75bbf1a10c9a268a4284154a89789493a86fc6ba1697570537bf059b12ed870"
+        "sha256": "8b879cc99efe38eed48c504e2787e41eca1c15c40ca99aae910955a4da83878d"
       }
     ]
   },
   "windows": {
-    "version": "0.8.0-dev-paired4",
-    "numericVersion": "0.8.0.4",
+    "version": "0.8.0-dev-paired5",
+    "numericVersion": "0.8.0.5",
     "platform": "win-x64",
-    "path": "/downloads/DIANA-PC-0.8.0-dev-paired4-win-x64.zip",
-    "bytes": 77711468,
-    "sha256": "1ef4cc1c21f181c0db216cc87e3cddbe4d52b33a5329cc9e6fb36102d96ad2e8",
-    "sourceCommit": "19b79158d09e919a958bfdc3c2e329aae2765a16",
+    "path": "/downloads/DIANA-PC-0.8.0-dev-paired5-win-x64.zip",
+    "bytes": 77713668,
+    "sha256": "55e30b8b54b3834cf8cabad29ccfea8b6268c3fe2258597959fc2405f789a2d0",
+    "sourceCommit": "5c2ec8252c9c6c6958fcdf8669bb9f097e465208",
     "crlfBuildInputs": [
       "personal-ai/documents/parser.mjs",
       "personal-ai/documents/worker.mjs",

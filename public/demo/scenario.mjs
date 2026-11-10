@@ -19,3 +19,16 @@ export function transition(state,action,revision){
  throw Error('DEMO_ACTION_UNAVAILABLE');
 }
 export function savedItems(){return items.map(i=>i.id==='KEY_MAN'?{...i,status:'SATISFIED',note:'가상 수정본에 실사 자료의 근거와 출처가 반영됐습니다.'}:{...i});}
+
+const transferExamples=Object.freeze({
+ original:Object.freeze({name:'샘플 자료.pdf',preview:'허용 폴더에서 찾은 샘플 자료.pdf를 원본 그대로 보냅니다.'}),
+ text:Object.freeze({name:'샘플 자료.txt',preview:'샘플 자료.pdf에서 읽은 내용을 TXT로 변환해 보냅니다.'}),
+});
+export const initialTransfer=()=>({phase:'idle',preview:null,last:null});
+export function transferStep(state,action,request){
+ if(action==='choose')return {...state,phase:'idle',preview:null};
+ if(action==='request'&&request==='recent')return {...state,phase:state.last?'forwarded':'missing',preview:null};
+ if(action==='request'&&Object.hasOwn(transferExamples,request))return {...state,phase:'approval',preview:transferExamples[request]};
+ if(action==='approve'&&state.phase==='approval')return {phase:'received',preview:null,last:state.preview};
+ return state;
+}
