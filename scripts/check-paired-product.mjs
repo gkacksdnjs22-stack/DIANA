@@ -35,7 +35,7 @@ async function call(origin, body, { token = '', owner, status = 200 } = {}) {
   assert.equal(response.status, status, body.op + '/' + (body.action || '') + ': ' + (result.error || ''));
   return result;
 }
-const pc = body => call(host.origin, body, { token: ownerToken, owner: host.owner });
+const pc = (body, status = 200) => call(host.origin, body, { token: ownerToken, owner: host.owner, status });
 const mobile = (body, status = 200) => call(relay.origin, body, { token: phone.token, status });
 const send = async (text, id = randomUUID()) => {
   await mobile({ op: 'job', action: 'desk-start', text, id });
@@ -292,6 +292,33 @@ try {
   const ambiguousResume = await send('바탕화면에 이력서파일 보내줘');
   const choice = await waitFor(ambiguousResume, 'choose');
   assert.deepEqual(choice.choices.map(file => file.name).sort(), ['이력서.pdf', '이력서.txt']);
+  const choiceRequest = {op:'phone-preview',id:ambiguousResume,step:'choose'};
+  const choiceState = async ()=>(await mobile({op:'state'})).jobs.find(job=>job.id===ambiguousResume);
+  assert.equal((await choiceState()).canChoose,true);
+  assert.equal((await choiceState()).choices,undefined);
+  await other(choiceRequest,403);
+  await allow(false);
+  assert.equal((await choiceState()).mobileApprovalNeeded,true);
+  await mobile(choiceRequest,403);
+  await allow(true);
+  const offered = await mobile(choiceRequest);
+  assert.equal(offered.single,true);
+  assert.deepEqual(offered.choices.map(file=>file.name).sort(),['이력서.pdf','이력서.txt']);
+  assert(offered.choices.every(file=>file.folder==='바탕화면'&&file.location===undefined&&file.stamp===undefined));
+  const selectFile = {op:'phone-approve',id:ambiguousResume,step:'choose',confirm:true,nonce:offered.nonce,
+    ids:[offered.choices.find(file=>file.name==='이력서.pdf').id]};
+  await other(selectFile,403);
+  await mobile({...selectFile,nonce:randomUUID()},409);
+  await mobile({...selectFile,ids:[randomUUID()]},400);
+  await mobile(selectFile);
+  await waitFor(ambiguousResume,'approval');
+  await mobile(selectFile,409);
+  assert(!(await mobile({op:'state'})).files.some(file=>file.id===ambiguousResume));
+  const selectedPreview = await mobile({op:'phone-preview',id:ambiguousResume,page:1});
+  assert.match(selectedPreview.preview,/이력서\.pdf/);
+  await mobile({op:'phone-approve',id:ambiguousResume,nonce:selectedPreview.nonce,confirm:true});
+  assert.deepEqual(await receive(ambiguousResume),reportBytes);
+  console.log('Requesting phone selects a file, previews and approves it separately, and receives the original');
 
   await rename(resumePath, path.join(known.desktop, '2026 이력서.pdf'));
   await rename(secondResume, path.join(known.desktop, '시나리오 메모.txt'));
@@ -549,6 +576,88 @@ dense.save()
   assert(pptxParts.has('ppt/presentation.xml'));
   assert(pptxParts.has('ppt/slides/slide1.xml'));
   console.log('Attached report and explicit PPTX conversion');
+  const mixedName = '혼합선택.txt';
+  const mixedAttachment = Buffer.from('휴대폰 첨부 자료에 장치 317개가 있습니다.');
+  await writeFile(path.join(known.desktop, mixedName), 'PC 검색 자료에 장치 419개가 있습니다.');
+  await mobile({op:'job',action:'desk-upload',id:randomUUID(),name:mixedName,
+    base64:mixedAttachment.toString('base64'),sha256:sha256(mixedAttachment)});
+  const mixed = await send('혼합선택 TXT로 보내줘');
+  const pcChoice = await waitFor(mixed, 'choose');
+  const phoneChoice = await mobile({op:'phone-preview',id:mixed,step:'choose'});
+  assert.equal(pcChoice.single,true);
+  assert.equal(phoneChoice.single,true);
+  assert.deepEqual(phoneChoice.choices.map(file=>file.folder).sort(), ['바탕화면','첨부 파일']);
+  assert(pcChoice.choices.some(file=>file.location==='첨부 파일'));
+  const selected = {op:'phone-approve',id:mixed,step:'choose',nonce:phoneChoice.nonce,confirm:true};
+  const both = phoneChoice.choices.map(file=>file.id);
+  await mobile({...selected,ids:both},400);
+  await pc({op:'job',action:'desk-select',id:mixed,ids:both},400);
+  const unchanged = await mobile({op:'phone-preview',id:mixed,step:'choose'});
+  assert.deepEqual(unchanged,phoneChoice);
+  await mobile({...selected,ids:[phoneChoice.choices.find(file=>file.folder==='첨부 파일').id]});
+  await waitFor(mixed, 'approval');
+  const mixedPreview = await mobile({op:'phone-preview',id:mixed});
+  assert.match(mixedPreview.preview,/317개/);
+  assert.doesNotMatch(mixedPreview.preview,/419개/);
+  await mobile({op:'phone-approve',id:mixed,nonce:mixedPreview.nonce,confirm:true});
+  assert.match((await receive(mixed)).toString('utf8'),/317개/);
+  console.log('A conversion accepts one source and labels an attachment without an internal path');
+
+  const summaryResume = '가상 이력서의 프로젝트는 27개입니다.';
+  const supplement = '보충 메모에 기록된 발표는 63회입니다.';
+  await writeFile(path.join(known.downloads,'이력서.pdf'),reportBytes);
+  await writeFile(path.join(known.downloads,'이력서.txt'),summaryResume);
+  await writeFile(path.join(known.downloads,'보충 메모.txt'),supplement);
+
+  const resumeSummary = await send('다운로드에서 이력서를 요약해줘');
+  assert.equal((await waitFor(resumeSummary,'choose')).single,true);
+  const summaryOptions = {op:'phone-preview',id:resumeSummary,step:'choose'};
+  const summaryChoice = await mobile(summaryOptions);
+  assert.equal(summaryChoice.single,true);
+  assert.deepEqual(summaryChoice.choices.map(file=>file.name).sort(),['이력서.pdf','이력서.txt']);
+  const submitSummary = {op:'phone-approve',id:resumeSummary,step:'choose',nonce:summaryChoice.nonce,confirm:true};
+  await mobile({...submitSummary,ids:summaryChoice.choices.map(file=>file.id)},400);
+  assert.deepEqual(await mobile(summaryOptions),summaryChoice);
+  const summarySource = summaryChoice.choices.find(file=>file.name==='이력서.txt');
+  await mobile({...submitSummary,ids:[summarySource.id]});
+  await waitFor(resumeSummary,'approval');
+  const summaryPreview = await mobile({op:'phone-preview',id:resumeSummary});
+  assert.match(summaryPreview.preview,/27개/);
+  await mobile({op:'phone-approve',id:resumeSummary,nonce:summaryPreview.nonce,confirm:true});
+  assert.equal((await receive(resumeSummary)).subarray(0,5).toString(),'%PDF-');
+
+  for(const legacy of [false,true]){
+    const twoSources = await send('다운로드에서 이력서와 보충 메모를 요약해서 TXT로 만들어줘');
+    assert.equal((await waitFor(twoSources,'choose')).single,false);
+    if(legacy){
+      const db=new DatabaseSync(jobsDatabase);
+      try {
+        const {preview}=db.prepare('SELECT preview FROM jobs WHERE id=?').get(twoSources);
+        const {items,groups}=JSON.parse(preview);
+        assert.equal(groups.length,2);
+        db.prepare('UPDATE jobs SET preview=? WHERE id=?').run(JSON.stringify(items),twoSources);
+      } finally { db.close(); }
+    }
+    const twoOptions = {op:'phone-preview',id:twoSources,step:'choose'};
+    const twoChoice = await mobile(twoOptions);
+    assert.equal(twoChoice.single,false);
+    const submitTwo = {op:'phone-approve',id:twoSources,step:'choose',nonce:twoChoice.nonce,confirm:true};
+    const wrongIds=twoChoice.choices.filter(file=>file.name.startsWith('이력서')).map(file=>file.id);
+    await mobile({...submitTwo,ids:wrongIds},400);
+    await pc({op:'job',action:'desk-select',id:twoSources,ids:wrongIds},400);
+    assert.deepEqual(await mobile(twoOptions),twoChoice);
+    await mobile({...submitTwo,ids:twoChoice.choices.filter(file=>file.name.endsWith('.txt')).map(file=>file.id)});
+    await waitFor(twoSources,'approval');
+    const twoPreview = await mobile({op:'phone-preview',id:twoSources});
+    assert.match(twoPreview.preview,/27개/);
+    assert.match(twoPreview.preview,/63회/);
+    await mobile({op:'phone-approve',id:twoSources,nonce:twoPreview.nonce,confirm:true});
+    const twoBytes = (await receive(twoSources)).toString('utf8');
+    assert.match(twoBytes,/27개/);
+    assert.match(twoBytes,/63회/);
+  }
+  console.log('Current and legacy summaries reject wrong source combinations without losing their choices');
+
 } finally {
   await host?.close();
   await relay.close();

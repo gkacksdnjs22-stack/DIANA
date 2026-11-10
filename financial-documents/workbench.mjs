@@ -12,6 +12,17 @@ import {checkedDirectory} from '../personal-ai/documents/files.mjs';
 const sum=b=>createHash('sha256').update(b).digest('hex'),uuid=s=>/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(s),ext=n=>path.extname(n).slice(1).toLowerCase(),supported=['md','txt','docx','pptx','json','pdf','ppt'];
 const readable=[...supported.filter(f=>f!=='ppt'),'csv','tsv','pdf','hwp','hwpx','hwpml','xls','xlsx'];
 const plainOriginals=['txt','md','json','csv','tsv'];
+const singleSource=kind=>['send','convert','edit','read'].includes(kind);
+const singleSourceError='사용할 파일을 한 개 선택하세요.';
+function choiceSnapshot(job){
+ const preview=JSON.parse(job.preview);
+ return Array.isArray(preview)?{items:preview}:preview;
+}
+function checkSourceGroups(groups,picked){
+ requireThat(picked.size>=groups.length,'서로 다른 원천 자료를 확인하세요.');
+ requireThat(groups.every(g=>g.ids.filter(id=>picked.has(id)).length===(g.all?g.ids.length:1)),
+  '요청한 각 자료에 맞는 파일을 하나씩 확인하세요.');
+}
 const canSendOriginal=name=>ext(name)==='pdf'||plainOriginals.includes(ext(name));
 const requireThat=(v,s)=>{if(!v)throw Error(s)},safeError=e=>/[가-힣]/u.test(e.message)&&!/[\\/:]/.test(e.message)?e.message:'파일을 읽거나 저장하지 못했습니다. 파일과 권한을 확인하세요.';
 const fileName=n=>typeof n==='string'&&n.length>0&&n.length<180&&!/[\\/:<>|?*"\x00-\x1f]/u.test(n)&&!n.startsWith('.')&&!/[. ]$/.test(n);
@@ -37,7 +48,19 @@ set(k,v){this.db.prepare('INSERT OR REPLACE INTO settings VALUES(?,?)').run(k,v)
 row(id){return this.db.prepare('SELECT * FROM jobs WHERE id=?').get(id);}
 async diag(id){const dir=path.join(this.dir,'diagnostics');await writeFile(path.join(dir,'d-'+Date.now()+'-'+randomUUID()+'.log'),JSON.stringify({id,event:'failed',at:Date.now()}),{flag:'wx'});await trimDiagnostics(dir,this.logConfig);}
 async list(request=''){const all=this.db.prepare('SELECT id,name,path,1 AS attached FROM attachments WHERE selected=1 ORDER BY rowid').all();if(this.searchConfig){const c=this.searchConfig();return [...all,...await discover(c.roots,c.excluded,request)];}const root=this.get('folder');if(root){await checkedDirectory(root);let n=0;for(const e of await readdir(root,{withFileTypes:true})){if(!e.isFile()||!fileName(e.name)||!supported.includes(ext(e.name)))continue;requireThat(++n<=1000,'문서가 너무 많습니다. 더 작은 작업 폴더를 허용하세요.');all.push({id:sum(root+'\0'+e.name),name:e.name,path:path.join(root,e.name)});}}return all;}
-async view(role,offset=0){const old=await this.old.view(role);const files=this.db.prepare('SELECT id,name,fmt AS format,hash AS sha256,size AS bytes,shared FROM files '+(role==='owner'?'':'WHERE shared=1 ')+' ORDER BY rowid DESC LIMIT 21 OFFSET ?').all(offset);const recent=old.messages.at(-1);return {role,folder:!!this.get('folder'),files:files.slice(0,20).map(f=>({...f,canDownload:true})),more:files.length>20,legacyFiles:old.files.filter(f=>f.canDownload).reverse().slice(offset,offset+20),jobs:this.db.prepare("SELECT id,status,error,preview,nonce,json_extract(spec,'$.pdfPages') AS pdfPages FROM jobs WHERE status NOT IN ('done','cancelled') ORDER BY rowid DESC").all().map(j=>({...j,choices:j.status==='choose'?JSON.parse(j.preview):undefined,preview:j.status==='approval'?j.preview:undefined})),legacy:{pending:old.pending,awaiting:old.awaiting,suggestion:old.suggestion,documents:old.awaiting||old.draft?.stage==='materials'?old.documents:[],draft:old.draft?{stage:old.draft.stage}:null,uncertain:old.uncertain,question:old.awaiting||old.draft&&['title','investment','memo','materials'].includes(old.draft.stage)?recent?.text:null,review:old.review?.review?.items||old.review?.items||null}};}
+choiceDetails(job,snapshot=choiceSnapshot(job)){
+ const uploadDir=path.join(this.dir,'uploads');
+ const choices=snapshot.items.map(item=>item.location===uploadDir?{...item,location:'첨부 파일'}:item);
+ const spec=JSON.parse(job.spec);
+ if(singleSource(spec.kind))return {choices,single:true};
+ if(snapshot.groups)return {choices,single:snapshot.groups.length===1&&!snapshot.groups[0].all};
+ // Pending choices saved before group metadata was recorded.
+ const query=this.searchConfig?scope(this.searchConfig().roots,spec.request).query:spec.request;
+ const q=sourceQuery(query);
+ const single=!spec.all&&q.terms.length<=1&&(!q.quarters||q.quarters[1]===q.quarters[2]);
+ return {choices,single};
+}
+async view(role,offset=0){const old=await this.old.view(role);const files=this.db.prepare('SELECT id,name,fmt AS format,hash AS sha256,size AS bytes,shared FROM files '+(role==='owner'?'':'WHERE shared=1 ')+' ORDER BY rowid DESC LIMIT 21 OFFSET ?').all(offset);const recent=old.messages.at(-1);return {role,folder:!!this.get('folder'),files:files.slice(0,20).map(f=>({...f,canDownload:true})),more:files.length>20,legacyFiles:old.files.filter(f=>f.canDownload).reverse().slice(offset,offset+20),jobs:this.db.prepare("SELECT id,status,error,preview,nonce,spec,json_extract(spec,'$.pdfPages') AS pdfPages FROM jobs WHERE status NOT IN ('done','cancelled') ORDER BY rowid DESC").all().map(({spec,...j})=>({...j,...(j.status==='choose'?this.choiceDetails({...j,spec}):{}),preview:j.status==='approval'?j.preview:undefined})),legacy:{pending:old.pending,awaiting:old.awaiting,suggestion:old.suggestion,documents:old.awaiting||old.draft?.stage==='materials'?old.documents:[],draft:old.draft?{stage:old.draft.stage}:null,uncertain:old.uncertain,question:old.awaiting||old.draft&&['title','investment','memo','materials'].includes(old.draft.stage)?recent?.text:null,review:old.review?.review?.items||old.review?.items||null}};}
 invalidate(except=''){for(const [id,controller] of this.running)if(id!==except)controller.abort();this.db.prepare("UPDATE jobs SET status='cancelled',spec=NULL,preview=NULL,data=NULL,refs=NULL,nonce=NULL,error=NULL WHERE status IN ('reading','choose','question','approval') AND id<>?").run(except);}
 async resolveSources(s,j,selection,signal){
  if(s.useLast){
@@ -91,17 +114,17 @@ async resolveSources(s,j,selection,signal){
  const choices=[...new Map(groups.flatMap(g=>g.hits.map(f=>[f.id,f]))).values()];
  requireThat(choices.length<=120,'선택 후보가 많습니다. 이름이나 위치를 좁혀 주세요.');
  const ambiguous=groups.some(g=>!g.all&&g.hits.length>1);
+ const groupChoices=groups.map(g=>({ids:g.hits.map(f=>f.id),all:g.all}));
  if(selection){
-  const previous=new Map(JSON.parse(j.preview).map(x=>[x.id,x.stamp]));
+  const previous=new Map(choiceSnapshot(j).items.map(x=>[x.id,x.stamp]));
   requireThat(selection.length&&selection.every(id=>choices.some(f=>f.id===id&&previous.has(id)&&previous.get(id)===(f.stamp||''))),'선택한 자료가 바뀌었습니다. 다시 검색하세요.');
   const picked=new Set(selection);
-  requireThat(picked.size>=groups.length,'서로 다른 원천 자료를 확인하세요.');
-  requireThat(groups.every(g=>g.hits.filter(f=>picked.has(f.id)).length===(g.all?g.hits.length:1)),'요청한 각 자료에 맞는 파일을 하나씩 확인하세요.');
+  checkSourceGroups(groupChoices,picked);
   return choices.filter(f=>picked.has(f.id));
  }
  if(ambiguous){
-  const items=choices.map(f=>({id:f.id,name:f.name,location:path.dirname(f.path),stamp:f.stamp||'',modified:f.mtime===undefined?'':new Date(f.mtime).toLocaleString('ko-KR'),group:groups.filter(g=>g.hits.some(x=>x.id===f.id)).map(g=>g.label).join(', ')}));
-  signal.throwIfAborted();this.db.prepare("UPDATE jobs SET status='choose',preview=? WHERE id=? AND status='reading'").run(JSON.stringify(items),j.id);
+  const items=choices.map(f=>({id:f.id,name:f.name,location:f.attached?'첨부 파일':path.dirname(f.path),stamp:f.stamp||'',modified:f.mtime===undefined?'':new Date(f.mtime).toLocaleString('ko-KR'),group:groups.filter(g=>g.hits.some(x=>x.id===f.id)).map(g=>g.label).join(', ')}));
+  signal.throwIfAborted();this.db.prepare("UPDATE jobs SET status='choose',preview=?,nonce=? WHERE id=? AND status='reading'").run(JSON.stringify({items,groups:groupChoices}),randomUUID(),j.id);
   return null;
  }
  requireThat(choices.length>=groups.length,'서로 다른 원천 자료를 구별할 수 없습니다. 이름을 더 구체적으로 입력하세요.');
@@ -123,15 +146,15 @@ async loadSource(f,signal){
  return {doc,raw:b,size:b.length,ref:{id:f.id,name:f.name,path:f.path,stamp:f.stamp,hash:sum(b)}};
 }
 
-async prepare(id,selection){let j=this.row(id),s=JSON.parse(j.spec);const ctrl=new AbortController();this.running.set(id,ctrl);this.db.prepare("UPDATE jobs SET status='reading',error=NULL,nonce=NULL WHERE id=?").run(id);
+async prepare(id,selection,resolvedSources){let j=this.row(id),s=JSON.parse(j.spec);const ctrl=new AbortController();this.running.set(id,ctrl);this.db.prepare("UPDATE jobs SET status='reading',error=NULL,nonce=NULL WHERE id=?").run(id);
 try{requireThat(!s.unsafe,'이 요청은 실행하지 않습니다. 원하는 작업 한 가지를 입력하세요.');requireThat(s.kind==='send'||supported.includes(s.format),'요청한 출력 형식을 지원하지 않습니다.');requireThat(s.kind!=='edit'||s.change,'수정은 바꿀 문구와 새 문구를 각각 따옴표로 지정하세요.');if(s.kind==='create'&&!s.body){this.db.prepare("UPDATE jobs SET status='question' WHERE id=?").run(id);return;}
-const chosen=s.kind==='create'?[]:await this.resolveSources(s,j,selection,ctrl.signal);
+const chosen=s.kind==='create'?[]:resolvedSources??await this.resolveSources(s,j,selection,ctrl.signal);
 if(!chosen)return;
 requireThat(chosen.length<=12,'한 요청에는 원천 파일을 12개까지 사용할 수 있습니다.');
+if(singleSource(s.kind))requireThat(chosen.length===1,singleSourceError);
 const refs=[];
 let preview,raw,hash;
 if(s.kind==='send'){
- requireThat(chosen.length===1,'보낼 파일을 한 개 선택하세요.');
  const format=ext(chosen[0].name);
  requireThat(canSendOriginal(chosen[0].name),'이 파일 형식은 원본 전송을 지원하지 않습니다. 출력 형식을 지정해 변환해 주세요.');
  const source=await this.loadSource(chosen[0],ctrl.signal);
@@ -258,7 +281,28 @@ const j=this.row(id);requireThat(j,'작업을 찾지 못했습니다.');if(a==='
 else if(a==='desk-approve'){owner();await this.commit(id,b.nonce);}
 else if(a==='desk-retry'){if(j.status==='saving'){owner();await this.commit(id,j.nonce);}else{requireThat(j.status==='failed','다시 시도할 작업이 아닙니다.');const spec=JSON.parse(j.spec);if(['summary','compare','slides','create'].includes(spec.kind)&&spec.request){const current=route(spec.request);if(current.kind===spec.kind&&supported.includes(current.format)){spec.format=current.format;this.db.prepare('UPDATE jobs SET spec=? WHERE id=? AND status=\'failed\'').run(JSON.stringify(spec),id);}}void this.prepare(id).catch(()=>{});}}
 else if(a==='desk-answer'){owner();requireThat(j.status==='question'&&typeof b.answer==='string'&&b.answer.trim()&&b.answer.length<=8000,'작성할 내용을 확인하세요.');const spec=JSON.parse(j.spec);spec.body=b.answer;this.db.prepare('UPDATE jobs SET spec=? WHERE id=?').run(JSON.stringify(spec),id);void this.prepare(id).catch(()=>{});}
-else if(a==='desk-select'){owner();requireThat(j.status==='choose'&&Array.isArray(b.ids),'선택할 자료가 없습니다.');void this.prepare(id,b.ids).catch(()=>{});}
+else if(a==='desk-select'){
+ requireThat(j.status==='choose'&&Array.isArray(b.ids),'선택할 자료가 없습니다.');
+ if(role!=='owner')requireThat(requestDevice&&j.request_device===requestDevice&&j.nonce&&j.nonce===b.nonce,'선택할 자료를 다시 확인하세요.');
+ const snapshot=choiceSnapshot(j);
+ const {choices,single}=this.choiceDetails(j,snapshot);
+ if(single)requireThat(b.ids.length===1,singleSourceError);
+ const offered=new Set(choices.map(item=>item.id)),picked=new Set(b.ids);
+ requireThat(picked.size>0&&picked.size<=12&&picked.size===b.ids.length&&b.ids.every(id=>offered.has(id)),
+  '목록에서 사용할 자료를 선택하세요.');
+ let resolvedSources;
+ if(snapshot.groups)checkSourceGroups(snapshot.groups,picked);
+ else if(!single){
+  // Legacy snapshots have display labels, but no exact group membership.
+  const signal=AbortSignal.timeout(25_000);
+  resolvedSources=await this.resolveSources(JSON.parse(j.spec),j,b.ids,signal);
+  signal.throwIfAborted();
+  const current=this.row(id);
+  requireThat(current?.status==='choose'&&current.nonce===j.nonce&&current.preview===j.preview,
+   '선택할 자료가 바뀌었습니다. 작업을 다시 확인하세요.');
+ }
+ void this.prepare(id,b.ids,resolvedSources).catch(()=>{});
+}
 else throw Error('지원하지 않는 작업입니다.');return{ok:true,id};}catch(e){return {ok:false,error:safeError(e)};}}
 legacyResult(r){const t=r.state?.messages?.at(-1);if(r.state?.latest&&r.executed)this.set('last','');return {ok:r.ok!==false,notice:t?.text||null,legacyError:r.ok===false||r.interpreted===false,reviewItems:t?.items||null};}
 }

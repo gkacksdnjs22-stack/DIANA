@@ -45,6 +45,14 @@ public class PairedDesignTest {
   LinearLayout retry=a.column();
   a.renderJob(retry,new JSONObject().put("status","saving").put("canApprove",true));
   assertTrue(text(retry,"저장 다시 시도"));
+  LinearLayout choose=a.column();
+  a.renderJob(choose,new JSONObject().put("status","choose").put("canChoose",true));
+  assertTrue(text(choose,"파일 고르기"));
+  assertFalse(text(choose,"승인 후 저장"));
+  LinearLayout needsPermission=a.column();
+  a.renderJob(needsPermission,new JSONObject().put("status","approval").put("mobileApprovalNeeded",true));
+  assertTrue(text(needsPermission,"모바일 승인을 켜 주세요"));
+  assertFalse(text(needsPermission,"미리보기"));
   a.finish();
  }
  @Test public void pdfDialogDisplaysPageControlsAndBlocksNetworkLoads()throws Exception{
