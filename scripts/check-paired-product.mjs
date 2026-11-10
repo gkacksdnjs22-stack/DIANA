@@ -251,12 +251,14 @@ try {
     await writeFile(sourcePath, original);
   }
   console.log('Phone and PC recover the record for an already written file without rewriting it');
-  const resumePath = path.join(known.desktop, '샘플 이력서.pdf');
+  const deepBranch = path.join(known.desktop, '다른 작업');
+  await mkdir(path.join(deepBranch, ...Array.from({length:9}, (_, index) => '하위 ' + index)), {recursive:true});
+  const resumePath = path.join(known.desktop, '이력서.pdf');
   await writeFile(resumePath, reportBytes);
-  const originalFile = await send('바탕화면에 이력서 파일 보내줘');
+  const originalFile = await send('바탕화면에 이력서파일 보내줘');
   await waitFor(originalFile, 'approval');
   const sendPreview = await mobile({ op: 'phone-preview', id: originalFile });
-  assert.match(sendPreview.preview, /샘플 이력서\.pdf/);
+  assert.match(sendPreview.preview, /이력서\.pdf/);
   assert.equal(sendPreview.format, 'pdf');
   assert(!(await mobile({ op: 'state' })).files.some(file => file.id === originalFile));
   await mobile({ op: 'phone-approve', id: originalFile, nonce: sendPreview.nonce, confirm: true });
@@ -283,6 +285,14 @@ try {
   assert(!forwardedState.files.some(file => file.id === forwardId));
   assert(!forwardedState.jobs.some(job => job.id === forwardId));
   console.log('Explicit TXT delivery and forwarding the latest result');
+  const deepMissing = await send('바탕화면에 없는 파일 보내줘');
+  assert.match((await waitFor(deepMissing, 'failed')).error, /깊이 한도/);
+  const secondResume = path.join(known.desktop, '이력서.txt');
+  await writeFile(secondResume, '가상 이력서입니다.');
+  const ambiguousResume = await send('바탕화면에 이력서파일 보내줘');
+  const choice = await waitFor(ambiguousResume, 'choose');
+  assert.deepEqual(choice.choices.map(file => file.name).sort(), ['이력서.pdf', '이력서.txt']);
+  await pc({ op: 'directory', kind: 'exclude', path: deepBranch });
 
   execFileSync(config.python, ['-I', '-B', '-c', `
 import sys

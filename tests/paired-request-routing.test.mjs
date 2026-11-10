@@ -51,6 +51,7 @@ test('sending a named original keeps the file query inside the named folder', ()
   const files = [{ name: '샘플 이력서.pdf' }, { name: '샘플 포트폴리오.pdf' }];
   for (const request of [
     '바탕화면에 이력서 파일 보내줘',
+    '바탕화면에 이력서파일 보내줘',
     '바탕화면에 있는 "샘플 이력서.pdf"를 휴대폰으로 보내 주세요',
     '바탕화면에서 이력서 파일을 찾아서 보내줘',
   ]) {
@@ -60,6 +61,8 @@ test('sending a named original keeps the file query inside the named folder', ()
     assert.deepEqual(groupsFor(files, sourceQuery(location.query))[0].hits, files.slice(0, 1));
   }
   assert.equal(route('바탕화면에 있는 이력서를 요약해서 보내줘').kind, 'summary');
+  const literal = { name: '이력서파일.pdf' };
+  assert.deepEqual(groupsFor([...files, literal], sourceQuery('이력서파일 보내줘'))[0].hits, [literal]);
 });
 
 test('a specified delivery format is separate from the source name', () => {

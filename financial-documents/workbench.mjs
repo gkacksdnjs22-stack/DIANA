@@ -54,7 +54,11 @@ async resolveSources(s,j,selection,signal){
  const attachmentOnly=/^(?:첨부한|첨부된)\s/u.test(where.query);
  if(attachmentOnly&&!all.length)throw Error('현재 요청에 지정한 첨부 자료가 없습니다.');
  if(!attachmentOnly&&(where.named||!all.length||!referent)){
-  if(config){const disk=await discover(config.roots,config.excluded,s.request,{signal});all=where.named?disk:[...all,...disk];}
+  if(config){
+   const namedDelivery=!s.all&&fileSendSuffix.test(s.request)&&['send','convert'].includes(s.kind);
+   const disk=await discover(config.roots,config.excluded,s.request,{signal,exactQuery:namedDelivery?q:undefined});
+   all=where.named?disk:[...all,...disk];
+  }
   else all=await this.list(s.request);
  }
  signal.throwIfAborted();

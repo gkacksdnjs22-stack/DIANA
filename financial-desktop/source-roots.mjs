@@ -65,7 +65,12 @@ export async function discover(roots,excluded,request='',options={}){
  const files=[],seen=new Set(),queue=locations.map(r=>({...r,depth:0}));
  const blocked=p=>privatePart.test(p)||excluded.some(x=>within(x,p));
  let count=0,denied=false,deep=false,foundFolder=false;
- for(let i=0;i<queue.length;i++){
+ for(let i=0;i<=queue.length;i++){
+  if(i===locations.length&&!denied&&target.named&&!target.folder&&options.exactQuery){
+   const matches=exactRootFiles(files,options.exactQuery);
+   if(matches.length)return matches;
+  }
+  if(i===queue.length)break;
   const r=queue[i],dir=r.path,key=dir.toLowerCase();
   if(seen.has(key)||blocked(dir))continue;
   seen.add(key);
@@ -92,6 +97,15 @@ export async function discover(roots,excluded,request='',options={}){
 }
 const compact=s=>s.normalize('NFKC').toLowerCase().replace(/[\s_.’'"“”-]/gu,'');
 const generic=/^(?:(?:이|그|해당|첨부한|선택한|모든|전체|여러|두|최근|최신)\s*)?(?:자료|파일|문서)(?:들)?$/u;
+function exactRootFiles(files,q){
+ if(q.terms.length!==1||q.content||q.latest||q.quarters||q.start!==-Infinity||q.end!==Infinity)return [];
+ const term=q.terms[0].trim();
+ if(!term||generic.test(term))return [];
+ if(/\.[a-z0-9]{1,12}$/i.test(term))return files.filter(f=>f.name.normalize('NFKC').toLowerCase()===term.normalize('NFKC').toLowerCase());
+ const matches=name=>files.filter(f=>compact(path.parse(f.name).name)===compact(name));
+ const literal=matches(q.rawTerms[0]);
+ return literal.length?literal:matches(term);
+}
 function sourceName(term){
  // Work on the still-masked name: quoted/file-name words cannot be stripped here.
  return term.trim()
@@ -131,7 +145,9 @@ export function sourceQuery(text){
  if(quarters)source=source.replace(quarters[0],'').trim();
  const raw=source.split(/(?:이랑|랑|하고|와|과)(?=\s)(?!\s+(?:파일|문서|자료)(?:들)?(?:의|을|를)?(?:\s|$))|\s+(?:및|그리고)\s+|[,，]/u).map(t=>t.trim().replace(/^(?:모든|전체|여러)\s+/u,'').replace(/(?:을|를)$/u,'').trim()).filter(Boolean);
  const unmask=t=>t.replace(/\u0001(\d+)\u0002/g,(_,i)=>literals[Number(i)]);
- return {terms:raw.map(t=>unmask(sourceName(t))),rawTerms:raw.map(t=>unmask(t.replace(/^["“]|["”]$/gu,''))),content:content?.[1]||content?.[2],latest,start,end,quarters};
+ const sending=fileSendSuffix.test(sourceClause);
+ const name=t=>unmask(sourceName(sending?t.replace(/([가-힣A-Za-z0-9])파일$/u,'$1'):t));
+ return {terms:raw.map(name),rawTerms:raw.map(t=>unmask(t.replace(/^["“]|["”]$/gu,''))),content:content?.[1]||content?.[2],latest,start,end,quarters};
 }
 export function groupsFor(files,q,all=false){
  const dated=files.filter(f=>q.start===-Infinity&&q.end===Infinity||f.mtime>=q.start&&f.mtime<=q.end);
