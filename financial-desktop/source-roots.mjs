@@ -86,10 +86,16 @@ export async function discover(roots,excluded,request='',options={}){
   }catch(e){if(['EPERM','EACCES'].includes(e.code)){denied=true;continue;}if(e.code==='ENOENT')throw Error('검색 중 파일이나 위치가 사라졌습니다. 다시 시도하세요.');throw e;}
  }
  if(denied)throw Error('읽기 권한이 없는 위치가 있어 검색을 끝내지 못했습니다. 검색 위치를 좁혀 주세요.');
- if(options.exactQuery){
+ const query=options.exactQuery,term=query&&singleName(query);
+ if(term){
   // Finish the bounded search before preferring a normalized name over a literal one.
-  const matches=exactFiles(files.filter(options.canUseFile),options.exactQuery);
+  const usable=files.filter(options.canUseFile);
+  const matches=exactFiles(usable,term,query.rawTerms[0]);
   if(matches.length)return matches;
+  if(deep&&options.allowPartial){
+   const candidates=matchName(usable,query,term,query.rawTerms[0]);
+   if(candidates.length)return candidates.map(file=>({...file,searchLimited:true}));
+  }
  }
  if(deep)throw Error('하위 폴더 깊이 한도에 도달했습니다. 더 좁은 폴더를 지정하세요.');
  if(target.folder&&!foundFolder)throw Error('지정한 하위 폴더를 허용한 위치에서 찾지 못했습니다.');
@@ -97,13 +103,15 @@ export async function discover(roots,excluded,request='',options={}){
 }
 const compact=s=>s.normalize('NFKC').toLowerCase().replace(/[\s_.’'"“”-]/gu,'');
 const generic=/^(?:(?:이|그|해당|첨부한|선택한|모든|전체|여러|두|최근|최신)\s*)?(?:자료|파일|문서)(?:들)?$/u;
-function exactFiles(files,q){
- if(q.terms.length!==1||q.content||q.latest||q.quarters||q.start!==-Infinity||q.end!==Infinity)return [];
+function singleName(q){
+ if(q.terms.length!==1||q.content||q.latest||q.quarters||q.start!==-Infinity||q.end!==Infinity)return '';
  const term=q.terms[0].trim();
- if(!term||generic.test(term))return [];
+ return generic.test(term)?'':term;
+}
+function exactFiles(files,term,rawTerm){
  if(/\.[a-z0-9]{1,12}$/i.test(term))return files.filter(f=>f.name.normalize('NFKC').toLowerCase()===term.normalize('NFKC').toLowerCase());
  const matches=name=>files.filter(f=>compact(path.parse(f.name).name)===compact(name));
- const literal=matches(q.rawTerms[0]);
+ const literal=matches(rawTerm);
  return literal.length?literal:matches(term);
 }
 function sourceName(term){
@@ -149,28 +157,28 @@ export function sourceQuery(text){
  const name=t=>unmask(sourceName(sending?t.replace(/([가-힣A-Za-z0-9])파일$/u,'$1'):t));
  return {terms:raw.map(name),rawTerms:raw.map(t=>unmask(t.replace(/^["“]|["”]$/gu,''))),content:content?.[1]||content?.[2],latest,start,end,quarters};
 }
-export function groupsFor(files,q,all=false,canUseFile){
- const dated=files.filter(f=>q.start===-Infinity&&q.end===Infinity||f.mtime>=q.start&&f.mtime<=q.end);
- const groups=[];
- function add(term,pool,quarter,rawTerm=term){
+function matchName(candidates,q,term,rawTerm){
   const literal=term.trim(),needle=compact(literal),broad=!needle||generic.test(literal);
   const stem=f=>compact(path.parse(f.name).name);
   const rawNeedle=compact(rawTerm);
   const core=compact(literal.replace(/\s+(?:자료|파일|문서)$/u,''));
-  function match(candidates){
-   if(/\.[a-z0-9]{1,8}$/i.test(literal))return candidates.filter(f=>compact(f.name)===needle);
-   if(broad)return candidates;
-   const exact=candidates.filter(f=>compact(f.name)===rawNeedle||stem(f)===rawNeedle);
-   if(exact.length&&!q.latest)return exact;
-   const hits=candidates.filter(f=>stem(f).includes(needle)||core&&stem(f).includes(core)||rawNeedle&&stem(f).includes(rawNeedle)||compact(f.name)===needle);
-   if(hits.length||rawNeedle===needle||!/의$/u.test(literal))return hits;
-   const possessive=literal.slice(0,-1),part=compact(possessive);
-   return generic.test(possessive)?candidates:candidates.filter(f=>stem(f).includes(part));
-  }
-  const usable=canUseFile?match(pool.filter(canUseFile)):[];
-  const hits=usable.length?usable:match(pool);
-  if(!hits.length)throw Error((quarter||literal||'요청한')+' 자료를 검색 위치에서 찾지 못했습니다.');
-  groups.push({label:[quarter,literal].filter(Boolean).join(' ')||'자료',hits,all});
+  if(/\.[a-z0-9]{1,8}$/i.test(literal))return candidates.filter(f=>compact(f.name)===needle);
+  if(broad)return candidates;
+  const exact=candidates.filter(f=>compact(f.name)===rawNeedle||stem(f)===rawNeedle);
+  if(exact.length&&!q.latest)return exact;
+  const hits=candidates.filter(f=>stem(f).includes(needle)||core&&stem(f).includes(core)||rawNeedle&&stem(f).includes(rawNeedle)||compact(f.name)===needle);
+  if(hits.length||rawNeedle===needle||!/의$/u.test(literal))return hits;
+  const possessive=literal.slice(0,-1),part=compact(possessive);
+  return generic.test(possessive)?candidates:candidates.filter(f=>stem(f).includes(part));
+}
+export function groupsFor(files,q,all=false,canUseFile){
+ const dated=files.filter(f=>q.start===-Infinity&&q.end===Infinity||f.mtime>=q.start&&f.mtime<=q.end);
+ const groups=[];
+ function add(term,pool,quarter,rawTerm=term){
+  const usable=canUseFile?matchName(pool.filter(canUseFile),q,term,rawTerm):[];
+  const hits=usable.length?usable:matchName(pool,q,term,rawTerm);
+  if(!hits.length)throw Error((quarter||term.trim()||'요청한')+' 자료를 검색 위치에서 찾지 못했습니다.');
+  groups.push({label:[quarter,term.trim()].filter(Boolean).join(' ')||'자료',hits,all});
  }
  const terms=q.terms.length?q.terms:[''];
  if(q.quarters){const first=Number(q.quarters[1]),last=Number(q.quarters[2]);if(first>last)throw Error('분기 순서를 확인하세요.');for(let n=first;n<=last;n++)for(const [i,t] of terms.entries())add(t,dated.filter(f=>new RegExp('(?:^|[^0-9])'+n+'\\s*분기|(?:^|[^a-z0-9])q'+n+'(?![0-9])','i').test(f.name)),n+'분기',q.rawTerms?.[i]??t);}
