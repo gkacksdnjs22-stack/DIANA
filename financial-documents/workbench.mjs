@@ -1,5 +1,5 @@
 import {containsSecret} from './security/content.mjs';
-import {discover,scope,sourceQuery,groupsFor,reportOutputStart} from '../financial-desktop/source-roots.mjs';
+import {discover,scope,sourceQuery,groupsFor,reportOutputStart,fileSendSuffix} from '../financial-desktop/source-roots.mjs';
 import {parseLocalDocument} from '../personal-ai/documents/parser.mjs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -18,6 +18,7 @@ export function route(text){const names=[...text.matchAll(/(?:["“]([^"”]+?\.
 const fmt=outputClause.match(/(?:^|[^a-z])(pptx?|docx|json|txt|md|pdf|hwp[x]?|xlsx?|html|csv|png|jpe?g|rtf|odt|pages|keynote)(?:[^a-z]|$)/iu)?.[1]?.toLowerCase()||(outputClause.includes('마크다운')?'md':outputClause.includes('텍스트')?'txt':null);
 let kind=/발표\s*(?:자료|파일|문서|슬라이드)?(?:를|을|로|으로)?\s*(?:만들|작성|제작)|(?:pptx?|슬라이드).{0,12}(?:만들|작성|제작)/iu.test(cmd)?'slides':/비교|종합|수치.{0,12}변화/u.test(cmd)?'compare':/요약|정리해|정리한/u.test(cmd)?'summary':/새\s*(?:문서|파일|보고서|이력서|포트폴리오|메모)/u.test(cmd)?'create':/변환|바꿔/u.test(cmd)?(fmt?'convert':'edit'):/수정|고쳐|교체/u.test(cmd)?'edit':/찾아|찾기|읽어/u.test(cmd)?'read':null;
 if(!kind&&reportOutputStart(cmd)!==null)kind='summary';if(kind==='slides'&&body&&!names.length&&/새|파일 없이|첨부 없이/u.test(cmd))kind='create';
+if((!kind||kind==='read')&&fileSendSuffix.test(cmd))kind='send';
 const change=text.match(/["“']([^"”']+)["”'](?:을|를)?\s*["“']([^"”']*)["”']/u)?.slice(1,3);
 const title=cmd.match(/제목\s*[:：]\s*([^,;\n]+)/u)?.[1]?.trim();
 const term=text.match(/[“"]([^“”"]{1,60})[”"](?:이|가|을|를)?\s*(?:들어간|포함된|언급된|담긴)/u)?.[1];return {kind,term,all:/모두|전부|전체/.test(cmd),format:fmt||(['slides','summary','compare','create'].includes(kind)?'pdf':kind==='read'?'txt':'md'),names,title,body,change,unsafe:/하지\s*마|하지\s*말|하지\s*않|삭제|덮어|말고|가능한가|어떻게|알려줘|\?/.test(cmd),multi:/여러|모두|전체|전부|두\s*(?:문서|자료|파일)|비교|종합/.test(cmd)};}
@@ -45,6 +46,7 @@ async resolveSources(s,j,selection,signal){
   ?sourceQuery('"'+s.names[0]+'"'):sourceQuery(where.query);
  let all=this.db.prepare('SELECT id,name,path,1 AS attached FROM attachments WHERE selected=1 ORDER BY rowid').all();
  const referent=q.terms.length===0||q.terms.every(t=>/^(?:(?:첨부한|이|그|두|해당|선택한|여러)\s*)?(?:자료|문서|파일)(?:들)?$/.test(t));
+ if(s.kind==='send')requireThat(q.terms.length===1&&!referent&&!q.quarters&&!s.all,'보낼 파일 이름을 한 개 알려 주세요.');
  const attachmentOnly=/^(?:첨부한|첨부된)\s/u.test(where.query);
  if(attachmentOnly&&!all.length)throw Error('현재 요청에 지정한 첨부 자료가 없습니다.');
  if(!attachmentOnly&&(where.named||!all.length||!referent)){
@@ -108,17 +110,40 @@ async loadSource(f,signal){
   catch{throw Error('파일을 찾았으나 문서 본문을 읽지 못했습니다. 형식이나 읽기 한도를 확인하세요.');}
  }
  if(containsSecret(doc.decoded||(['txt','md','json','csv','tsv'].includes(extension)?b.toString('utf8'):'')))throw Error('인증 정보가 포함된 파일은 문서 작업에 사용할 수 없습니다.');
- return {doc,size:b.length,ref:{id:f.id,name:f.name,path:f.path,stamp:f.stamp,hash:sum(b)}};
+ return {doc,raw:b,size:b.length,ref:{id:f.id,name:f.name,path:f.path,stamp:f.stamp,hash:sum(b)}};
 }
 
 async prepare(id,selection){let j=this.row(id),s=JSON.parse(j.spec);const ctrl=new AbortController();this.running.set(id,ctrl);this.db.prepare("UPDATE jobs SET status='reading',error=NULL,nonce=NULL WHERE id=?").run(id);
-try{requireThat(!s.unsafe,'이 요청은 실행하지 않습니다. 원하는 작업 한 가지를 입력하세요.');requireThat(supported.includes(s.format),'요청한 출력 형식을 지원하지 않습니다.');requireThat(s.kind!=='edit'||s.change,'수정은 바꿀 문구와 새 문구를 각각 따옴표로 지정하세요.');if(s.kind==='create'&&!s.body){this.db.prepare("UPDATE jobs SET status='question' WHERE id=?").run(id);return;}
+try{requireThat(!s.unsafe,'이 요청은 실행하지 않습니다. 원하는 작업 한 가지를 입력하세요.');requireThat(s.kind==='send'||supported.includes(s.format),'요청한 출력 형식을 지원하지 않습니다.');requireThat(s.kind!=='edit'||s.change,'수정은 바꿀 문구와 새 문구를 각각 따옴표로 지정하세요.');if(s.kind==='create'&&!s.body){this.db.prepare("UPDATE jobs SET status='question' WHERE id=?").run(id);return;}
 const chosen=s.kind==='create'?[]:await this.resolveSources(s,j,selection,ctrl.signal);
 if(!chosen)return;
 requireThat(chosen.length<=12,'한 요청에는 원천 파일을 12개까지 사용할 수 있습니다.');
-const docs=[],refs=[];let total=0;
-for(const f of chosen){const item=await this.loadSource(f,ctrl.signal);total+=item.size;requireThat(total<=12_000_000,'자료 크기 한도를 넘었습니다.');docs.push(item.doc);refs.push(item.ref);}
-const r=await engine(this.python,{...s,kind:s.kind==='read'?'convert':s.kind,docs},ctrl.signal);if(ctrl.signal.aborted||this.row(id).status!=='reading')return;requireThat(typeof r.preview==='string'&&r.preview.length<180000,'미리보기 한도를 넘었습니다.');if(containsSecret(r.preview))throw Error('인증 정보가 포함된 결과는 저장할 수 없습니다.');const raw=Buffer.from(r.data,'base64');requireThat(sum(raw)===r.sha256,'작성 결과를 확인할 수 없습니다.');this.db.prepare("UPDATE jobs SET status='approval',preview=?,data=?,hash=?,refs=?,nonce=? WHERE id=?").run(r.preview,raw,r.sha256,JSON.stringify(refs),randomUUID(),id);
+const refs=[];
+let preview,raw,hash;
+if(s.kind==='send'){
+ requireThat(chosen.length===1,'보낼 파일을 한 개 선택하세요.');
+ const source=await this.loadSource(chosen[0],ctrl.signal);
+ const inspected=await engine(this.python,{kind:'convert',format:'txt',docs:[source.doc]},ctrl.signal);
+ requireThat(!containsSecret(inspected.preview),'인증 정보가 포함된 파일은 보낼 수 없습니다.');
+ s.format=ext(source.ref.name);
+ s.title=path.parse(source.ref.name).name;
+ preview='보낼 원본 파일 · '+source.ref.name+'\n'+source.size+'바이트\n승인하면 연결된 휴대폰에서 받을 수 있습니다.';
+ raw=source.raw;
+ hash=source.ref.hash;
+ refs.push(source.ref);
+}else{
+ const docs=[];let total=0;
+ for(const f of chosen){const item=await this.loadSource(f,ctrl.signal);total+=item.size;requireThat(total<=12_000_000,'자료 크기 한도를 넘었습니다.');docs.push(item.doc);refs.push(item.ref);}
+ const result=await engine(this.python,{...s,kind:s.kind==='read'?'convert':s.kind,docs},ctrl.signal);
+ preview=result.preview;
+ raw=Buffer.from(result.data,'base64');
+ hash=result.sha256;
+}
+if(ctrl.signal.aborted||this.row(id).status!=='reading')return;
+requireThat(typeof preview==='string'&&preview.length<180000,'미리보기 한도를 넘었습니다.');
+if(containsSecret(preview))throw Error('인증 정보가 포함된 결과는 저장할 수 없습니다.');
+requireThat(sum(raw)===hash,'작성 결과를 확인할 수 없습니다.');
+this.db.prepare("UPDATE jobs SET status='approval',spec=?,preview=?,data=?,hash=?,refs=?,nonce=? WHERE id=?").run(JSON.stringify(s),preview,raw,hash,JSON.stringify(refs),randomUUID(),id);
 }catch(e){if(!ctrl.signal.aborted&&this.row(id).status==='reading'){this.db.prepare("UPDATE jobs SET status='failed',error=?,data=NULL,preview=NULL,nonce=NULL WHERE id=?").run(safeError(e),id);await this.diag(id);}}finally{if(this.running.get(id)===ctrl)this.running.delete(id);}}
 async commit(id,nonce,authorize){
  const job=this.row(id);
@@ -196,8 +221,8 @@ try{const id=b.id||b.requestId;requireThat(uuid(id),'잘못된 작업입니다.'
 if(a==='desk-upload'){requireThat(fileName(b.name)&&readable.includes(ext(b.name)),'이 파일 형식은 읽을 수 없습니다.');const raw=Buffer.from(b.base64,'base64');requireThat(raw.length&&raw.length<=8_000_000&&raw.toString('base64')===b.base64&&sum(raw)===b.sha256,'첨부 크기나 내용이 올바르지 않습니다.');const key=sum(b.name+'\0'+b.sha256),dir=path.join(this.dir,'uploads'),dest=path.join(dir,key+'.'+ext(b.name));try{await writeFile(dest,raw,{flag:'wx'});}catch(e){if(e.code!=='EEXIST')throw e;}requireThat(sum(await bytes(dest,dir))===b.sha256,'첨부를 다시 확인하세요.');this.invalidate();this.db.prepare('INSERT OR REPLACE INTO attachments VALUES(?,?,?,1)').run(key,b.name,dest);if(ext(b.name)==='md'&&raw.length<=262144){const r=await this.old.handle({...b,action:'upload'},role);if(r.ok===false)return r;}else await this.old.handle({action:'invalidate',requestId:randomUUID()},role);return{ok:true,notice:b.name+' 첨부됨'};}
 if(a==='desk-invalidate'){this.invalidate();await this.old.handle({action:'invalidate',requestId:id},role);return{ok:true};}
 if(a==='desk-convert'){owner();requireThat(['pdf','ppt'].includes(b.format)&&uuid(b.sourceId),'변환할 파일과 형식을 확인하세요.');requireThat(this.db.prepare('SELECT 1 FROM files WHERE id=?').get(b.sourceId),'보관 파일을 찾지 못했습니다.');const binding=sum(JSON.stringify([b.sourceId,b.format]));if(this.row(id)){requireThat(this.get('request-'+id)===binding,'같은 작업 번호의 변환 내용이 다릅니다.');return{ok:true,id};}requireThat(!this.get('request-'+id),'보관 기간이 지난 작업입니다.');this.invalidate();await this.old.handle({action:'invalidate',requestId:id},role);const spec={kind:'convert',format:b.format,request:'보관 파일을 '+b.format.toUpperCase()+'로 변환',useLast:b.sourceId,unsafe:false,names:[]};this.set('request-'+id,binding);this.db.prepare("INSERT INTO jobs(id,status,spec) VALUES(?,'reading',?)").run(id,JSON.stringify(spec));void this.prepare(id).catch(()=>{});return{ok:true,id};}
-if(a==='desk-start'){requireThat(typeof b.text==='string'&&b.text.trim()&&b.text.length<=8000,'요청을 짧게 입력하세요.');if(this.get('request-'+id)&&!this.row(id))return {ok:false,error:'보관 기간이 지난 작업입니다.'};const existing=this.row(id);if(existing){requireThat(existing.request_device===requestDevice&&this.get('request-'+id)===sum(b.text),'같은 작업 번호의 요청 내용이 다릅니다.');return {ok:true,id};}const old=await this.old.view(role),s=route(b.text),last=this.get('last');if(s.kind==='convert'&&old.latest&&!last&&!s.names.length&&!['md','txt','json'].includes(s.format))throw Error('이 검토 결과의 변환 형식을 지원하지 않습니다.');if(/(?:전달|휴대폰에서 받을|모바일에서 받|공유해)/u.test(b.text)&&!s.unsafe&&last){this.db.prepare('UPDATE files SET shared=1 WHERE id=?').run(last);return{ok:true,notice:'연결한 화면에서 받을 수 있습니다.'};}
-if(!s.kind&&!/검토|보완|저장|취소|질문|전달|공유|휴대폰|\?|만들|작성/.test(b.text)&&!old.draft)throw Error('요청한 작업을 구분하지 못했습니다. 요약이나 비교처럼 원하는 작업을 알려 주세요.');if(!s.kind&&!supported.includes(s.format))throw Error('요청한 출력 형식을 지원하지 않습니다.');if(!s.kind||/검토 대상은|검토할 대상은|새\s*검토서|보완안/u.test(b.text)||old.draft&&['title','investment','memo'].includes(old.draft.stage)||s.kind==='convert'&&!last&&!s.names.length&&old.latest){this.invalidate();if(/검토해|검토해\s*줘/.test(b.text)&&!s.unsafe&&s.names.length===1&&!/검토 대상은|근거 자료는|적용 지침은/.test(b.text)&&!old.draft){const candidates=(await this.list()).filter(f=>f.name===s.names[0]);requireThat(candidates.length===1&&ext(candidates[0].name)==='md','검토할 MD 파일 하나를 확인하세요.');const f=candidates[0],raw=await bytes(f.path,path.dirname(f.path),262144);if(!old.attachments.some(a=>a.sha256===sum(raw))){const reg=await this.old.handle({action:'upload',requestId:randomUUID(),name:f.name,base64:raw.toString('base64'),sha256:sum(raw)},role);requireThat(reg.uploaded,'검토 자료를 등록하지 못했습니다.');}}const r=await this.old.handle({action:'message',requestId:id,text:b.text},role);return this.legacyResult(r);}
+if(a==='desk-start'){requireThat(typeof b.text==='string'&&b.text.trim()&&b.text.length<=8000,'요청을 짧게 입력하세요.');if(this.get('request-'+id)&&!this.row(id))return {ok:false,error:'보관 기간이 지난 작업입니다.'};const existing=this.row(id);if(existing){requireThat(existing.request_device===requestDevice&&this.get('request-'+id)===sum(b.text),'같은 작업 번호의 요청 내용이 다릅니다.');return {ok:true,id};}const old=await this.old.view(role),s=route(b.text),last=this.get('last');if(s.kind==='convert'&&old.latest&&!last&&!s.names.length&&!['md','txt','json'].includes(s.format))throw Error('이 검토 결과의 변환 형식을 지원하지 않습니다.');if(!s.unsafe&&last&&/(?:전달|휴대폰에서 받을|모바일에서 받|공유해)/u.test(b.text)&&(!s.kind||!s.names.length&&/^(?:그\s*(?:수정본|결과|파일|문서)|방금\s*(?:결과|만든)|최근\s*결과)/u.test(b.text.trim()))){this.db.prepare('UPDATE files SET shared=1 WHERE id=?').run(last);return{ok:true,notice:'연결한 화면에서 받을 수 있습니다.'};}
+if(!s.kind&&!/검토|보완|저장|취소|질문|전달|공유|휴대폰|\?|만들|작성/.test(b.text)&&!old.draft)throw Error('요청한 작업을 구분하지 못했습니다. 요약이나 비교처럼 원하는 작업을 알려 주세요.');if(!s.kind&&!supported.includes(s.format))throw Error('요청한 출력 형식을 지원하지 않습니다.');if(s.kind!=='send'&&(!s.kind||/검토 대상은|검토할 대상은|새\s*검토서|보완안/u.test(b.text)||old.draft&&['title','investment','memo'].includes(old.draft.stage)||s.kind==='convert'&&!last&&!s.names.length&&old.latest)){this.invalidate();if(/검토해|검토해\s*줘/.test(b.text)&&!s.unsafe&&s.names.length===1&&!/검토 대상은|근거 자료는|적용 지침은/.test(b.text)&&!old.draft){const candidates=(await this.list()).filter(f=>f.name===s.names[0]);requireThat(candidates.length===1&&ext(candidates[0].name)==='md','검토할 MD 파일 하나를 확인하세요.');const f=candidates[0],raw=await bytes(f.path,path.dirname(f.path),262144);if(!old.attachments.some(a=>a.sha256===sum(raw))){const reg=await this.old.handle({action:'upload',requestId:randomUUID(),name:f.name,base64:raw.toString('base64'),sha256:sum(raw)},role);requireThat(reg.uploaded,'검토 자료를 등록하지 못했습니다.');}}const r=await this.old.handle({action:'message',requestId:id,text:b.text},role);return this.legacyResult(r);}
 this.invalidate();await this.old.handle({action:'invalidate',requestId:randomUUID()},role);if(last&&/^(?:그\s*수정본|수정본|방금\s*(?:결과|만든)|그\s*(?:결과|문서)|최근\s*결과)/.test(b.text.trim())&&!s.names.length)s.useLast=last;s.request=b.text;this.set('request-'+id,sum(b.text));s.title=s.title?.slice(0,120);this.db.prepare("INSERT OR IGNORE INTO jobs(id,status,spec,request_device) VALUES(?,'reading',?,?)").run(id,JSON.stringify(s),requestDevice);void this.prepare(id).catch(()=>{});return{ok:true,id};}
 const j=this.row(id);requireThat(j,'작업을 찾지 못했습니다.');if(a==='desk-cancel'){requireThat(j.status!=='saving','저장 중인 결과를 먼저 확인하세요.');this.running.get(id)?.abort();this.db.prepare("UPDATE jobs SET status='cancelled',error=NULL,data=NULL,spec=NULL,refs=NULL,preview=NULL,nonce=NULL WHERE id=? AND status NOT IN ('done','saving')").run(id);}
 else if(a==='desk-approve'){owner();await this.commit(id,b.nonce);}

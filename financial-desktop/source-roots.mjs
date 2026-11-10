@@ -46,10 +46,10 @@ export function scope(roots,request){
  let selected=roots,query=request,named=false;
  for(const label of labels){
   const escaped=label.replace(/[.*+?^$(){}|[\]\\]/g,'\\$&');
-  const loc=new RegExp('(?:^|\\s)'+escaped+'\\s*(?:폴더\\s*|위치\\s*)?(?:에서|안의|안에|에\\s*있는|의(?=\\s))','u').exec(request);
+  const loc=new RegExp('(?:^|\\s)'+escaped+'\\s*(?:폴더\\s*|위치\\s*)?(?:에서|안의|안에|에\\s*있는|에(?=\\s)|의(?=\\s))','u').exec(request);
   if(!loc)continue;
-  // A non-leading "document's contents" is a source description, not a folder.
-  if(loc.index>0&&/의$/u.test(loc[0])&&!/폴더|위치/u.test(loc[0]))continue;
+  // A non-leading short particle can describe the document rather than a folder.
+  if(loc.index>0&&/(?:에|의)$/u.test(loc[0])&&!/폴더|위치/u.test(loc[0]))continue;
   selected=roots.filter(r=>r.label===label);if(!selected.length)throw Error('지정한 위치가 검색 설정에서 제외되었거나 사용할 수 없습니다.');
   named=true;query=request.replace(loc[0],' ').trim();break;
  }
@@ -99,6 +99,7 @@ function sourceName(term){
   .replace(/\s+(?:의\s+)?(?:(?:전체|주요|핵심)\s+)?(?:내용|본문)$/u,'')
   .replace(/^["“]|["”]$/gu,'').trim();
 }
+export const fileSendSuffix=/(?:보내|전송해|전달해|공유해)\s*(?:줘요?|주세요|주십시오)\s*[.!]?\s*$/u;
 export function sourceQuery(text){
  // Protect file names before looking for operation verbs inside the surrounding request.
  const literals=[];
@@ -108,7 +109,8 @@ export function sourceQuery(text){
  const reportStart=reportOutputStart(masked);
  const sourceClause=reportStart===null?masked:masked.slice(0,reportStart)
   .replace(/((?:자료|파일|문서)(?:들)?|\u0002)(?:으로|로)\s*$/u,'$1');
- let source=sourceClause.split(/\s*(?:(?:요약|비교|종합)(?=해|하|한|할|해서|하여|$)|읽고|읽어|읽어서|보고(?=\s|$)|찾아|찾기|정리해|정리한|변환해|바꿔|수정해|검토해)/u)[0].trim();
+ let source=sourceClause.replace(fileSendSuffix,'').split(/\s*(?:(?:요약|비교|종합)(?=해|하|한|할|해서|하여|$)|읽고|읽어|읽어서|보고(?=\s|$)|찾아|찾기|정리해|정리한|변환해|바꿔|수정해|검토해)/u)[0].trim();
+ if(fileSendSuffix.test(masked))source=source.replace(/\s+(?:내\s+)?(?:휴대폰|폰|모바일)(?:으로|로|에)$/u,'').trim();
  source=source.replace(/^(?:첨부한|첨부된|선택한)\s+/u,'').replace(/\s+(?:TXT|MD|JSON|PPTX?|DOCX|텍스트|마크다운)(?:로|으로).*$/iu,'');
  const content=source.match(/(?:["“]([^"”]+)["”]|([가-힣A-Za-z0-9_-]+?))(?:이|가|을|를)?\s*(?:들어간|포함된|언급된|담긴)/u);
  if(content)source=source.replace(content[0],'');

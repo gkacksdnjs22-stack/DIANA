@@ -100,7 +100,8 @@ try {
   }
   const report = await send('다운로드에서 1~4분기 자료를 찾아 핵심 수치와 변화를 정리한 보고서를 작성해줘');
   await approve(report, preview => { assert.match(preview, /40/); assert.match(preview, /4분기 관측/); });
-  assert.equal((await receive(report)).subarray(0, 5).toString(), '%PDF-');
+  const reportBytes = await receive(report);
+  assert.equal(reportBytes.subarray(0, 5).toString(), '%PDF-');
   console.log('Six-digit pairing and report: discovery, preview, owner approval, download and receipt');
 
   const sourcePath = path.join(known.desktop, '현장 기록.txt');
@@ -249,6 +250,21 @@ try {
     await writeFile(sourcePath, original);
   }
   console.log('Phone and PC recover the record for an already written file without rewriting it');
+  const resumePath = path.join(known.desktop, '샘플 이력서.pdf');
+  await writeFile(resumePath, reportBytes);
+  const originalFile = await send('바탕화면에 이력서 파일 보내줘');
+  await waitFor(originalFile, 'approval');
+  const sendPreview = await mobile({ op: 'phone-preview', id: originalFile });
+  assert.match(sendPreview.preview, /샘플 이력서\.pdf/);
+  assert.equal(sendPreview.format, 'pdf');
+  assert(!(await mobile({ op: 'state' })).files.some(file => file.id === originalFile));
+  await mobile({ op: 'phone-approve', id: originalFile, nonce: sendPreview.nonce, confirm: true });
+  assert.deepEqual(await receive(originalFile), reportBytes);
+  assert.deepEqual(await readFile(resumePath), reportBytes);
+  const unnamed = await send('바탕화면에 파일 보내줘');
+  assert.match((await waitFor(unnamed, 'failed')).error, /보낼 파일 이름/);
+  assert(!(await mobile({ op: 'state' })).files.some(file => file.id === unnamed));
+  console.log('Named Desktop PDF is sent byte-for-byte only after approval');
   await pc({ op: 'revoke', device: otherPhone.device });
   await other(preview, 403);
   const pcOnly = randomUUID();
