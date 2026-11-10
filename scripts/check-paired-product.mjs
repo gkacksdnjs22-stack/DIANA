@@ -343,6 +343,7 @@ from PIL import Image
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 from pypdf import PdfWriter
+from pypdf.annotations import FreeText
 doc = Document()
 doc.add_paragraph('Example document')
 doc.sections[0].header.paragraphs[0].text = 'password: fixture-only-secret'
@@ -366,8 +367,21 @@ writer = PdfWriter()
 writer.append(sys.argv[4])
 writer.add_attachment('fixture.txt', b'fixture')
 writer.write(sys.argv[5])
+annotated = PdfWriter(clone_from=sys.argv[4])
+annotated.add_annotation(0, FreeText(text='Visible review note', rect=(65, 300, 300, 355),
+    font_size='18pt', font_color='102060', background_color='fff0b0'))
+annotated.write(sys.argv[6])
+for name,first in [(sys.argv[7],True),(sys.argv[8],False)]:
+    wide = canvas.Canvas(name,pagesize=(14401,400) if first else (400,400))
+    wide.drawString(72,300,'First page')
+    if not first:
+        wide.showPage()
+        wide.setPageSize((14401,400))
+        wide.drawString(72,300,'Oversize second page')
+    wide.save()
 `, path.join(bundle, 'runtime/office'), path.join(known.desktop, '숨은 속성.docx'), path.join(known.desktop, '숨은 속성.pdf'),
-  path.join(known.desktop, '사진 이력서.pdf'), path.join(known.desktop, '첨부 이력서.pdf')]);
+  path.join(known.desktop, '사진 이력서.pdf'), path.join(known.desktop, '첨부 이력서.pdf'), path.join(known.desktop, '주석 이력서.pdf'),
+  path.join(known.desktop, '첫 쪽 한도.pdf'), path.join(known.desktop, '둘째 쪽 한도.pdf')]);
   for (const [extension, expected] of [['docx', /원본 전송을 지원하지/], ['pdf', /인증 정보/]]) {
     const blocked = await send(`바탕화면에 "숨은 속성.${extension}" 파일 보내줘`);
     assert.match((await waitFor(blocked, 'failed')).error, expected);
@@ -376,6 +390,14 @@ writer.write(sys.argv[5])
   console.log('Office originals and PDF metadata credentials are blocked before approval');
   const withAttachment = await send('바탕화면에서 "첨부 이력서.pdf" 파일 보내줘');
   assert.match((await waitFor(withAttachment, 'failed')).error, /첨부.*원본으로 보낼 수 없습니다/);
+  for (const name of ['첫 쪽 한도.pdf', '둘째 쪽 한도.pdf']) {
+    const tooLarge = await send(`바탕화면에서 "${name}" 파일 보내줘`);
+    const failed = await waitFor(tooLarge, 'failed');
+    assert.match(failed.error, /PDF 페이지 크기가 미리보기 한도/);
+    assert.equal(failed.nonce, null);
+    assert(!(await mobile({op:'state'})).files.some(file => file.id === tooLarge));
+    await mobile({op:'phone-preview',id:tooLarge,page:1},409);
+  }
 
   const photoJob = await send('바탕화면에서 "사진 이력서.pdf" 파일 보내줘');
   await waitFor(photoJob, 'approval');
@@ -406,6 +428,16 @@ writer.write(sys.argv[5])
   await pc({op:'job',action:'desk-approve',id:localPhotoJob,nonce:localPhoto.nonce});
   assert.deepEqual(await receive(localPhotoJob),await readFile(path.join(known.desktop,'사진 이력서.pdf')));
   console.log('Two PDF pages are visible on both clients before approval; the original matches after delivery');
+  const annotated = await send('바탕화면에서 "주석 이력서.pdf" 파일 보내줘');
+  await waitFor(annotated,'approval');
+  const annotationPreview = {op:'phone-preview',id:annotated,page:1};
+  const annotatedPage = await mobile(annotationPreview);
+  assert.notEqual(annotatedPage.image,photoFirst.image);
+  assert.equal((await pc(annotationPreview)).image,annotatedPage.image);
+  assert.equal((await mobile({...annotationPreview,page:2})).image,photoSecond.image);
+  await mobile({op:'phone-approve',id:annotated,nonce:annotatedPage.nonce,confirm:true});
+  assert.deepEqual(await receive(annotated),await readFile(path.join(known.desktop,'주석 이력서.pdf')));
+  console.log('Visible annotations appear in both previews; oversize pages fail before approval');
   await pc({ op: 'revoke', device: otherPhone.device });
   await other(preview, 403);
   const pcOnly = randomUUID();

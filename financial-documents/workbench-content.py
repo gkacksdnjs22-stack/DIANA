@@ -1,6 +1,6 @@
 """Bounded, offline document extraction, comparison and Office output. JSON pipe only."""
 import sys, os, io, json, re, base64, hashlib, zipfile, collections, decimal, tempfile, subprocess
-from contextlib import closing
+from contextlib import closing, contextmanager
 from xml.etree import ElementTree as ET
 from pathlib import Path
 lib=Path(sys.executable).resolve().parents[1]/'office'
@@ -133,21 +133,41 @@ def inspect_original_pdf(raw):
         if not has_text and not has_images:fail(unsupported)
     except ValueError:raise
     except Exception:fail(unsupported)
-    return {'preview':'\n'.join(parts),'pages':len(pdf.pages),'images':has_images}
+    pages=len(pdf.pages)
+    with preview_pdf(raw,pages) as document:
+        for index in range(pages):
+            with closing(document[index]) as page:
+                scale=preview_scale(page)
+                if index==0:preview_image(page,scale)
+    return {'preview':'\n'.join(parts),'pages':pages,'images':has_images}
+
+@contextmanager
+def preview_pdf(raw,expected_pages):
+    import pypdfium2 as pdfium
+    try:
+        with pdfium.PdfDocument(raw) as pdf:
+            if len(pdf)!=expected_pages:fail('PDF 쪽수를 다시 확인해 주세요.')
+            yield pdf
+    except pdfium.PdfiumError:
+        fail('PDF 페이지를 미리보기로 표시할 수 없습니다.')
+
+def preview_scale(page):
+    width,height=page.get_size()
+    if not (width>0 and height>0 and 1<=max(width,height)<=14400):
+        fail('PDF 페이지 크기가 미리보기 한도를 넘었거나 올바르지 않습니다.')
+    return min(3,1800/max(width,height))
+
+def preview_image(page,scale):
+    with closing(page.render(scale=scale,may_draw_forms=False,draw_annots=True)) as bitmap:
+        out=io.BytesIO()
+        bitmap.to_pil().convert('RGB').save(out,format='JPEG',quality=85)
+        if out.tell()>1_500_000:fail('PDF 미리보기 크기 한도를 넘었습니다.')
+        return out.getvalue()
 
 def render_pdf_preview(raw,page_number,expected_pages):
-    import pypdfium2 as pdfium
-    with pdfium.PdfDocument(raw) as pdf:
-        if len(pdf)!=expected_pages:fail('PDF 쪽수를 다시 확인해 주세요.')
+    with preview_pdf(raw,expected_pages) as pdf:
         with closing(pdf[page_number-1]) as page:
-            width,height=page.get_size()
-            if min(width,height)<=0 or not 1<=max(width,height)<=14400:fail('PDF 페이지 크기를 확인해 주세요.')
-            scale=min(3,1800/max(width,height))
-            with closing(page.render(scale=scale,may_draw_forms=False,draw_annots=False)) as bitmap:
-                out=io.BytesIO()
-                bitmap.to_pil().convert('RGB').save(out,format='JPEG',quality=85)
-                if out.tell()>1_500_000:fail('PDF 미리보기 크기 한도를 넘었습니다.')
-                return {'image':base64.b64encode(out.getvalue()).decode('ascii')}
+            return {'image':base64.b64encode(preview_image(page,preview_scale(page))).decode('ascii')}
 
 def process(req):
     op=req['kind']
