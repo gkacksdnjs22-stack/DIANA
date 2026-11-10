@@ -137,8 +137,7 @@ def inspect_original_pdf(raw):
     with preview_pdf(raw,pages) as document:
         for index in range(pages):
             with closing(document[index]) as page:
-                scale=preview_scale(page)
-                if index==0:preview_image(page,scale)
+                preview_image(page,preview_scale(page))
     return {'preview':'\n'.join(parts),'pages':pages,'images':has_images}
 
 @contextmanager
@@ -159,10 +158,13 @@ def preview_scale(page):
 
 def preview_image(page,scale):
     with closing(page.render(scale=scale,may_draw_forms=False,draw_annots=True)) as bitmap:
+        image=bitmap.to_pil().convert('RGB')
+    for max_side,quality in ((1800,85),(1800,70),(1200,75)):
+        if max(image.size)>max_side:image.thumbnail((max_side,max_side))
         out=io.BytesIO()
-        bitmap.to_pil().convert('RGB').save(out,format='JPEG',quality=85)
-        if out.tell()>1_500_000:fail('PDF 미리보기 크기 한도를 넘었습니다.')
-        return out.getvalue()
+        image.save(out,format='JPEG',quality=quality)
+        if out.tell()<=1_500_000:return out.getvalue()
+    fail('PDF 미리보기 크기 한도를 넘었습니다.')
 
 def render_pdf_preview(raw,page_number,expected_pages):
     with preview_pdf(raw,expected_pages) as pdf:

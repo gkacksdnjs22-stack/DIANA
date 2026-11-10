@@ -336,7 +336,7 @@ try {
   await pc({ op: 'directory', kind: 'exclude', path: deepBranch });
 
   execFileSync(config.python, ['-I', '-B', '-c', `
-import io, sys
+import io, random, sys
 sys.path.insert(0, sys.argv[1])
 from docx import Document
 from PIL import Image
@@ -379,9 +379,17 @@ for name,first in [(sys.argv[7],True),(sys.argv[8],False)]:
         wide.setPageSize((14401,400))
         wide.drawString(72,300,'Oversize second page')
     wide.save()
+dense = canvas.Canvas(sys.argv[9],pagesize=(600,600))
+dense.drawString(60,550,'First page')
+dense.showPage()
+tile = ImageReader(Image.frombytes('RGB',(120,120),random.Random(45).randbytes(120*120*3)))
+for x in range(0,600,40):
+    for y in range(0,600,40):
+        dense.drawImage(tile,x,y,40,40)
+dense.save()
 `, path.join(bundle, 'runtime/office'), path.join(known.desktop, '숨은 속성.docx'), path.join(known.desktop, '숨은 속성.pdf'),
   path.join(known.desktop, '사진 이력서.pdf'), path.join(known.desktop, '첨부 이력서.pdf'), path.join(known.desktop, '주석 이력서.pdf'),
-  path.join(known.desktop, '첫 쪽 한도.pdf'), path.join(known.desktop, '둘째 쪽 한도.pdf')]);
+  path.join(known.desktop, '첫 쪽 한도.pdf'), path.join(known.desktop, '둘째 쪽 한도.pdf'), path.join(known.desktop, '고밀도 미리보기.pdf')]);
   for (const [extension, expected] of [['docx', /원본 전송을 지원하지/], ['pdf', /인증 정보/]]) {
     const blocked = await send(`바탕화면에 "숨은 속성.${extension}" 파일 보내줘`);
     assert.match((await waitFor(blocked, 'failed')).error, expected);
@@ -438,6 +446,22 @@ for name,first in [(sys.argv[7],True),(sys.argv[8],False)]:
   await mobile({op:'phone-approve',id:annotated,nonce:annotatedPage.nonce,confirm:true});
   assert.deepEqual(await receive(annotated),await readFile(path.join(known.desktop,'주석 이력서.pdf')));
   console.log('Visible annotations appear in both previews; oversize pages fail before approval');
+  const denseJob = await send('바탕화면에서 "고밀도 미리보기.pdf" 파일 보내줘');
+  await waitFor(denseJob,'approval');
+  const densePage = {op:'phone-preview',id:denseJob,page:2};
+  const denseFirst = await mobile({...densePage,page:1});
+  const densePreview = await mobile(densePage);
+  assert.equal(densePreview.page,2);
+  assert.equal(densePreview.pages,2);
+  assert.equal(densePreview.nonce,denseFirst.nonce);
+  const denseJpeg = Buffer.from(densePreview.image,'base64');
+  assert.deepEqual(denseJpeg.subarray(0,3),Buffer.from([255,216,255]));
+  assert(denseJpeg.length<=1_500_000);
+  assert.equal((await pc(densePage)).image,densePreview.image);
+  assert(!(await mobile({op:'state'})).files.some(file => file.id === denseJob));
+  await mobile({op:'phone-approve',id:denseJob,nonce:densePreview.nonce,confirm:true});
+  assert.deepEqual(await receive(denseJob),await readFile(path.join(known.desktop,'고밀도 미리보기.pdf')));
+  console.log('High-density second page is within the preview byte limit without changing the approved original');
   await pc({ op: 'revoke', device: otherPhone.device });
   await other(preview, 403);
   const pcOnly = randomUUID();
