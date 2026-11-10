@@ -12,6 +12,7 @@ import {checkedDirectory} from '../personal-ai/documents/files.mjs';
 const sum=b=>createHash('sha256').update(b).digest('hex'),uuid=s=>/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(s),ext=n=>path.extname(n).slice(1).toLowerCase(),supported=['md','txt','docx','pptx','json','pdf','ppt'];
 const readable=[...supported.filter(f=>f!=='ppt'),'csv','tsv','pdf','hwp','hwpx','hwpml','xls','xlsx'];
 const plainOriginals=['txt','md','json','csv','tsv'];
+const canSendOriginal=name=>ext(name)==='pdf'||plainOriginals.includes(ext(name));
 const requireThat=(v,s)=>{if(!v)throw Error(s)},safeError=e=>/[가-힣]/u.test(e.message)&&!/[\\/:]/.test(e.message)?e.message:'파일을 읽거나 저장하지 못했습니다. 파일과 권한을 확인하세요.';
 const fileName=n=>typeof n==='string'&&n.length>0&&n.length<180&&!/[\\/:<>|?*"\x00-\x1f]/u.test(n)&&!n.startsWith('.')&&!/[. ]$/.test(n);
 export async function bytes(p,root,limit=8_000_000,stamp){await checkedDirectory(root);requireThat(path.dirname(p)===root&&fileName(path.basename(p)),'허용 폴더 안의 일반 파일만 읽을 수 있습니다.');const a=await lstat(p,{bigint:true});requireThat(!stamp||[a.dev,a.ino,a.size,a.mtimeNs].join('-')===stamp,'찾은 뒤 원문이 변경되었습니다. 다시 검색하세요.');requireThat(a.isFile()&&!a.isSymbolicLink()&&a.nlink===1n&&a.size>0n&&a.size<=BigInt(limit)&&await realpath(p)===p,'비어 있거나 너무 크거나 연결된 파일입니다.');const h=await open(p,'r');try{const b=await h.stat({bigint:true});requireThat(b.ino===a.ino&&b.dev===a.dev&&b.size===a.size&&b.mtimeNs===a.mtimeNs,'파일이 바뀌었습니다.');const buf=Buffer.alloc(Number(a.size));let n=0;while(n<buf.length){const r=await h.read(buf,n,buf.length-n,n);if(!r.bytesRead)break;n+=r.bytesRead;}const c=await lstat(p,{bigint:true});requireThat(c.ino===b.ino&&c.dev===b.dev&&c.mtimeNs===b.mtimeNs&&c.size===b.size&&c.nlink===1n&&n===buf.length&&await realpath(p)===p,'파일이 바뀌었습니다.');await checkedDirectory(root);return buf;}finally{await h.close();}}
@@ -55,8 +56,10 @@ async resolveSources(s,j,selection,signal){
  if(attachmentOnly&&!all.length)throw Error('현재 요청에 지정한 첨부 자료가 없습니다.');
  if(!attachmentOnly&&(where.named||!all.length||!referent)){
   if(config){
-   const namedDelivery=!s.all&&fileSendSuffix.test(s.request)&&['send','convert'].includes(s.kind);
-   const disk=await discover(config.roots,config.excluded,s.request,{signal,exactQuery:namedDelivery?q:undefined});
+   const fileDelivery=!s.all&&fileSendSuffix.test(s.request)&&['send','convert'].includes(s.kind);
+   const disk=await discover(config.roots,config.excluded,s.request,fileDelivery?{
+    signal,exactQuery:q,canUseFile:f=>s.kind==='send'?canSendOriginal(f.name):readable.includes(ext(f.name)),
+   }:{signal});
    all=where.named?disk:[...all,...disk];
   }
   else all=await this.list(s.request);
@@ -131,7 +134,7 @@ let preview,raw,hash;
 if(s.kind==='send'){
  requireThat(chosen.length===1,'보낼 파일을 한 개 선택하세요.');
  const format=ext(chosen[0].name);
- requireThat(format==='pdf'||plainOriginals.includes(format),'이 파일 형식은 원본 전송을 지원하지 않습니다. 출력 형식을 지정해 변환해 주세요.');
+ requireThat(canSendOriginal(chosen[0].name),'이 파일 형식은 원본 전송을 지원하지 않습니다. 출력 형식을 지정해 변환해 주세요.');
  const source=await this.loadSource(chosen[0],ctrl.signal);
  requireThat(format==='pdf'||source.size<=2_000_000,'원본 검사 분량 한도를 넘었습니다. 출력 형식을 지정해 변환해 주세요.');
  const inspection=format==='pdf'

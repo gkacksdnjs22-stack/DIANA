@@ -65,12 +65,7 @@ export async function discover(roots,excluded,request='',options={}){
  const files=[],seen=new Set(),queue=locations.map(r=>({...r,depth:0}));
  const blocked=p=>privatePart.test(p)||excluded.some(x=>within(x,p));
  let count=0,denied=false,deep=false,foundFolder=false;
- for(let i=0;i<=queue.length;i++){
-  if(i===locations.length&&!denied&&target.named&&!target.folder&&options.exactQuery){
-   const matches=exactRootFiles(files,options.exactQuery);
-   if(matches.length)return matches;
-  }
-  if(i===queue.length)break;
+ for(let i=0;i<queue.length;i++){
   const r=queue[i],dir=r.path,key=dir.toLowerCase();
   if(seen.has(key)||blocked(dir))continue;
   seen.add(key);
@@ -91,13 +86,18 @@ export async function discover(roots,excluded,request='',options={}){
   }catch(e){if(['EPERM','EACCES'].includes(e.code)){denied=true;continue;}if(e.code==='ENOENT')throw Error('검색 중 파일이나 위치가 사라졌습니다. 다시 시도하세요.');throw e;}
  }
  if(denied)throw Error('읽기 권한이 없는 위치가 있어 검색을 끝내지 못했습니다. 검색 위치를 좁혀 주세요.');
+ if(options.exactQuery){
+  // Finish the bounded search before preferring a normalized name over a literal one.
+  const matches=exactFiles(files.filter(options.canUseFile),options.exactQuery);
+  if(matches.length)return matches;
+ }
  if(deep)throw Error('하위 폴더 깊이 한도에 도달했습니다. 더 좁은 폴더를 지정하세요.');
  if(target.folder&&!foundFolder)throw Error('지정한 하위 폴더를 허용한 위치에서 찾지 못했습니다.');
  return files;
 }
 const compact=s=>s.normalize('NFKC').toLowerCase().replace(/[\s_.’'"“”-]/gu,'');
 const generic=/^(?:(?:이|그|해당|첨부한|선택한|모든|전체|여러|두|최근|최신)\s*)?(?:자료|파일|문서)(?:들)?$/u;
-function exactRootFiles(files,q){
+function exactFiles(files,q){
  if(q.terms.length!==1||q.content||q.latest||q.quarters||q.start!==-Infinity||q.end!==Infinity)return [];
  const term=q.terms[0].trim();
  if(!term||generic.test(term))return [];

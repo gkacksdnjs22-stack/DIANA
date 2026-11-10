@@ -292,6 +292,30 @@ try {
   const ambiguousResume = await send('바탕화면에 이력서파일 보내줘');
   const choice = await waitFor(ambiguousResume, 'choose');
   assert.deepEqual(choice.choices.map(file => file.name).sort(), ['이력서.pdf', '이력서.txt']);
+
+  const personnel = path.join(known.desktop, '인사');
+  const downloadArchive = path.join(known.downloads, '보관');
+  await mkdir(personnel);
+  await mkdir(downloadArchive);
+  await writeFile(path.join(known.downloads, '인사자료.png'), Buffer.from('synthetic unsupported original'));
+  await writeFile(path.join(downloadArchive, '인사자료.pdf'), reportBytes);
+  await writeFile(path.join(known.desktop, '별도이력서.pdf'), reportBytes);
+  await writeFile(path.join(personnel, '별도이력서파일.pdf'), reportBytes);
+  await writeFile(path.join(personnel, '조직도.pdf'), reportBytes);
+  for (const [request, expectedName] of [
+    ['다운로드에 인사자료파일 보내줘', '인사자료.pdf'],
+    ['별도이력서파일 보내줘', '별도이력서파일.pdf'],
+    ['바탕화면에서 인사 폴더에서 조직도파일 보내줘', '조직도.pdf'],
+  ]) {
+    const id = await send(request);
+    await waitFor(id, 'approval');
+    const preview = await mobile({ op: 'phone-preview', id });
+    assert.equal(preview.preview.split('\n')[0], '보낼 원본 파일 · ' + expectedName);
+    assert(!(await mobile({ op: 'state' })).files.some(file => file.id === id));
+    await mobile({ op: 'phone-approve', id, nonce: preview.nonce, confirm: true });
+    assert.deepEqual(await receive(id), reportBytes);
+  }
+  console.log('Transfer format, literal names and a named subfolder take precedence in file discovery');
   await pc({ op: 'directory', kind: 'exclude', path: deepBranch });
 
   execFileSync(config.python, ['-I', '-B', '-c', `
