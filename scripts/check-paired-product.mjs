@@ -299,11 +299,14 @@ try {
   await mkdir(downloadArchive);
   await writeFile(path.join(known.downloads, '인사자료.png'), Buffer.from('synthetic unsupported original'));
   await writeFile(path.join(downloadArchive, '인사자료.pdf'), reportBytes);
+  await writeFile(path.join(known.downloads, '직원명부.png'), Buffer.from('synthetic unsupported original'));
+  await writeFile(path.join(downloadArchive, '2026 직원명부.pdf'), reportBytes);
   await writeFile(path.join(known.desktop, '별도이력서.pdf'), reportBytes);
   await writeFile(path.join(personnel, '별도이력서파일.pdf'), reportBytes);
   await writeFile(path.join(personnel, '조직도.pdf'), reportBytes);
   for (const [request, expectedName] of [
     ['다운로드에 인사자료파일 보내줘', '인사자료.pdf'],
+    ['다운로드에 직원명부 보내줘', '2026 직원명부.pdf'],
     ['별도이력서파일 보내줘', '별도이력서파일.pdf'],
     ['바탕화면에서 인사 폴더에서 조직도파일 보내줘', '조직도.pdf'],
   ]) {

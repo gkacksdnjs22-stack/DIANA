@@ -49,6 +49,8 @@ async resolveSources(s,j,selection,signal){
  // With an explicit input filename, replacement text cannot become a search term.
  const q=s.kind==='edit'&&s.change&&s.names.length===1
   ?sourceQuery('"'+s.names[0]+'"'):sourceQuery(where.query);
+ const fileDelivery=!s.all&&fileSendSuffix.test(s.request)&&['send','convert'].includes(s.kind);
+ const canUseFile=fileDelivery?f=>s.kind==='send'?canSendOriginal(f.name):readable.includes(ext(f.name)):undefined;
  let all=this.db.prepare('SELECT id,name,path,1 AS attached FROM attachments WHERE selected=1 ORDER BY rowid').all();
  const referent=q.terms.length===0||q.terms.every(t=>/^(?:(?:첨부한|이|그|두|해당|선택한|여러)\s*)?(?:자료|문서|파일)(?:들)?$/.test(t));
  if(s.kind==='send')requireThat(q.terms.length===1&&!referent&&!q.quarters&&!s.all,'보낼 파일 이름을 한 개 알려 주세요.');
@@ -56,16 +58,13 @@ async resolveSources(s,j,selection,signal){
  if(attachmentOnly&&!all.length)throw Error('현재 요청에 지정한 첨부 자료가 없습니다.');
  if(!attachmentOnly&&(where.named||!all.length||!referent)){
   if(config){
-   const fileDelivery=!s.all&&fileSendSuffix.test(s.request)&&['send','convert'].includes(s.kind);
-   const disk=await discover(config.roots,config.excluded,s.request,fileDelivery?{
-    signal,exactQuery:q,canUseFile:f=>s.kind==='send'?canSendOriginal(f.name):readable.includes(ext(f.name)),
-   }:{signal});
+   const disk=await discover(config.roots,config.excluded,s.request,{signal,exactQuery:fileDelivery?q:undefined,canUseFile});
    all=where.named?disk:[...all,...disk];
   }
   else all=await this.list(s.request);
  }
  signal.throwIfAborted();
- const groups=groupsFor(all,q,s.all);
+ const groups=groupsFor(all,q,s.all,canUseFile);
  const cache=new Map();
  for(const g of groups){
   if(q.content){

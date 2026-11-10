@@ -149,21 +149,26 @@ export function sourceQuery(text){
  const name=t=>unmask(sourceName(sending?t.replace(/([가-힣A-Za-z0-9])파일$/u,'$1'):t));
  return {terms:raw.map(name),rawTerms:raw.map(t=>unmask(t.replace(/^["“]|["”]$/gu,''))),content:content?.[1]||content?.[2],latest,start,end,quarters};
 }
-export function groupsFor(files,q,all=false){
+export function groupsFor(files,q,all=false,canUseFile){
  const dated=files.filter(f=>q.start===-Infinity&&q.end===Infinity||f.mtime>=q.start&&f.mtime<=q.end);
  const groups=[];
  function add(term,pool,quarter,rawTerm=term){
   const literal=term.trim(),needle=compact(literal),broad=!needle||generic.test(literal);
   const stem=f=>compact(path.parse(f.name).name);
   const rawNeedle=compact(rawTerm);
-  const exact=pool.filter(f=>compact(f.name)===rawNeedle||stem(f)===rawNeedle);
   const core=compact(literal.replace(/\s+(?:자료|파일|문서)$/u,''));
-  let hits=broad?pool:exact.length&&!q.latest?exact:pool.filter(f=>stem(f).includes(needle)||core&&stem(f).includes(core)||rawNeedle&&stem(f).includes(rawNeedle)||compact(f.name)===needle);
-  if(!hits.length&&rawNeedle!==needle&&/의$/u.test(literal)){
+  function match(candidates){
+   if(/\.[a-z0-9]{1,8}$/i.test(literal))return candidates.filter(f=>compact(f.name)===needle);
+   if(broad)return candidates;
+   const exact=candidates.filter(f=>compact(f.name)===rawNeedle||stem(f)===rawNeedle);
+   if(exact.length&&!q.latest)return exact;
+   const hits=candidates.filter(f=>stem(f).includes(needle)||core&&stem(f).includes(core)||rawNeedle&&stem(f).includes(rawNeedle)||compact(f.name)===needle);
+   if(hits.length||rawNeedle===needle||!/의$/u.test(literal))return hits;
    const possessive=literal.slice(0,-1),part=compact(possessive);
-   hits=generic.test(possessive)?pool:pool.filter(f=>stem(f).includes(part));
+   return generic.test(possessive)?candidates:candidates.filter(f=>stem(f).includes(part));
   }
-  if(/\.[a-z0-9]{1,8}$/i.test(literal))hits=pool.filter(f=>compact(f.name)===needle);
+  const usable=canUseFile?match(pool.filter(canUseFile)):[];
+  const hits=usable.length?usable:match(pool);
   if(!hits.length)throw Error((quarter||literal||'요청한')+' 자료를 검색 위치에서 찾지 못했습니다.');
   groups.push({label:[quarter,literal].filter(Boolean).join(' ')||'자료',hits,all});
  }
