@@ -146,9 +146,9 @@ async loadSource(f,signal){
  return {doc,raw:b,size:b.length,ref:{id:f.id,name:f.name,path:f.path,stamp:f.stamp,hash:sum(b)}};
 }
 
-async prepare(id,selection){let j=this.row(id),s=JSON.parse(j.spec);const ctrl=new AbortController();this.running.set(id,ctrl);this.db.prepare("UPDATE jobs SET status='reading',error=NULL,nonce=NULL WHERE id=?").run(id);
+async prepare(id,selection,resolvedSources){let j=this.row(id),s=JSON.parse(j.spec);const ctrl=new AbortController();this.running.set(id,ctrl);this.db.prepare("UPDATE jobs SET status='reading',error=NULL,nonce=NULL WHERE id=?").run(id);
 try{requireThat(!s.unsafe,'이 요청은 실행하지 않습니다. 원하는 작업 한 가지를 입력하세요.');requireThat(s.kind==='send'||supported.includes(s.format),'요청한 출력 형식을 지원하지 않습니다.');requireThat(s.kind!=='edit'||s.change,'수정은 바꿀 문구와 새 문구를 각각 따옴표로 지정하세요.');if(s.kind==='create'&&!s.body){this.db.prepare("UPDATE jobs SET status='question' WHERE id=?").run(id);return;}
-const chosen=s.kind==='create'?[]:await this.resolveSources(s,j,selection,ctrl.signal);
+const chosen=s.kind==='create'?[]:resolvedSources??await this.resolveSources(s,j,selection,ctrl.signal);
 if(!chosen)return;
 requireThat(chosen.length<=12,'한 요청에는 원천 파일을 12개까지 사용할 수 있습니다.');
 if(singleSource(s.kind))requireThat(chosen.length===1,singleSourceError);
@@ -290,8 +290,18 @@ else if(a==='desk-select'){
  const offered=new Set(choices.map(item=>item.id)),picked=new Set(b.ids);
  requireThat(picked.size>0&&picked.size<=12&&picked.size===b.ids.length&&b.ids.every(id=>offered.has(id)),
   '목록에서 사용할 자료를 선택하세요.');
+ let resolvedSources;
  if(snapshot.groups)checkSourceGroups(snapshot.groups,picked);
- void this.prepare(id,b.ids).catch(()=>{});
+ else if(!single){
+  // Legacy snapshots have display labels, but no exact group membership.
+  const signal=AbortSignal.timeout(25_000);
+  resolvedSources=await this.resolveSources(JSON.parse(j.spec),j,b.ids,signal);
+  signal.throwIfAborted();
+  const current=this.row(id);
+  requireThat(current?.status==='choose'&&current.nonce===j.nonce&&current.preview===j.preview,
+   '선택할 자료가 바뀌었습니다. 작업을 다시 확인하세요.');
+ }
+ void this.prepare(id,b.ids,resolvedSources).catch(()=>{});
 }
 else throw Error('지원하지 않는 작업입니다.');return{ok:true,id};}catch(e){return {ok:false,error:safeError(e)};}}
 legacyResult(r){const t=r.state?.messages?.at(-1);if(r.state?.latest&&r.executed)this.set('last','');return {ok:r.ok!==false,notice:t?.text||null,legacyError:r.ok===false||r.interpreted===false,reviewItems:t?.items||null};}

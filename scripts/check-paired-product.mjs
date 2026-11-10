@@ -626,24 +626,37 @@ dense.save()
   await mobile({op:'phone-approve',id:resumeSummary,nonce:summaryPreview.nonce,confirm:true});
   assert.equal((await receive(resumeSummary)).subarray(0,5).toString(),'%PDF-');
 
-  const twoSources = await send('다운로드에서 이력서와 보충 메모를 요약해서 TXT로 만들어줘');
-  assert.equal((await waitFor(twoSources,'choose')).single,false);
-  const twoOptions = {op:'phone-preview',id:twoSources,step:'choose'};
-  const twoChoice = await mobile(twoOptions);
-  assert.equal(twoChoice.single,false);
-  const submitTwo = {op:'phone-approve',id:twoSources,step:'choose',nonce:twoChoice.nonce,confirm:true};
-  await mobile({...submitTwo,ids:twoChoice.choices.filter(file=>file.name.startsWith('이력서')).map(file=>file.id)},400);
-  assert.deepEqual(await mobile(twoOptions),twoChoice);
-  await mobile({...submitTwo,ids:twoChoice.choices.filter(file=>file.name.endsWith('.txt')).map(file=>file.id)});
-  await waitFor(twoSources,'approval');
-  const twoPreview = await mobile({op:'phone-preview',id:twoSources});
-  assert.match(twoPreview.preview,/27개/);
-  assert.match(twoPreview.preview,/63회/);
-  await mobile({op:'phone-approve',id:twoSources,nonce:twoPreview.nonce,confirm:true});
-  const twoBytes = (await receive(twoSources)).toString('utf8');
-  assert.match(twoBytes,/27개/);
-  assert.match(twoBytes,/63회/);
-  console.log('A one-source summary stays selectable after a rejected pair; a two-source summary accepts one file per group');
+  for(const legacy of [false,true]){
+    const twoSources = await send('다운로드에서 이력서와 보충 메모를 요약해서 TXT로 만들어줘');
+    assert.equal((await waitFor(twoSources,'choose')).single,false);
+    if(legacy){
+      const db=new DatabaseSync(jobsDatabase);
+      try {
+        const {preview}=db.prepare('SELECT preview FROM jobs WHERE id=?').get(twoSources);
+        const {items,groups}=JSON.parse(preview);
+        assert.equal(groups.length,2);
+        db.prepare('UPDATE jobs SET preview=? WHERE id=?').run(JSON.stringify(items),twoSources);
+      } finally { db.close(); }
+    }
+    const twoOptions = {op:'phone-preview',id:twoSources,step:'choose'};
+    const twoChoice = await mobile(twoOptions);
+    assert.equal(twoChoice.single,false);
+    const submitTwo = {op:'phone-approve',id:twoSources,step:'choose',nonce:twoChoice.nonce,confirm:true};
+    const wrongIds=twoChoice.choices.filter(file=>file.name.startsWith('이력서')).map(file=>file.id);
+    await mobile({...submitTwo,ids:wrongIds},400);
+    await pc({op:'job',action:'desk-select',id:twoSources,ids:wrongIds},400);
+    assert.deepEqual(await mobile(twoOptions),twoChoice);
+    await mobile({...submitTwo,ids:twoChoice.choices.filter(file=>file.name.endsWith('.txt')).map(file=>file.id)});
+    await waitFor(twoSources,'approval');
+    const twoPreview = await mobile({op:'phone-preview',id:twoSources});
+    assert.match(twoPreview.preview,/27개/);
+    assert.match(twoPreview.preview,/63회/);
+    await mobile({op:'phone-approve',id:twoSources,nonce:twoPreview.nonce,confirm:true});
+    const twoBytes = (await receive(twoSources)).toString('utf8');
+    assert.match(twoBytes,/27개/);
+    assert.match(twoBytes,/63회/);
+  }
+  console.log('Current and legacy summaries reject wrong source combinations without losing their choices');
 
 } finally {
   await host?.close();
