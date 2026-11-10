@@ -106,12 +106,13 @@ export async function start(cfg){
     const nonce=job.nonce||randomUUID();
     if(!job.nonce)w.db.prepare("UPDATE jobs SET nonce=? WHERE id=? AND status='choose' AND nonce IS NULL").run(nonce,b.id);
     const roots=w.searchConfig().roots.slice().sort((a,b)=>b.path.length-a.path.length);
-    const choices=JSON.parse(job.preview).map(({id,name,location,modified,group})=>{
-     const root=roots.find(r=>within(r.path,location));
+    const {choices,single}=w.choiceDetails(job);
+    const offered=choices.map(({id,name,location,modified,group})=>{
+     const root=location==='첨부 파일'?null:roots.find(r=>within(r.path,location));
      const folder=root?[root.label,...path.relative(root.path,location).split(path.sep).filter(Boolean)].join(' / '):'첨부 파일';
      return {id,name,folder,modified,group};
     });
-    answer={id:b.id,status:'choose',nonce,choices,single:JSON.parse(job.spec).kind==='send'};
+    answer={id:b.id,status:'choose',nonce,choices:offered,single};
    }else{
     if(b.confirm!==true||typeof b.nonce!=='string'||job.nonce!==b.nonce)deny('선택할 자료를 다시 확인하세요.',409);
     answer=await w.handle({action:'desk-select',id:b.id,ids:b.ids,nonce:b.nonce},'mobile',dev.id);

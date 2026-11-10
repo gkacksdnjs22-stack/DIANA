@@ -35,7 +35,7 @@ async function call(origin, body, { token = '', owner, status = 200 } = {}) {
   assert.equal(response.status, status, body.op + '/' + (body.action || '') + ': ' + (result.error || ''));
   return result;
 }
-const pc = body => call(host.origin, body, { token: ownerToken, owner: host.owner });
+const pc = (body, status = 200) => call(host.origin, body, { token: ownerToken, owner: host.owner, status });
 const mobile = (body, status = 200) => call(relay.origin, body, { token: phone.token, status });
 const send = async (text, id = randomUUID()) => {
   await mobile({ op: 'job', action: 'desk-start', text, id });
@@ -576,6 +576,33 @@ dense.save()
   assert(pptxParts.has('ppt/presentation.xml'));
   assert(pptxParts.has('ppt/slides/slide1.xml'));
   console.log('Attached report and explicit PPTX conversion');
+  const mixedName = '혼합선택.txt';
+  const mixedAttachment = Buffer.from('휴대폰 첨부 자료에 장치 317개가 있습니다.');
+  await writeFile(path.join(known.desktop, mixedName), 'PC 검색 자료에 장치 419개가 있습니다.');
+  await mobile({op:'job',action:'desk-upload',id:randomUUID(),name:mixedName,
+    base64:mixedAttachment.toString('base64'),sha256:sha256(mixedAttachment)});
+  const mixed = await send('혼합선택 TXT로 보내줘');
+  const pcChoice = await waitFor(mixed, 'choose');
+  const phoneChoice = await mobile({op:'phone-preview',id:mixed,step:'choose'});
+  assert.equal(pcChoice.single,true);
+  assert.equal(phoneChoice.single,true);
+  assert.deepEqual(phoneChoice.choices.map(file=>file.folder).sort(), ['바탕화면','첨부 파일']);
+  assert(pcChoice.choices.some(file=>file.location==='첨부 파일'));
+  const selected = {op:'phone-approve',id:mixed,step:'choose',nonce:phoneChoice.nonce,confirm:true};
+  const both = phoneChoice.choices.map(file=>file.id);
+  await mobile({...selected,ids:both},400);
+  await pc({op:'job',action:'desk-select',id:mixed,ids:both},400);
+  const unchanged = await mobile({op:'phone-preview',id:mixed,step:'choose'});
+  assert.deepEqual(unchanged,phoneChoice);
+  await mobile({...selected,ids:[phoneChoice.choices.find(file=>file.folder==='첨부 파일').id]});
+  await waitFor(mixed, 'approval');
+  const mixedPreview = await mobile({op:'phone-preview',id:mixed});
+  assert.match(mixedPreview.preview,/317개/);
+  assert.doesNotMatch(mixedPreview.preview,/419개/);
+  await mobile({op:'phone-approve',id:mixed,nonce:mixedPreview.nonce,confirm:true});
+  assert.match((await receive(mixed)).toString('utf8'),/317개/);
+  console.log('A conversion accepts one source and labels an attachment without an internal path');
+
 } finally {
   await host?.close();
   await relay.close();
