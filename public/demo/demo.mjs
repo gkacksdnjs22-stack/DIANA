@@ -1,11 +1,41 @@
-import { before, after, evidence, guideline, items, initialState, transition, savedItems } from './scenario.mjs';
+import { before, after, evidence, guideline, items, initialState, transition, savedItems, initialTransfer, transferStep } from './scenario.mjs';
 
 const $ = id => document.getElementById(id);
 let state = initialState();
+let transfer = initialTransfer();
 let decision;
 let toastTimer;
 const hasSaved = () => ['saved', 'rechecked'].includes(state.phase);
 const text = (id, value) => { $(id).textContent = value; };
+
+function renderTransfer() {
+  const received = ['received', 'forwarded'].includes(transfer.phase);
+  text('transfer-status', {
+    idle: '요청을 보내면 여기에 미리보기가 표시됩니다.',
+    approval: '파일과 형식을 확인한 뒤 승인하세요.',
+    received: '승인 후 휴대폰에 파일이 도착했습니다.',
+    forwarded: '새 검색 없이 최근 결과를 다시 전달했습니다.',
+    missing: '전달할 최근 결과가 없습니다. 원본이나 TXT 요청부터 체험해 보세요.',
+  }[transfer.phase]);
+  $('transfer-preview').hidden = transfer.phase !== 'approval';
+  text('transfer-preview-text', transfer.preview?.preview ?? '');
+  $('transfer-received').hidden = !received;
+  text('transfer-filename', received ? transfer.last.name : '');
+}
+
+$('transfer-request').addEventListener('change', () => {
+  transfer = transferStep(transfer, 'choose');
+  renderTransfer();
+});
+$('transfer-start').addEventListener('click', () => {
+  transfer = transferStep(transfer, 'request', $('transfer-request').value);
+  renderTransfer();
+});
+$('transfer-approve').addEventListener('click', () => {
+  transfer = transferStep(transfer, 'approve');
+  renderTransfer();
+  $('transfer-start').focus();
+});
 
 function notify(message) {
   clearTimeout(toastTimer);
@@ -107,6 +137,9 @@ $('reset').addEventListener('click', () => {
   decision = undefined;
   if ($('decision-dialog').open) $('decision-dialog').close();
   state = transition(state, 'reset');
+  transfer = initialTransfer();
+  $('transfer-request').value = 'original';
+  renderTransfer();
   $('source-select').value = 'target';
   text('source-content', before);
   $('diff-lines').hidden = true;
@@ -163,3 +196,4 @@ for (const line of after.slice(before.length).split('\n')) {
 }
 renderItems('checklist', items);
 renderState();
+renderTransfer();

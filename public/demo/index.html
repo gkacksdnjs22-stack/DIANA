@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#0c1423">
-  <meta name="description" content="DIANA PC 금융 문서 검토 화면을 가상 자료로 체험하세요. 수정 전후, 근거 확인, 승인과 저장본 재검토 흐름을 살펴봅니다.">
-  <title>DIANA — PC 검토 화면 DEMO</title>
+  <meta name="description" content="가상 자료로 DIANA의 PC 파일 전송과 문서 검토를 체험하세요. 휴대폰 승인과 수신, 근거 확인과 보완을 살펴봅니다.">
+  <title>DIANA — 파일 전송과 문서 검토 DEMO</title>
   <link rel="icon" href="/diana-logo.png" type="image/png">
   <link rel="stylesheet" href="/demo/pc.css">
   <link rel="stylesheet" href="/demo/demo.css">
@@ -23,8 +23,37 @@
 </aside>
 <main id="main">
   <header class="topbar"><div class="breadcrumb">DIANA <span>/</span> PC 금융 문서 검토</div><a class="demo-home" href="/">소개 페이지 ↗</a></header>
-  <div class="demo-banner"><span class="demo-label">INTERACTIVE DEMO</span><div><strong>PC 앱 화면을 가상 자료로 체험해 보세요.</strong><p>정해진 예시로 검토·승인 흐름을 보여줍니다. 실제 AI 분석이나 PC 파일 저장은 실행되지 않으며, 새로고침하면 초기화됩니다.</p></div></div>
-  <section class="heading"><div><div class="eyebrow">DOCUMENT REVIEW</div><h1>가상 검토서 보완</h1><p>해외 바이아웃 펀드 A · KEY_MAN 조항 보완 · Markdown</p></div><span id="state" class="state">가상 승인 대기</span></section>
+  <div class="demo-banner"><span class="demo-label">INTERACTIVE DEMO</span><div><strong>파일 전송과 문서 검토를 가상 자료로 체험해 보세요.</strong><p>실제 AI 분석이나 PC 파일 저장은 실행되지 않으며, 새로고침하면 초기화됩니다.</p><nav class="demo-jump" aria-label="체험 이동"><a href="#transfer">파일 전송</a><a href="#review">문서 검토</a></nav></div></div>
+  <section id="transfer" class="demo-transfer" aria-labelledby="transfer-title">
+    <div class="eyebrow">FILE DELIVERY</div>
+    <h1 id="transfer-title">PC 파일을 휴대폰으로 받기</h1>
+    <p>연결된 휴대폰에 저장 승인 권한이 있는 상황을 보여주는 가상 체험입니다.</p>
+    <div class="demo-transfer-grid">
+      <div class="demo-transfer-card">
+        <h2>1. 요청 선택</h2>
+        <label for="transfer-request">가상 요청</label>
+        <select id="transfer-request">
+          <option value="original">바탕화면에 샘플 자료 파일 보내줘</option>
+          <option value="text">바탕화면에 샘플 자료를 TXT로 보내줘</option>
+          <option value="recent">결과를 전달해줘</option>
+        </select>
+        <button id="transfer-start">가상 요청 보내기</button>
+      </div>
+      <div class="demo-transfer-card">
+        <h2>2. 휴대폰에서 확인</h2>
+        <p id="transfer-status" role="status">요청을 보내면 여기에 미리보기가 표시됩니다.</p>
+        <div id="transfer-preview" hidden>
+          <p id="transfer-preview-text"></p>
+          <button id="transfer-approve">확인하고 승인</button>
+        </div>
+        <div id="transfer-received" class="demo-transfer-result" hidden>
+          <strong>가상 수신 파일</strong>
+          <code id="transfer-filename"></code>
+        </div>
+      </div>
+    </div>
+  </section>
+  <section id="review" class="heading"><div><div class="eyebrow">DOCUMENT REVIEW</div><h2>가상 검토서 보완</h2><p>해외 바이아웃 펀드 A · KEY_MAN 조항 보완 · Markdown</p></div><span id="state" class="state">가상 승인 대기</span></section>
   <p class="summary-caption">첫 검토 요약 · 원문과 근거를 비교한 뒤 가상 수정안을 승인해 보세요.</p>
   <section class="metrics" aria-label="첫 검토 요약"><div><span>확인된 항목</span><strong>1</strong><small>검토서에 명시된 내용</small></div><div><span>근거 있는 보완</span><strong>1</strong><small>실사 자료에서 찾은 근거</small></div><div><span>추가 확인</span><strong>1</strong><small>근거가 없는 항목</small></div><div><span>가상 저장</span><strong id="saved">대기</strong><small>브라우저 메모리에서 체험</small></div></section>
   <section class="approval"><div><span class="eyebrow">APPROVAL WALKTHROUGH</span><h2 id="approval-title">근거가 있는 조항을 보완할 수 있어요.</h2><p id="approval-note">실사 자료의 핵심 운용역 이탈 조항을 검토서에 추가합니다. LP 자문위원회 참여권은 근거가 없어 추가 확인으로 남습니다.</p></div><div class="approval-action"><div class="decision-buttons"><button id="approve-open">가상 수정안 승인 <span aria-hidden="true">↗</span></button><button id="reject-open" class="secondary">거절</button></div><small>실제 문서·파일에는 영향을 주지 않아요</small></div></section>

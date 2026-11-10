@@ -5,7 +5,25 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createControlServer } from '../lib/control.mjs';
-import { before, after, initialState, transition, items, savedItems } from '../public/demo/scenario.mjs';
+import { before, after, initialState, transition, items, savedItems, initialTransfer, transferStep } from '../public/demo/scenario.mjs';
+
+test('simulated delivery requires approval and forwards the latest result without a new file', () => {
+  const start = initialTransfer();
+  assert.equal(transferStep(start, 'request', 'recent').phase, 'missing');
+  for (const [request, name] of [['original', '샘플 자료.pdf'], ['text', '샘플 자료.txt']]) {
+    const pending = transferStep(start, 'request', request);
+    assert.equal(pending.phase, 'approval');
+    assert.equal(pending.last, null);
+    assert.equal(transferStep(transferStep(pending, 'choose'), 'approve').last, null);
+    const received = transferStep(pending, 'approve');
+    assert.equal(received.phase, 'received');
+    assert.equal(received.last.name, name);
+    const forwarded = transferStep(received, 'request', 'recent');
+    assert.equal(forwarded.phase, 'forwarded');
+    assert.equal(forwarded.last, received.last);
+    assert.equal(forwarded.preview, null);
+  }
+});
 
 test('demo approval preserves the sample original and unresolved evidence gap', () => {
   const start = initialState();
@@ -58,6 +76,8 @@ test('public demo serves all its resources without authentication and reuses PC 
   const html = await response.text();
   assert.match(html, /가상 자료/);
   assert.match(html, /실제 AI 분석이나 PC 파일 저장은 실행되지 않으며/);
+  assert.match(html, /PC 파일을 휴대폰으로 받기/);
+  assert.match(html, /가상 검토서 보완/);
   assert.equal(await (await fetch(url + '/demo/')).text(), html);
   const paths = [...new Set([...html.matchAll(/(?:href|src)="(\/[^"]*)"/g)].map(match => match[1].split('#')[0]))];
   paths.push('/demo/scenario.mjs');
