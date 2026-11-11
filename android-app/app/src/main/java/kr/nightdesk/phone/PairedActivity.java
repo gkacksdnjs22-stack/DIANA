@@ -26,7 +26,8 @@ import java.util.concurrent.ExecutorService;
 /** Native client for an authenticated PC. Only the system picker grants document access. */
 public final class PairedActivity extends Activity {
  private final ExecutorService io=Executors.newSingleThreadExecutor(); private final Handler clock=new Handler(Looper.getMainLooper());
- private LinearLayout page,rows,dock; private TextView note,connection; private EditText editor; private SecureStore store;
+ private LinearLayout page,rows,dock,archiveFiles; private TextView note,connection; private EditText editor; private SecureStore store;
+ private AlertDialog workDialog;
  private JSONObject session;private SharedPreferences local;private String screen="",signature="";private boolean pending=false,active=false;private TextView pairWait;private CountDownTimer pairingTimer;
  interface Work {void run() throws Exception;}
  static JSONObject obj(Object... pairs)throws JSONException{JSONObject o=new JSONObject();for(int i=0;i<pairs.length;i+=2)o.put((String)pairs[i],pairs[i+1]);return o;}
@@ -34,9 +35,31 @@ public final class PairedActivity extends Activity {
  static byte[] read(InputStream stream,int max)throws IOException{return PairedWire.read(stream,max);}
  protected void onCreate(Bundle b){super.onCreate(b);store=new SecureStore(this);try{session=store.load();}catch(Exception e){session=null;}if(session!=null&&!session.optString("device").isEmpty())getSharedPreferences("pairing",MODE_PRIVATE).edit().putString("previousDevice",session.optString("device")).commit();if(session!=null&&!session.optString("device").isEmpty()&&session.optString("token").startsWith("v1.")&&PairedLink.ORIGIN.equals(session.optString("origin")))work();else login();}
  protected void onResume(){super.onResume();active=true;clock.post(tick);}protected void onPause(){active=false;clock.removeCallbacks(tick);super.onPause();}
- protected void onDestroy(){if(pairingTimer!=null)pairingTimer.cancel();io.shutdown();super.onDestroy();}
- final Runnable tick=new Runnable(){public void run(){if(!active)return;if(screen.equals("work")&&!pending)async(()->refresh());clock.postDelayed(this,3500);}};
- void async(Work task){if(pending){note.setText("현재 요청을 처리 중입니다. 잠시 뒤 다시 시도하세요.");return;}pending=true;io.execute(()->{try{task.run();}catch(Exception e){runOnUiThread(()->{if(!isDestroyed())note.setText(e instanceof IOException&&e.getMessage()!=null&&e.getMessage().matches(".*[가-힣].*")?e.getMessage():"연결이나 저장 위치를 확인하고 다시 시도하세요.");});}finally{runOnUiThread(()->pending=false);}});}
+ protected void onDestroy(){if(pairingTimer!=null)pairingTimer.cancel();if(workDialog!=null)workDialog.dismiss();io.shutdown();super.onDestroy();}
+ final Runnable tick=new Runnable(){public void run(){if(!active)return;if(screen.equals("work")&&!pending&&workDialog==null)async(()->refresh());clock.postDelayed(this,3500);}};
+ void async(Work task){
+  if(pending){
+   note.setText("현재 요청을 처리 중입니다. 잠시 뒤 다시 시도하세요.");
+   return;
+  }
+  TextView taskNote=note;
+  pending=true;
+  io.execute(()->{
+   try{task.run();}
+   catch(Exception e){
+    runOnUiThread(()->{
+     if(!isDestroyed()&&note==taskNote)
+      taskNote.setText(e instanceof IOException&&e.getMessage()!=null&&e.getMessage().matches(".*[가-힣].*")
+       ?e.getMessage():"연결이나 저장 위치를 확인하고 다시 시도하세요.");
+    });
+   }finally{
+    runOnUiThread(()->{
+     pending=false;
+     if(!isDestroyed()&&!isFinishing()&&screen.equals("archive"))renderArchiveFiles();
+    });
+   }
+  });
+ }
  JSONObject call(JSONObject b)throws Exception{
   try{return new PairedFiles(this,session).call(b);}catch(PairedFiles.AuthError e){store.clear();runOnUiThread(()->{login();note.setText(e.getMessage());});throw e;}}
 
@@ -76,7 +99,7 @@ public final class PairedActivity extends Activity {
   if(!id.equals("pair")){shell.addView(dock,new LinearLayout.LayoutParams(-1,dp(68)));tab("작업",R.drawable.ic_ui_home,id.equals("work"),()->work());tab("파일",R.drawable.ic_ui_inbox,id.equals("archive"),()->archive());tab("설정",R.drawable.ic_ui_settings,id.equals("settings"),()->settings());}
   shell.setOnApplyWindowInsetsListener((v,in)->{int left,top,right,bottom;boolean keyboard=false;if(Build.VERSION.SDK_INT>=30){android.graphics.Insets safe=in.getInsets(android.view.WindowInsets.Type.systemBars()|android.view.WindowInsets.Type.displayCutout());int ime=in.getInsets(android.view.WindowInsets.Type.ime()).bottom;keyboard=in.isVisible(android.view.WindowInsets.Type.ime());left=safe.left;top=safe.top;right=safe.right;bottom=Math.max(safe.bottom,ime);}else{left=in.getSystemWindowInsetLeft();top=in.getSystemWindowInsetTop();right=in.getSystemWindowInsetRight();bottom=in.getSystemWindowInsetBottom();}v.setPadding(left,top,right,bottom);if(!id.equals("pair"))dock.setVisibility(keyboard?View.GONE:View.VISIBLE);return in;});shell.requestApplyInsets();
  }
- void tab(String name,int icon,boolean selected,Runnable action){LinearLayout item=column();item.setGravity(Gravity.CENTER);item.setBackground(shape(selected?ACTIVE:FRAME,12,selected?EDGE:0));item.setContentDescription(name);item.setSelected(selected);item.setFocusable(true);item.setClickable(true);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,-1,1);lp.setMargins(dp(4),0,dp(4),0);dock.addView(item,lp);ImageView image=new ImageView(this);image.setImageResource(icon);image.setColorFilter(selected?CYAN:MUTED);item.addView(image,new LinearLayout.LayoutParams(dp(21),dp(21)));TextView label=label(item,name);label.setTextSize(12);label.setLayoutParams(new LinearLayout.LayoutParams(-1,-2));label.setGravity(Gravity.CENTER);label.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);label.setTextColor(selected?CYAN:MUTED);item.setOnClickListener(v->{if(!pending)action.run();});}
+ void tab(String name,int icon,boolean selected,Runnable action){LinearLayout item=column();item.setGravity(Gravity.CENTER);item.setBackground(shape(selected?ACTIVE:FRAME,12,selected?EDGE:0));item.setContentDescription(name);item.setSelected(selected);item.setFocusable(true);item.setClickable(true);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,-1,1);lp.setMargins(dp(4),0,dp(4),0);dock.addView(item,lp);ImageView image=new ImageView(this);image.setImageResource(icon);image.setColorFilter(selected?CYAN:MUTED);item.addView(image,new LinearLayout.LayoutParams(dp(21),dp(21)));TextView label=label(item,name);label.setTextSize(12);label.setLayoutParams(new LinearLayout.LayoutParams(-1,-2));label.setGravity(Gravity.CENTER);label.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);label.setTextColor(selected?CYAN:MUTED);item.setOnClickListener(v->action.run());}
  LinearLayout card(LinearLayout parent){LinearLayout box=column();box.setPadding(dp(16),dp(14),dp(16),dp(14));box.setBackground(shape(SURFACE,16,EDGE));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.bottomMargin=dp(12);parent.addView(box,lp);return box;}
  TextView caption(LinearLayout parent,String text){TextView t=label(parent,text);t.setTextSize(13);t.setTextColor(MUTED);return t;}
  void empty(LinearLayout parent,String title,String detail){LinearLayout box=card(parent);box.setGravity(Gravity.CENTER);box.setPadding(dp(20),dp(32),dp(20),dp(32));ImageView image=new ImageView(this);image.setImageResource(R.drawable.ic_ui_inbox);image.setColorFilter(CYAN);box.addView(image,new LinearLayout.LayoutParams(dp(36),dp(36)));TextView h=label(box,title);h.setTextSize(17);h.setGravity(Gravity.CENTER);h.setTypeface(Typeface.DEFAULT_BOLD);caption(box,detail).setGravity(Gravity.CENTER);}
@@ -117,9 +140,36 @@ public final class PairedActivity extends Activity {
  void work(){getSharedPreferences("pairing",MODE_PRIVATE).edit().putString("previousDevice",session.optString("device")).commit();local=getSharedPreferences("paired-"+session.optString("device"),MODE_PRIVATE);page("work","DIANA  ·  PC 문서 작업");
  LinearLayout composer=card(page);TextView title=label(composer,"무엇을 만들까요?");title.setTextSize(22);title.setTypeface(Typeface.DEFAULT_BOLD);caption(composer,"PC 자료를 찾아 요약하거나 새 문서를 요청하세요.");
  editor=field(composer,"어떤 문서 작업을 할까요?");styleRequestInput(editor);editor.setMinLines(4);editor.setMaxLines(8);editor.setGravity(Gravity.START|Gravity.TOP);LinearLayout actions=line(composer);editor.setText(local.getString("draftText",local.getString("text","")));editor.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence x,int a,int c,int f){}public void onTextChanged(CharSequence x,int a,int b,int c){local.edit().putString("draftText",x.toString()).apply();}public void afterTextChanged(android.text.Editable e){}});
- button(actions,"보내기",()->{String text=editor.getText().toString().trim();if(text.isEmpty())return;String key=text.equals(local.getString("text",""))?local.getString("id",null):null;final String id=key==null?UUID.randomUUID().toString():key;if(!local.edit().putString("id",id).putString("text",text).commit())return;async(()->{JSONObject r=call(obj("op","job","action","desk-start","id",id,"text",text));local.edit().remove("text").remove("id").remove("draftText").commit();runOnUiThread(()->{if(screen.equals("work")){editor.setText("");note.setText(r.optString("notice","PC에 보냈습니다."));}});refresh();});});
+ button(actions,"보내기",this::sendRequest);
  button(actions,"파일 첨부",()->{Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");startActivityForResult(i,21);});
  rows=column();rows.setPadding(0,dp(4),0,0);page.addView(rows);}
+ void sendRequest(){
+  if(pending){
+   note.setText("현재 요청을 처리 중입니다. 잠시 뒤 다시 시도하세요.");
+   return;
+  }
+  String draft=editor.getText().toString(),text=draft.trim();
+  if(text.isEmpty())return;
+  SharedPreferences requestPrefs=local;
+  String previousText=requestPrefs.getString("text","");
+  String previousId=text.equals(previousText)?requestPrefs.getString("id",null):null;
+  String id=previousId==null?UUID.randomUUID().toString():previousId;
+  if(!requestPrefs.edit().putString("id",id).putString("text",text).commit())return;
+  async(()->{
+   JSONObject reply=call(obj("op","job","action","desk-start","id",id,"text",text));
+   runOnUiThread(()->{
+    boolean sameDraft=draft.equals(requestPrefs.getString("draftText",text));
+    SharedPreferences.Editor saved=requestPrefs.edit().remove("text").remove("id");
+    if(sameDraft)saved.remove("draftText");
+    saved.apply();
+    if(!isDestroyed()&&screen.equals("work")&&local==requestPrefs){
+     if(sameDraft&&draft.equals(editor.getText().toString()))editor.setText("");
+     note.setText(reply.optString("notice","PC에 보냈습니다."));
+    }
+   });
+   refresh();
+  });
+ }
  void refresh()throws Exception{JSONObject r=call(obj("op","state"));JSONArray all=new JSONArray();int offset=0;
  while(true){JSONArray batch=r.getJSONArray("files");for(int i=0;i<batch.length();i++){JSONObject f=batch.getJSONObject(i);receive(f);all.put(f);}if(!r.optBoolean("more"))break;offset+=20;r=call(obj("op","state","offset",offset));}
  final JSONArray jobs=r.getJSONArray("jobs");String sig=jobs.toString()+all.toString();runOnUiThread(()->{if(!screen.equals("work")||isDestroyed())return;connection.setText("PC 연결됨");if(signature.equals(sig))return;signature=sig;rows.removeAllViews();for(int i=0;i<jobs.length();i++)renderJob(rows,jobs.optJSONObject(i));if(all.length()>0){TextView recent=label(rows,"최근 파일");recent.setTextSize(17);recent.setTypeface(Typeface.DEFAULT_BOLD);recent.setPadding(0,dp(8),0,dp(12));int shown=0;for(int i=0;i<all.length()&&shown<3;i++){JSONObject f=all.optJSONObject(i);if(local.contains("file-"+f.optString("id"))){fileRow(rows,f.optString("name"),"휴대폰에 저장됨",()->open(f.optString("id")),null);shown++;}}}else if(jobs.length()==0)caption(rows,"만든 파일은 ‘파일’에 모아둘게요.");});}
@@ -141,6 +191,7 @@ public final class PairedActivity extends Activity {
   if(!state.equals("saving"))button(buttons,state.equals("failed")?"닫기":"중단",()->job("desk-cancel",job));
  }
  void showPhoneChoices(String id){
+  TextView requestNote=note;
   async(()->{
    JSONObject result=call(obj("op","phone-preview","id",id,"step","choose"));
    if(!id.equals(result.optString("id"))||!"choose".equals(result.optString("status")))
@@ -155,7 +206,7 @@ public final class PairedActivity extends Activity {
      +(result.optBoolean("single")||item.optString("group").isEmpty()?"":"\n"+item.optString("group"));
    }
    runOnUiThread(()->{
-    if(isDestroyed()||isFinishing()||!active||!screen.equals("work"))return;
+    if(isDestroyed()||isFinishing()||!active||note!=requestNote)return;
     boolean[] selected=new boolean[ids.length];
     AlertDialog.Builder builder=new AlertDialog.Builder(this).setTitle("사용할 파일 선택")
      .setNegativeButton("닫기",null).setPositiveButton("선택 확인",null);
@@ -168,7 +219,8 @@ public final class PairedActivity extends Activity {
      boolean any=false;for(boolean item:selected)any|=item;
      ((AlertDialog)dialog).getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(any);
     });
-    AlertDialog dialog=builder.show();
+    AlertDialog dialog=builder.create();
+    showWorkDialog(dialog,null);
     Button submit=dialog.getButton(AlertDialog.BUTTON_POSITIVE);submit.setEnabled(false);
     submit.setOnClickListener(v->{
      if(pending)return;
@@ -183,6 +235,7 @@ public final class PairedActivity extends Activity {
   });
  }
  void showPhonePreview(String id){
+  TextView requestNote=note;
   async(()->{
    JSONObject result=call(obj("op","phone-preview","id",id,"page",1));
    if(!id.equals(result.getString("id")))throw new IOException("작업 정보를 다시 확인하세요.");
@@ -190,16 +243,34 @@ public final class PairedActivity extends Activity {
    String format=result.getString("format").toUpperCase(java.util.Locale.ROOT);
    boolean retry=result.optString("status").equals("saving");
    runOnUiThread(()->{
-    if(isDestroyed()||isFinishing()||!active||!screen.equals("work"))return;
+    if(isDestroyed()||isFinishing()||!active||note!=requestNote)return;
     if(result.has("image")){new PdfPreview(id,nonce,preview,retry,result).show();return;}
     ScrollView scroll=new ScrollView(this);
     TextView text=new TextView(this);
     text.setText(preview);text.setTextSize(15);text.setPadding(dp(22),dp(12),dp(22),dp(12));
     scroll.addView(text);
-    new AlertDialog.Builder(this).setTitle((retry?"다시 저장할 결과":"저장 전 미리보기")+" · "+format).setView(scroll)
+    AlertDialog dialog=new AlertDialog.Builder(this)
+     .setTitle((retry?"다시 저장할 결과":"저장 전 미리보기")+" · "+format).setView(scroll)
      .setNegativeButton("닫기",null)
-     .setPositiveButton(retry?"다시 저장":"승인 후 저장",(dialog,which)->approvePhone(id,nonce)).show();
+     .setPositiveButton(retry?"다시 저장":"승인 후 저장",null).create();
+    showApprovalDialog(dialog,id,nonce,null);
    });
+  });
+ }
+ private void showWorkDialog(AlertDialog dialog,Runnable onDismiss){
+  workDialog=dialog;
+  dialog.setOnDismissListener(d->{
+   if(workDialog==d)workDialog=null;
+   if(onDismiss!=null)onDismiss.run();
+  });
+  dialog.show();
+ }
+ private void showApprovalDialog(AlertDialog dialog,String id,String nonce,Runnable onDismiss){
+  showWorkDialog(dialog,onDismiss);
+  dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+   if(pending)return;
+   dialog.dismiss();
+   approvePhone(id,nonce);
   });
  }
  void approvePhone(String id,String nonce){async(()->{
@@ -240,9 +311,8 @@ public final class PairedActivity extends Activity {
    button(nav,"다음 쪽",()->load(pageNumber+1));next=(Button)nav.getChildAt(1);
    dialog=new AlertDialog.Builder(PairedActivity.this).setTitle("PDF 내용 확인").setView(content)
     .setNegativeButton("닫기",null)
-    .setPositiveButton(retry?"다시 저장":"승인 후 저장",(d,w)->approvePhone(id,nonce)).create();
-   dialog.setOnDismissListener(d->{viewer.stopLoading();viewer.destroy();});
-   dialog.show();
+    .setPositiveButton(retry?"다시 저장":"승인 후 저장",null).create();
+   showApprovalDialog(dialog,id,nonce,()->{viewer.stopLoading();viewer.destroy();});
    display(first);
   }
   void display(JSONObject result){
@@ -278,7 +348,52 @@ public final class PairedActivity extends Activity {
  void job(String action,JSONObject j){async(()->{call(obj("op","job","action",action,"id",j.getString("id")));refresh();});}
  void receive(JSONObject f)throws Exception{new PairedFiles(this,session).receive(f);}
  void open(String id){try{JSONObject r=new JSONObject(local.getString("file-"+id,""));Uri uri=Uri.parse(r.getString("uri"));String name=r.getString("name"),ext=name.substring(name.lastIndexOf('.')+1);String type=android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);if(type==null)type="text/plain";startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(uri,type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION));}catch(Exception e){note.setText("파일을 열 앱과 저장 위치를 확인하세요.");}}
- void archive(){page("archive","보관 파일");caption(page,"받은 파일을 열거나 휴대폰 사본을 관리하세요.");java.util.ArrayList<String> keys=new java.util.ArrayList<>();for(String key:local.getAll().keySet())if(key.startsWith("file-"))keys.add(key);java.util.Collections.sort(keys);if(keys.isEmpty()){empty(page,"아직 받은 파일이 없어요","PC에서 저장한 결과가 여기에 표시됩니다.");return;}for(String key:keys){try{JSONObject f=new JSONObject(local.getString(key,""));String id=key.substring(5);fileRow(page,f.getString("name"),"휴대폰 보관 파일",()->open(id),()->new AlertDialog.Builder(this).setTitle("휴대폰 사본 삭제").setMessage(f.optString("name")+"\n\nPC에 있는 파일은 그대로 유지됩니다.").setNegativeButton("유지",null).setPositiveButton("삭제",(dlg,btn)->{try{if(getContentResolver().delete(Uri.parse(f.optString("uri")),null,null)!=1)throw new IOException();local.edit().remove(key).putBoolean("removed-"+id,true).commit();archive();}catch(Exception e){note.setText("파일을 삭제하지 못했습니다.");}}).show());}catch(Exception ignored){note.setText("보관 파일 정보를 확인하세요.");}}}
+ void archive(){
+  page("archive","보관 파일");
+  caption(page,"받은 파일을 열거나 휴대폰 사본을 관리하세요.");
+  archiveFiles=column();
+  page.addView(archiveFiles);
+  renderArchiveFiles();
+ }
+ void renderArchiveFiles(){
+  archiveFiles.removeAllViews();
+  ArrayList<String> keys=new ArrayList<>();
+  for(String key:local.getAll().keySet())if(key.startsWith("file-"))keys.add(key);
+  Collections.sort(keys);
+  if(keys.isEmpty()){
+   empty(archiveFiles,"아직 받은 파일이 없어요","PC에서 저장한 결과가 여기에 표시됩니다.");
+   return;
+  }
+  for(String key:keys){
+   try{
+    JSONObject file=new JSONObject(local.getString(key,""));
+    String id=key.substring(5);
+    fileRow(archiveFiles,file.getString("name"),"휴대폰 보관 파일",()->open(id),
+     ()->new AlertDialog.Builder(this).setTitle("휴대폰 사본 삭제")
+      .setMessage(file.optString("name")+"\n\nPC에 있는 파일은 그대로 유지됩니다.")
+      .setNegativeButton("유지",null)
+      .setPositiveButton("삭제",(dialog,button)->deleteArchivedFile(id)).show());
+   }catch(JSONException e){note.setText("보관 파일 정보를 확인하세요.");}
+  }
+ }
+ void deleteArchivedFile(String id){
+  PairedFiles files=new PairedFiles(this,session);
+  SharedPreferences preferences=local;
+  TextView status=note;
+  status.setText("휴대폰 사본을 삭제하는 중입니다.");
+  io.execute(()->{
+   try{
+    files.deleteLocalCopy(id);
+    runOnUiThread(()->{
+     if(isDestroyed()||isFinishing()||local!=preferences||!screen.equals("archive"))return;
+     if(note==status)status.setText("");
+     renderArchiveFiles();
+    });
+   }catch(Exception e){
+    runOnUiThread(()->{if(!isDestroyed()&&note==status)status.setText("파일을 삭제하지 못했습니다.");});
+   }
+  });
+ }
  void settings(){page("settings","설정");LinearLayout pc=card(page);TextView pcTitle=label(pc,"내 PC 연결");pcTitle.setTextSize(17);pcTitle.setTypeface(Typeface.DEFAULT_BOLD);caption(pc,"연결 정보는 이 기기에 안전하게 보관됩니다.");button(pc,"기기 연결 해제",()->new AlertDialog.Builder(this).setTitle("기기 연결 해제").setMessage("현재 휴대폰과 PC의 연결을 해제할까요? 받은 파일은 유지됩니다.").setNegativeButton("유지",null).setPositiveButton("해제",(d,b)->async(()->{call(obj("op","revoke","device",session.getString("device")));store.clear();runOnUiThread(()->login());})).show());LinearLayout storage=card(page);TextView storageTitle=label(storage,"파일 저장");storageTitle.setTextSize(17);storageTitle.setTypeface(Typeface.DEFAULT_BOLD);caption(storage,local.getString("tree","").isEmpty()?"앱의 보관 파일에 자동 저장":"선택한 폴더에 저장");button(storage,"저장 폴더 변경",()->startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE),22));LinearLayout app=card(page);label(app,"DIANA");caption(app,"버전 "+BuildConfig.VERSION_NAME);}
  protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(result!=RESULT_OK||data==null||data.getData()==null)return;Uri uri=data.getData();
  if(request==22){try{getContentResolver().takePersistableUriPermission(uri,data.getFlags()&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION));local.edit().putString("tree",uri.toString()).commit();settings();}catch(Exception e){note.setText("선택한 위치를 사용할 수 없습니다.");}}

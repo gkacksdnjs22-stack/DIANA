@@ -90,10 +90,12 @@ export async function discover(roots,excluded,request='',options={}){
  if(term){
   // Finish the bounded search before preferring a normalized name over a literal one.
   const usable=files.filter(options.canUseFile);
-  const matches=exactFiles(usable,term,query.rawTerms[0]);
+  const rawTerm=query.rawTerms[0];
+  const title=preferLiteralName(usable,query,term,rawTerm,query.literalTerms?.[0]);
+  const matches=exactFiles(usable,title,rawTerm);
   if(matches.length)return matches;
   if(deep&&options.allowPartial){
-   const candidates=matchName(usable,query,term,query.rawTerms[0]);
+   const candidates=matchName(usable,query,title,rawTerm);
    if(candidates.length)return candidates.map(file=>({...file,searchLimited:true}));
   }
  }
@@ -121,7 +123,7 @@ function sourceName(term){
   .replace(/\s+(?:의\s+)?(?:(?:전체|주요|핵심)\s+)?(?:내용|본문)$/u,'')
   .replace(/^["“]|["”]$/gu,'').trim();
 }
-export const fileSendSuffix=/(?:보내|전송해|전달해|공유해)\s*(?:줘요?|주세요|주십시오)\s*[.!]?\s*$/u;
+export const fileSendSuffix=/(?:(?:^|\s)다시\s+)?(?:보내|전송해|전달해|공유해)\s*(?:줘요?|주세요|주십시오|달라(?:고(?:요)?)?)\s*[.!]?\s*$/u;
 export const fileSendFormatSuffix=/(?:^|\s)(pptx?|docx?|json|txt|md|pdf|hwp[x]?|xlsx?|html|csv|png|jpe?g|rtf|odt|pages|keynote|텍스트|마크다운)\s*(?:으로|로)\s*$/iu;
 export function fileSendPrefix(text){
  return text.replace(fileSendSuffix,'').trim().replace(/\s+(?:내\s+)?(?:휴대폰|폰|모바일)(?:으로|로|에)$/u,'').trim();
@@ -129,7 +131,7 @@ export function fileSendPrefix(text){
 export function sourceQuery(text){
  // Protect file names before looking for operation verbs inside the surrounding request.
  const literals=[];
- const masked=text.replace(/["“]([^"”]+\.[a-z0-9]{1,12})["”]|([^\s"'“”,]+\.[a-z0-9]{1,12})(?=\s|[,，]|$|을|를|랑|이랑|와|과|으로|로)/giu,(_,quoted,bare)=>{
+ const masked=text.replace(/["“]([^"”]+\.[a-z0-9]{1,12})["”]|([^\s"'“”,]+\.[a-z0-9]{1,12})(?=\s|[,，]|$|을|를|랑|이랑|와|과|으로|로|도)/giu,(_,quoted,bare)=>{
   literals.push(quoted||bare);return '\u0001'+(literals.length-1)+'\u0002';
  });
  const reportStart=reportOutputStart(masked);
@@ -154,8 +156,13 @@ export function sourceQuery(text){
  const raw=source.split(/(?:이랑|랑|하고|와|과)(?=\s)(?!\s+(?:파일|문서|자료)(?:들)?(?:의|을|를)?(?:\s|$))|\s+(?:및|그리고)\s+|[,，]/u).map(t=>t.trim().replace(/^(?:모든|전체|여러)\s+/u,'').replace(/(?:을|를)$/u,'').trim()).filter(Boolean);
  const unmask=t=>t.replace(/\u0001(\d+)\u0002/g,(_,i)=>literals[Number(i)]);
  const sending=fileSendSuffix.test(sourceClause);
- const name=t=>unmask(sourceName(sending?t.replace(/([가-힣A-Za-z0-9])파일$/u,'$1'):t));
- return {terms:raw.map(name),rawTerms:raw.map(t=>unmask(t.replace(/^["“]|["”]$/gu,''))),content:content?.[1]||content?.[2],latest,start,end,quarters};
+ const name=t=>unmask(sourceName(sending?t.trim().replace(/([가-힣A-Za-z0-9])파일$/u,'$1'):t));
+ const phrases=raw.map(t=>sending?t.replace(/^다시\s+/u,'').replace(/\s+다시$/u,''):t);
+ const terms=phrases.map(t=>name(sending?t.replace(/(.)도$/u,'$1'):t));
+ // A final 도 is ambiguous on an unquoted name. Keep the full title as the first search.
+ const literalTerms=phrases.map((t,i)=>sending&&/도$/u.test(t)&&!/[\u0002"”]도$/u.test(t)&&name(t)!==terms[i]
+  ?name(t):undefined);
+ return {terms,literalTerms,rawTerms:raw.map(t=>unmask(t.replace(/^["“]|["”]$/gu,''))),content:content?.[1]||content?.[2],latest,start,end,quarters};
 }
 function matchName(candidates,q,term,rawTerm){
   const literal=term.trim(),needle=compact(literal),broad=!needle||generic.test(literal);
@@ -171,17 +178,23 @@ function matchName(candidates,q,term,rawTerm){
   const possessive=literal.slice(0,-1),part=compact(possessive);
   return generic.test(possessive)?candidates:candidates.filter(f=>stem(f).includes(part));
 }
+function preferLiteralName(candidates,q,term,rawTerm,literalTerm){
+ return literalTerm&&matchName(candidates,q,literalTerm,rawTerm).length?literalTerm:term;
+}
 export function groupsFor(files,q,all=false,canUseFile){
  const dated=files.filter(f=>q.start===-Infinity&&q.end===Infinity||f.mtime>=q.start&&f.mtime<=q.end);
  const groups=[];
- function add(term,pool,quarter,rawTerm=term){
-  const usable=canUseFile?matchName(pool.filter(canUseFile),q,term,rawTerm):[];
-  const hits=usable.length?usable:matchName(pool,q,term,rawTerm);
+ function add(term,pool,quarter,index){
+  const rawTerm=q.rawTerms?.[index]??term;
+  const literalTerm=q.literalTerms?.[index];
+  const match=candidates=>matchName(candidates,q,preferLiteralName(candidates,q,term,rawTerm,literalTerm),rawTerm);
+  const usable=canUseFile?match(pool.filter(canUseFile)):[];
+  const hits=usable.length?usable:match(pool);
   if(!hits.length)throw Error((quarter||term.trim()||'요청한')+' 자료를 검색 위치에서 찾지 못했습니다.');
   groups.push({label:[quarter,term.trim()].filter(Boolean).join(' ')||'자료',hits,all});
  }
  const terms=q.terms.length?q.terms:[''];
- if(q.quarters){const first=Number(q.quarters[1]),last=Number(q.quarters[2]);if(first>last)throw Error('분기 순서를 확인하세요.');for(let n=first;n<=last;n++)for(const [i,t] of terms.entries())add(t,dated.filter(f=>new RegExp('(?:^|[^0-9])'+n+'\\s*분기|(?:^|[^a-z0-9])q'+n+'(?![0-9])','i').test(f.name)),n+'분기',q.rawTerms?.[i]??t);}
- else for(const [i,term] of terms.entries())add(term,dated,undefined,q.rawTerms?.[i]??term);
+ if(q.quarters){const first=Number(q.quarters[1]),last=Number(q.quarters[2]);if(first>last)throw Error('분기 순서를 확인하세요.');for(let n=first;n<=last;n++)for(const [i,t] of terms.entries())add(t,dated.filter(f=>new RegExp('(?:^|[^0-9])'+n+'\\s*분기|(?:^|[^a-z0-9])q'+n+'(?![0-9])','i').test(f.name)),n+'분기',i);}
+ else for(const [i,term] of terms.entries())add(term,dated,undefined,i);
  return groups;
 }

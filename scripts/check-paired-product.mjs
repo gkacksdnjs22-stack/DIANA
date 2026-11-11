@@ -319,6 +319,24 @@ try {
   assert.match((await waitFor(unnamed, 'failed')).error, /보낼 파일 이름/);
   assert(!(await mobile({ op: 'state' })).files.some(file => file.id === unnamed));
   console.log('Named Desktop PDF is sent byte-for-byte only after approval');
+
+  const coverLetter=Buffer.from('가상 자기소개서입니다.');
+  await writeFile(path.join(known.desktop,'자기소개서.txt'),coverLetter);
+  await writeFile(path.join(known.desktop,'자기소개서도.png'),'synthetic unsupported original');
+  for(const [request,source,expected] of [
+    ['바탕화면에서 이력서 다시 보내줘','이력서.pdf',reportBytes],
+    ['자기소개서도 보내줘','자기소개서.txt',coverLetter],
+  ]){
+    const id=await send(request);
+    await waitFor(id,'approval');
+    assert.equal((await mobile({op:'state'})).jobs.find(job=>job.id===id).canApprove,true);
+    const shown=await mobile({op:'phone-preview',id,...(source.endsWith('.pdf')?{page:1}:{})});
+    assert.equal(shown.preview.split('\n')[0],'보낼 원본 파일 · '+source);
+    assert(!(await mobile({op:'state'})).files.some(file=>file.id===id));
+    await mobile({op:'phone-approve',id,nonce:shown.nonce,confirm:true});
+    assert.deepEqual(await receive(id),expected);
+  }
+  console.log('A repeated delivery and a different document requested with 도 both support mobile approval');
   const asText = await send('바탕화면에 이력서를 TXT로 보내줘');
   await waitFor(asText, 'approval');
   const textPreview = await mobile({ op: 'phone-preview', id: asText });
@@ -410,6 +428,15 @@ try {
     await mobile({ op: 'phone-approve', id, nonce: preview.nonce, confirm: true });
     assert.deepEqual(await receive(id), reportBytes);
   }
+  const organizationChart=Buffer.from('가상 조직도 원본입니다.');
+  await writeFile(path.join(known.downloads,'조직.txt'),'다른 조직 자료입니다.');
+  await writeFile(path.join(downloadArchive,'2025 조직도.txt'),organizationChart);
+  const chart=await send('다운로드에서 조직도 보내줘');
+  await waitFor(chart,'approval');
+  const chartPreview=await mobile({op:'phone-preview',id:chart});
+  assert.match(chartPreview.preview,/보낼 원본 파일 · 2025 조직도\.txt/);
+  await mobile({op:'phone-approve',id:chart,nonce:chartPreview.nonce,confirm:true});
+  assert.deepEqual(await receive(chart),organizationChart);
   console.log('Transfer format, literal names and a named subfolder take precedence in file discovery');
   await pc({ op: 'directory', kind: 'exclude', path: deepBranch });
 

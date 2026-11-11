@@ -1,16 +1,28 @@
 package kr.nightdesk.phone;
+import android.content.ContentProvider;
+import android.content.ContentValues;
+import android.database.Cursor;
 import android.graphics.*;
+import android.net.Uri;
+import android.os.Looper;
 import android.view.*;
 import android.widget.*;
 import java.io.*;
 import java.lang.reflect.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
+import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.GraphicsMode;
+import org.robolectric.shadows.ShadowContentResolver;
 import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class)
@@ -25,6 +37,117 @@ public class PairedDesignTest {
  @Test public void workAndFilesAndSettingsAreDistinctScreens()throws Exception{PairedActivity a=activity();setupWork(a);View root=a.findViewById(android.R.id.content);assertTrue(text(root,"무엇을 만들까요?"));assertTrue(text(root,"작업"));assertTrue(text(root,"파일"));assertTrue(text(root,"설정"));image(a,"work-360",360,800);a.archive();image(a,"files-empty-360",360,800);a.settings();image(a,"settings-360",360,800);a.finish();}
  @Test public void fileRowsAndNarrowScreensDoNotCrash()throws Exception{PairedActivity a=activity();setupWork(a);a.getSharedPreferences("paired-00000000-0000-4000-8000-000000000001",0).edit().putString("file-00000000-0000-4000-8000-000000000002",new JSONObject().put("name","프로젝트 핵심 요약 보고서.pdf").put("uri","content://example.invalid/result").toString()).commit();a.archive();image(a,"files-360",360,800);a.work();image(a,"work-320",320,640);image(a,"work-600",600,900);a.finish();}
  @Test public void switchingTabsPreservesUnsentRequest()throws Exception{PairedActivity a=activity();setupWork(a);Field f=PairedActivity.class.getDeclaredField("editor");f.setAccessible(true);((EditText)f.get(a)).setText("문서 두 개를 요약해줘");a.settings();a.archive();a.work();assertEquals("문서 두 개를 요약해줘",((EditText)f.get(a)).getText().toString());a.finish();}
+ private void tapTab(View root,String name){
+  java.util.ArrayList<View> matches=new java.util.ArrayList<>();
+  root.findViewsWithText(matches,name,View.FIND_VIEWS_WITH_CONTENT_DESCRIPTION);
+  assertEquals(1,matches.size());
+  assertTrue(matches.get(0).performClick());
+ }
+ @Test public void tabsRespondWhileBackgroundFileReceiveIsBlocked()throws Exception{
+  var controller=Robolectric.buildActivity(PairedActivity.class).create();
+  PairedActivity a=controller.get();
+  setupWork(a);
+  Field editorField=PairedActivity.class.getDeclaredField("editor");
+  editorField.setAccessible(true);
+  ((EditText)editorField.get(a)).setText("작성 중인 요청");
+  Field ioField=PairedActivity.class.getDeclaredField("io");
+  ioField.setAccessible(true);
+  ExecutorService io=(ExecutorService)ioField.get(a);
+  CountDownLatch started=new CountDownLatch(1);
+  CountDownLatch finishReceive=new CountDownLatch(1);
+  String name="새로 받은 파일.txt";
+  a.async(()->{
+   started.countDown();
+   if(!finishReceive.await(10,TimeUnit.SECONDS))throw new IOException("Test receive timed out");
+   a.getSharedPreferences("paired-00000000-0000-4000-8000-000000000001",0).edit()
+    .putString("file-00000000-0000-4000-8000-000000000002",
+      new JSONObject().put("name",name).put("uri","content://example.invalid/result").toString())
+    .commit();
+  });
+  try {
+   assertTrue(started.await(5,TimeUnit.SECONDS));
+   View root=a.findViewById(android.R.id.content);
+   tapTab(root,"파일");
+   assertTrue(text(root,"보관 파일"));
+   tapTab(root,"설정");
+   assertTrue(text(root,"내 PC 연결"));
+   tapTab(root,"작업");
+   assertEquals("작성 중인 요청",((EditText)editorField.get(a)).getText().toString());
+   tapTab(root,"파일");
+   assertFalse(text(root,name));
+   finishReceive.countDown();
+   io.submit(()->{}).get(5,TimeUnit.SECONDS);
+   Shadows.shadowOf(Looper.getMainLooper()).idle();
+   assertTrue(text(root,"보관 파일"));
+   assertTrue(text(root,name));
+  } finally {
+   finishReceive.countDown();
+   controller.destroy();
+  }
+ }
+ @Test public void deletingACopyWhileReceiptIsInProgressKeepsItRemoved()throws Exception{
+  var controller=Robolectric.buildActivity(PairedActivity.class).create();
+  PairedActivity a=controller.get();
+  setupWork(a);
+  String id="00000000-0000-4000-8000-000000000002",name="수신 확인 중.txt";
+  String device="00000000-0000-4000-8000-000000000001";
+  File dir=new File(a.getFilesDir(),"results/"+device);
+  assertTrue(dir.mkdirs()||dir.isDirectory());
+  File copy=new File(dir,name);
+  try(FileOutputStream output=new FileOutputStream(copy)){output.write(1);}
+  var uri=Uri.parse("content://paired.test.copy/result");
+  ShadowContentResolver.registerProviderInternal(uri.getAuthority(),new ContentProvider(){
+   @Override public boolean onCreate(){return true;}
+   @Override public Cursor query(Uri u,String[] p,String s,String[] a,String o){throw new UnsupportedOperationException();}
+   @Override public String getType(Uri u){return "text/plain";}
+   @Override public Uri insert(Uri u,ContentValues v){throw new UnsupportedOperationException();}
+   @Override public int update(Uri u,ContentValues v,String s,String[] a){throw new UnsupportedOperationException();}
+   @Override public int delete(Uri u,String s,String[] a){return copy.delete()?1:0;}
+  });
+  var preferences=a.getSharedPreferences("paired-"+device,0);
+  String metadata=new JSONObject().put("name",name).put("uri",uri.toString()).toString();
+  assertTrue(preferences.edit().putString("file-"+id,metadata).commit());
+  a.archive();
+
+  CountDownLatch receiptStarted=new CountDownLatch(1),finishReceipt=new CountDownLatch(1);
+  ExecutorService receiver=Executors.newSingleThreadExecutor();
+  var receipt=receiver.submit(()->{
+   synchronized(PairedFiles.lock){
+    receiptStarted.countDown();
+    if(!finishReceipt.await(10,TimeUnit.SECONDS))throw new IOException("Receipt test timed out");
+    assertTrue(preferences.edit().putString("file-"+id,metadata).commit());
+   }
+   return null;
+  });
+  try{
+   assertTrue(receiptStarted.await(5,TimeUnit.SECONDS));
+   a.deleteArchivedFile(id);
+   Field ioField=PairedActivity.class.getDeclaredField("io");
+   ioField.setAccessible(true);
+   var deletionFinished=((ExecutorService)ioField.get(a)).submit(()->{});
+   View root=a.findViewById(android.R.id.content);
+   tapTab(root,"설정");
+   assertTrue(text(root,"내 PC 연결"));
+   tapTab(root,"파일");
+   assertThrows(TimeoutException.class,()->deletionFinished.get(250,TimeUnit.MILLISECONDS));
+   assertTrue(copy.exists());
+   finishReceipt.countDown();
+   receipt.get(5,TimeUnit.SECONDS);
+   deletionFinished.get(5,TimeUnit.SECONDS);
+   Shadows.shadowOf(Looper.getMainLooper()).idle();
+   assertFalse(copy.exists());
+   assertFalse(preferences.contains("file-"+id));
+   assertTrue(preferences.getBoolean("removed-"+id,false));
+   PairedFiles files=new PairedFiles(a,new JSONObject().put("device",device));
+   files.receive(new JSONObject().put("id",id).put("name",name).put("sha256","unused"));
+   assertFalse(preferences.contains("file-"+id));
+   assertFalse(text(root,name));
+  }finally{
+   finishReceipt.countDown();
+   receiver.shutdown();
+   controller.destroy();
+  }
+ }
  @Test public void onlyApprovableJobsOfferAPhonePreview()throws Exception{
   PairedActivity a=activity();
   LinearLayout pcOnly=a.column();
@@ -57,6 +180,7 @@ public class PairedDesignTest {
  }
  @Test public void pdfDialogDisplaysPageControlsAndBlocksNetworkLoads()throws Exception{
   PairedActivity a=activity();
+  setupWork(a);
   Bitmap bitmap=Bitmap.createBitmap(16,20,Bitmap.Config.ARGB_8888);
   ByteArrayOutputStream bytes=new ByteArrayOutputStream();
   assertTrue(bitmap.compress(Bitmap.CompressFormat.JPEG,85,bytes));bitmap.recycle();
@@ -78,6 +202,21 @@ public class PairedDesignTest {
   android.webkit.WebView viewer=(android.webkit.WebView)viewerField.get(preview);
   assertTrue(viewer.getSettings().getBlockNetworkLoads());
   assertFalse(viewer.getSettings().getAllowFileAccess());
-  dialog.dismiss();a.finish();
+  Field active=PairedActivity.class.getDeclaredField("active");
+  active.setAccessible(true);
+  Field pending=PairedActivity.class.getDeclaredField("pending");
+  pending.setAccessible(true);
+  active.setBoolean(a,true);
+  try {
+   a.tick.run();
+   assertFalse("A preview pauses background polling",pending.getBoolean(a));
+   pending.setBoolean(a,true);
+   assertTrue(dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick());
+   assertTrue("An approval click must keep the preview open while busy",dialog.isShowing());
+  } finally {
+   active.setBoolean(a,false);
+   pending.setBoolean(a,false);
+   dialog.dismiss();a.finish();
+  }
  }
 }
