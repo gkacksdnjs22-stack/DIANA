@@ -9,10 +9,13 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { createRelay } from '../tests/helpers/paired-relay.mjs';
 import { zipFiles } from '../tests/helpers/release-zip.mjs';
 
-const [bundleArg, fixtureParent] = process.argv.slice(2);
-if (!bundleArg || !fixtureParent) throw Error('Usage: node scripts/check-paired-product.mjs BUILT_DIANA_PC_FOLDER FIXTURE_PARENT');
+const [bundleArg, fixtureParent, previousBundle] = process.argv.slice(2);
+if (!bundleArg || !fixtureParent) throw Error('Usage: node scripts/check-paired-product.mjs BUILT_DIANA_PC_FOLDER FIXTURE_PARENT [PREVIOUS_DIANA_PC_FOLDER]');
 const bundle = path.resolve(bundleArg);
 const { start } = await import(pathToFileURL(path.join(bundle, 'app/financial-desktop/paired-host.mjs')));
+const startPrevious = previousBundle
+  ? (await import(pathToFileURL(path.resolve(previousBundle,'app/financial-desktop/paired-host.mjs')))).start
+  : null;
 const fixture = path.resolve(fixtureParent, 'paired-product-' + randomUUID());
 const known = Object.fromEntries(['desktop', 'documents', 'downloads'].map(key => [key, path.join(fixture, key)]));
 for (const dir of Object.values(known)) await mkdir(dir, { recursive: true });
@@ -82,11 +85,40 @@ async function receive(id) {
 }
 
 try {
-  host = await start(config);
+  host = await (startPrevious??start)(config);
   const signup = await call(host.origin, { op: 'signup', email: 'paired-test@example.invalid',
     password: randomBytes(16).toString('hex') });
   ownerToken = (await call(host.origin, { op: 'register' },
     { token: signup.token, owner: host.owner })).token;
+  if(startPrevious){
+    const connect = code => call(relay.origin,{
+      op:'pair-code',code,requestId:randomUUID(),pairKey:randomBytes(32).toString('hex')
+    });
+    const existing = await connect((await pc({op:'code'})).code);
+    await pc({op:'phone-approval-settings',device:existing.device,enabled:true});
+    const oldCode = (await pc({op:'code'})).code;
+    await host.close();
+    host=await start(config);
+
+    const oldPhone = await connect(oldCode);
+    const oldMobile = (body,status) => call(relay.origin,body,{token:oldPhone.token,status});
+    const {devices}=await pc({op:'settings'});
+    assert.equal(devices.find(d=>d.id===existing.device).mobile_approval,1);
+    assert.equal(devices.find(d=>d.id===oldPhone.device).mobile_approval,0);
+
+    await writeFile(path.join(known.downloads,'업데이트 점검.txt'),'업데이트 점검 자료입니다.');
+    const id=randomUUID();
+    await oldMobile({op:'job',action:'desk-start',id,text:'다운로드에서 "업데이트 점검.txt"를 요약해줘'});
+    await waitFor(id,'approval');
+    const job=(await oldMobile({op:'state'})).jobs.find(j=>j.id===id);
+    assert.equal(job.mobileApprovalNeeded,true);
+    await oldMobile({op:'phone-preview',id},403);
+    await oldMobile({op:'phone-approve',id,nonce:randomUUID(),confirm:true},403);
+    await oldMobile({op:'job',action:'desk-cancel',id});
+    await pc({op:'revoke',device:existing.device});
+    await pc({op:'revoke',device:oldPhone.device});
+    console.log('A relay code issued by the previous PC version keeps approval off after upgrade');
+  }
   const { code } = await pc({ op: 'code' });
   assert.match(code, /^\d{6}$/);
   const pair = { op: 'pair-code', code, requestId: randomUUID(), pairKey: randomBytes(32).toString('hex') };
@@ -679,19 +711,30 @@ dense.save()
   console.log('Current and legacy summaries reject wrong source combinations without losing their choices');
 
   const localState=path.join(fixture,'local-code-state');
-  const localHost=await start({...config,state:localState,relayOrigin:undefined});
+  const localConfig={...config,state:localState,relayOrigin:undefined};
+  let localHost=await (startPrevious??start)(localConfig);
   try {
     const credentials={email:'local-pair@example.invalid',password:randomBytes(16).toString('hex')};
     const signup=await call(localHost.origin,{op:'signup',...credentials});
     const localOwner=(await call(localHost.origin,{op:'register'},{token:signup.token,owner:localHost.owner})).token;
     const localPc=body=>call(localHost.origin,body,{token:localOwner,owner:localHost.owner});
+    if(startPrevious){
+      const oldAuth=await call(localHost.origin,{op:'login',...credentials});
+      const oldCode=(await localPc({op:'code'})).code;
+      await localHost.close();
+      localHost=await start(localConfig);
+      const oldPhone=await call(localHost.origin,{op:'pair',code:oldCode},{token:oldAuth.token});
+      assert.equal((await localPc({op:'settings'})).devices.find(d=>d.id===oldPhone.device).mobile_approval,0);
+      await localPc({op:'revoke',device:oldPhone.device});
+      console.log('A local code issued by the previous PC version keeps approval off after upgrade');
+    }
     const auth=await call(localHost.origin,{op:'login',...credentials});
     const {code}=await localPc({op:'code'});
     const devicesDb=new DatabaseSync(path.join(localState,'devices.sqlite'));
     try {
       devicesDb.exec("CREATE TRIGGER reject_approval BEFORE INSERT ON phone_approvals BEGIN SELECT RAISE(ABORT,'fixture approval failure'); END");
       await call(localHost.origin,{op:'pair',code},{token:auth.token,status:400});
-      assert.equal((await localPc({op:'settings'})).devices.filter(d=>d.kind==='phone').length,0);
+      assert.equal((await localPc({op:'settings'})).devices.filter(d=>d.kind==='phone'&&d.active).length,0);
       devicesDb.exec('DROP TRIGGER reject_approval');
     } finally {devicesDb.close();}
     const paired=await call(localHost.origin,{op:'pair',code},{token:auth.token});
