@@ -1,14 +1,19 @@
 package kr.nightdesk.phone;
 import android.graphics.*;
+import android.os.Looper;
 import android.view.*;
 import android.widget.*;
 import java.io.*;
 import java.lang.reflect.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
+import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.GraphicsMode;
 import static org.junit.Assert.*;
@@ -25,6 +30,54 @@ public class PairedDesignTest {
  @Test public void workAndFilesAndSettingsAreDistinctScreens()throws Exception{PairedActivity a=activity();setupWork(a);View root=a.findViewById(android.R.id.content);assertTrue(text(root,"무엇을 만들까요?"));assertTrue(text(root,"작업"));assertTrue(text(root,"파일"));assertTrue(text(root,"설정"));image(a,"work-360",360,800);a.archive();image(a,"files-empty-360",360,800);a.settings();image(a,"settings-360",360,800);a.finish();}
  @Test public void fileRowsAndNarrowScreensDoNotCrash()throws Exception{PairedActivity a=activity();setupWork(a);a.getSharedPreferences("paired-00000000-0000-4000-8000-000000000001",0).edit().putString("file-00000000-0000-4000-8000-000000000002",new JSONObject().put("name","프로젝트 핵심 요약 보고서.pdf").put("uri","content://example.invalid/result").toString()).commit();a.archive();image(a,"files-360",360,800);a.work();image(a,"work-320",320,640);image(a,"work-600",600,900);a.finish();}
  @Test public void switchingTabsPreservesUnsentRequest()throws Exception{PairedActivity a=activity();setupWork(a);Field f=PairedActivity.class.getDeclaredField("editor");f.setAccessible(true);((EditText)f.get(a)).setText("문서 두 개를 요약해줘");a.settings();a.archive();a.work();assertEquals("문서 두 개를 요약해줘",((EditText)f.get(a)).getText().toString());a.finish();}
+ private void tapTab(View root,String name){
+  java.util.ArrayList<View> matches=new java.util.ArrayList<>();
+  root.findViewsWithText(matches,name,View.FIND_VIEWS_WITH_CONTENT_DESCRIPTION);
+  assertEquals(1,matches.size());
+  assertTrue(matches.get(0).performClick());
+ }
+ @Test public void tabsRespondWhileBackgroundFileReceiveIsBlocked()throws Exception{
+  var controller=Robolectric.buildActivity(PairedActivity.class).create();
+  PairedActivity a=controller.get();
+  setupWork(a);
+  Field editorField=PairedActivity.class.getDeclaredField("editor");
+  editorField.setAccessible(true);
+  ((EditText)editorField.get(a)).setText("작성 중인 요청");
+  Field ioField=PairedActivity.class.getDeclaredField("io");
+  ioField.setAccessible(true);
+  ExecutorService io=(ExecutorService)ioField.get(a);
+  CountDownLatch started=new CountDownLatch(1);
+  CountDownLatch finishReceive=new CountDownLatch(1);
+  String name="새로 받은 파일.txt";
+  a.async(()->{
+   started.countDown();
+   if(!finishReceive.await(10,TimeUnit.SECONDS))throw new IOException("Test receive timed out");
+   a.getSharedPreferences("paired-00000000-0000-4000-8000-000000000001",0).edit()
+    .putString("file-00000000-0000-4000-8000-000000000002",
+      new JSONObject().put("name",name).put("uri","content://example.invalid/result").toString())
+    .commit();
+  });
+  try {
+   assertTrue(started.await(5,TimeUnit.SECONDS));
+   View root=a.findViewById(android.R.id.content);
+   tapTab(root,"파일");
+   assertTrue(text(root,"보관 파일"));
+   tapTab(root,"설정");
+   assertTrue(text(root,"내 PC 연결"));
+   tapTab(root,"작업");
+   assertEquals("작성 중인 요청",((EditText)editorField.get(a)).getText().toString());
+   tapTab(root,"파일");
+   assertFalse(text(root,name));
+   finishReceive.countDown();
+   io.submit(()->{}).get(5,TimeUnit.SECONDS);
+   Shadows.shadowOf(Looper.getMainLooper()).idle();
+   assertTrue(text(root,"보관 파일"));
+   assertTrue(text(root,name));
+  } finally {
+   finishReceive.countDown();
+   controller.destroy();
+  }
+ }
  @Test public void onlyApprovableJobsOfferAPhonePreview()throws Exception{
   PairedActivity a=activity();
   LinearLayout pcOnly=a.column();
