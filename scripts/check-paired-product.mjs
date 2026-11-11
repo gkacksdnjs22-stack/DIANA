@@ -322,9 +322,10 @@ try {
 
   const coverLetter=Buffer.from('가상 자기소개서입니다.');
   await writeFile(path.join(known.desktop,'자기소개서.txt'),coverLetter);
+  await writeFile(path.join(known.desktop,'자기소개서도.png'),'synthetic unsupported original');
   for(const [request,source,expected] of [
     ['바탕화면에서 이력서 다시 보내줘','이력서.pdf',reportBytes],
-    ['자기소개서도 보내달라','자기소개서.txt',coverLetter],
+    ['자기소개서도 보내줘','자기소개서.txt',coverLetter],
   ]){
     const id=await send(request);
     await waitFor(id,'approval');

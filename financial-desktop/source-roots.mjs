@@ -91,7 +91,7 @@ export async function discover(roots,excluded,request='',options={}){
   // Finish the bounded search before preferring a normalized name over a literal one.
   const usable=files.filter(options.canUseFile);
   const rawTerm=query.rawTerms[0];
-  const title=preferLiteralName(files,query,term,rawTerm,query.literalTerms?.[0]);
+  const title=preferLiteralName(usable,query,term,rawTerm,query.literalTerms?.[0]);
   const matches=exactFiles(usable,title,rawTerm);
   if(matches.length)return matches;
   if(deep&&options.allowPartial){
@@ -186,9 +186,10 @@ export function groupsFor(files,q,all=false,canUseFile){
  const groups=[];
  function add(term,pool,quarter,index){
   const rawTerm=q.rawTerms?.[index]??term;
-  const title=preferLiteralName(pool,q,term,rawTerm,q.literalTerms?.[index]);
-  const usable=canUseFile?matchName(pool.filter(canUseFile),q,title,rawTerm):[];
-  const hits=usable.length?usable:matchName(pool,q,title,rawTerm);
+  const literalTerm=q.literalTerms?.[index];
+  const match=candidates=>matchName(candidates,q,preferLiteralName(candidates,q,term,rawTerm,literalTerm),rawTerm);
+  const usable=canUseFile?match(pool.filter(canUseFile)):[];
+  const hits=usable.length?usable:match(pool);
   if(!hits.length)throw Error((quarter||term.trim()||'요청한')+' 자료를 검색 위치에서 찾지 못했습니다.');
   groups.push({label:[quarter,term.trim()].filter(Boolean).join(' ')||'자료',hits,all});
  }
