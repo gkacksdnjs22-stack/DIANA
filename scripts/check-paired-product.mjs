@@ -94,16 +94,25 @@ try {
   assert.deepEqual(await call(relay.origin, pair), phone);
   await call(relay.origin, { ...pair, requestId: randomUUID() }, { status: 403 });
   await mobile({ op: 'settings' }, 403);
+  const approvalEnabled = async device => (await pc({op:'settings'})).devices.find(d=>d.id===device).mobile_approval;
+  assert.equal(await approvalEnabled(phone.device),1);
 
   for (let i = 1; i <= 4; i++) {
     await writeFile(path.join(known.downloads, i + '분기 관측.txt'),
       '분기 점검을 마쳤습니다.\n사용량: ' + i * 10 + '건\n');
   }
   const report = await send('다운로드에서 1~4분기 자료를 찾아 핵심 수치와 변화를 정리한 보고서를 작성해줘');
-  await approve(report, preview => { assert.match(preview, /40/); assert.match(preview, /4분기 관측/); });
+  await waitFor(report,'approval');
+  const initialReport = (await mobile({op:'state'})).jobs.find(job=>job.id===report);
+  assert.equal(initialReport.canApprove,true);
+  assert(!(await mobile({op:'state'})).files.some(file=>file.id===report));
+  const initialPreview = await mobile({op:'phone-preview',id:report});
+  assert.match(initialPreview.preview,/40/);
+  assert.match(initialPreview.preview,/4분기 관측/);
+  await mobile({op:'phone-approve',id:report,nonce:initialPreview.nonce,confirm:true});
   const reportBytes = await receive(report);
   assert.equal(reportBytes.subarray(0, 5).toString(), '%PDF-');
-  console.log('Six-digit pairing and report: discovery, preview, owner approval, download and receipt');
+  console.log('Six-digit pairing immediately permits a phone preview, explicit approval, download and receipt');
 
   const sourcePath = path.join(known.desktop, '현장 기록.txt');
   const original = '현장 기록입니다. 점검 시간은 18분입니다.';
@@ -119,9 +128,19 @@ try {
   await waitFor(edit, 'approval');
   const preview = { op: 'phone-preview', id: edit };
   const allow = enabled => pc({ op: 'phone-approval-settings', device: phone.device, enabled });
-  await mobile(preview, 403);
+  await allow(false);
+  await mobile(preview,403);
+  assert.deepEqual(await call(relay.origin,pair),phone);
+  assert.equal(await approvalEnabled(phone.device),0);
+  await host.close();
+  host=await start(config);
+  assert.equal(await approvalEnabled(phone.device),0);
+  await mobile(preview,403);
   await mobile({ op: 'phone-approval-settings', device: phone.device, enabled: true }, 403);
   await allow(true);
+  await host.close();
+  host=await start(config);
+  assert.equal(await approvalEnabled(phone.device),1);
   const phoneJob = (await mobile({ op: 'state' })).jobs.find(job => job.id === edit);
   assert.equal(phoneJob.canApprove, true);
   assert.equal(phoneJob.preview, undefined);
@@ -129,7 +148,7 @@ try {
 
   const { code: secondCode } = await pc({ op: 'code' });
   const otherPhone = await call(relay.origin, { ...pair, code: secondCode, requestId: randomUUID(), pairKey: randomBytes(32).toString('hex') });
-  await pc({ op: 'phone-approval-settings', device: otherPhone.device, enabled: true });
+  assert.equal(await approvalEnabled(otherPhone.device),1);
   const other = (body, status) => call(relay.origin, body, { token: otherPhone.token, status });
   await other(preview, 403);
   await other({ op: 'job', action: 'desk-start', id: edit, text: editText }, 400);
@@ -490,6 +509,7 @@ dense.save()
   assert.deepEqual(await receive(denseJob),await readFile(path.join(known.desktop,'고밀도 미리보기.pdf')));
   console.log('High-density second page is within the preview byte limit without changing the approved original');
   await pc({ op: 'revoke', device: otherPhone.device });
+  assert.equal(await approvalEnabled(otherPhone.device),0);
   await other(preview, 403);
   const pcOnly = randomUUID();
   await pc({ op: 'job', action: 'desk-start', id: pcOnly, text: editText });
@@ -657,6 +677,30 @@ dense.save()
     assert.match(twoBytes,/63회/);
   }
   console.log('Current and legacy summaries reject wrong source combinations without losing their choices');
+
+  const localState=path.join(fixture,'local-code-state');
+  const localHost=await start({...config,state:localState,relayOrigin:undefined});
+  try {
+    const credentials={email:'local-pair@example.invalid',password:randomBytes(16).toString('hex')};
+    const signup=await call(localHost.origin,{op:'signup',...credentials});
+    const localOwner=(await call(localHost.origin,{op:'register'},{token:signup.token,owner:localHost.owner})).token;
+    const localPc=body=>call(localHost.origin,body,{token:localOwner,owner:localHost.owner});
+    const auth=await call(localHost.origin,{op:'login',...credentials});
+    const {code}=await localPc({op:'code'});
+    const devicesDb=new DatabaseSync(path.join(localState,'devices.sqlite'));
+    try {
+      devicesDb.exec("CREATE TRIGGER reject_approval BEFORE INSERT ON phone_approvals BEGIN SELECT RAISE(ABORT,'fixture approval failure'); END");
+      await call(localHost.origin,{op:'pair',code},{token:auth.token,status:400});
+      assert.equal((await localPc({op:'settings'})).devices.filter(d=>d.kind==='phone').length,0);
+      devicesDb.exec('DROP TRIGGER reject_approval');
+    } finally {devicesDb.close();}
+    const paired=await call(localHost.origin,{op:'pair',code},{token:auth.token});
+    assert.equal((await localPc({op:'settings'})).devices.find(d=>d.id===paired.device).mobile_approval,1);
+    await localPc({op:'revoke',device:paired.device});
+    assert.equal((await localPc({op:'settings'})).devices.find(d=>d.id===paired.device).mobile_approval,0);
+    await call(localHost.origin,{op:'state'},{token:paired.token,status:403});
+  } finally {await localHost.close();}
+  console.log('Local code pairing grants approval atomically and revocation removes it');
 
 } finally {
   await host?.close();
