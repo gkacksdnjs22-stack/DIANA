@@ -97,7 +97,8 @@ public final class PairedActivity extends Activity {
  void pair(){page("pair","내 PC와 연결");LinearLayout container=page;page=card(container);TextView intro=label(page,"내 PC를 연결하세요");intro.setTextSize(24);intro.setTypeface(Typeface.DEFAULT_BOLD);
   label(page,"PC의 기기 연결 화면에서 코드를 만든 뒤 입력하세요.");
   label(page,"같은 와이파이가 아니어도 연결됩니다. PC 앱은 켜 두세요.");
-  label(page,"연결하면 이 휴대폰에서 미리보기를 보고 저장을 승인할 수 있습니다.");
+  label(page,"PC에서 모바일 승인 안내와 함께 발급된 코드로 연결하면 이 휴대폰에서 바로 승인할 수 있습니다.");
+  label(page,"이전 PC 버전에서 발급한 코드라면 연결 후 PC의 기기 연결 설정에서 ‘모바일 승인 허용’을 눌러 주세요.");
   pairWait=label(page,"");pairWait.setTextColor(CYAN);pairWait.setTextSize(24);pairWait.setGravity(Gravity.CENTER);pairWait.setVisibility(View.GONE);pairWait.setContentDescription("다시 입력할 수 있을 때까지 남은 시간");
   EditText code=field("6자리 연결 코드");code.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);code.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(6)});code.setTextSize(26);code.setGravity(Gravity.CENTER);code.setLetterSpacing(.18f);code.setContentDescription("6자리 연결 코드");code.setHint("000000");
   long waiting=getSharedPreferences("pairing",MODE_PRIVATE).getLong("until",0);if(waiting>System.currentTimeMillis())showPairWait(waiting);
