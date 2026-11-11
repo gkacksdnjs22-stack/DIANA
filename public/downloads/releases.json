@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "android": {
-    "version": "0.8.0-dev-paired10",
-    "versionCode": 80010,
+    "version": "0.8.0-dev-paired11",
+    "versionCode": 80011,
     "minSdk": 26,
     "variant": "paired-debug",
-    "path": "/downloads/DIANA-Android-0.8.0-dev-paired10.apk",
-    "bytes": 4399442,
-    "sha256": "2227cc20df89077738e2d58ef698e8aa1e24792fc21c6f177adb7e89292f19cb",
-    "sourceCommit": "b85681c327f9fc732c11fc12a0a91cf4143c0a6d",
+    "path": "/downloads/DIANA-Android-0.8.0-dev-paired11.apk",
+    "bytes": 4401298,
+    "sha256": "6f6d904dc5dfaf6ec1fcc8fd178b514203d6c679c56271414e181df1a444fc85",
+    "sourceCommit": "014eaf9ab0b6ede0978e76c543f53655c4c096b4",
     "sourceFiles": [
       {
         "path": "android-app/app/build.gradle",
@@ -68,11 +68,11 @@
       },
       {
         "path": "android-app/app/src/main/java/kr/nightdesk/phone/PairedActivity.java",
-        "sha256": "3e5f8b3b3cd6fc468e56961f06ddcfcd40f06d20dbc2c51165c7b831b464bac6"
+        "sha256": "85dd9367434c670fc80014c631028b486ba71f9970fc6b7d0eb7063973d96421"
       },
       {
         "path": "android-app/app/src/main/java/kr/nightdesk/phone/PairedFiles.java",
-        "sha256": "bcb39955c0e05313386d969063f606380fd404c06fdb98ae90c4626c9ea37eff"
+        "sha256": "00c946b686661f5441919f1935f43d40fba3c10c2e98c0b47a8b442675cfd417"
       },
       {
         "path": "android-app/app/src/main/java/kr/nightdesk/phone/PairedLink.java",
@@ -276,18 +276,18 @@
       },
       {
         "path": "financial-desktop/version.json",
-        "sha256": "7e5bda943502c52dfba85f787a97bca012ad6d73d2120c9d673f4373b1ab02c4"
+        "sha256": "ce6465b8718ee91c83350e6e2b8ad679eccc3ee5e364276a16cfd0451619c657"
       }
     ]
   },
   "windows": {
-    "version": "0.8.0-dev-paired10",
-    "numericVersion": "0.8.0.10",
+    "version": "0.8.0-dev-paired11",
+    "numericVersion": "0.8.0.11",
     "platform": "win-x64",
-    "path": "/downloads/DIANA-PC-0.8.0-dev-paired10-win-x64.zip",
-    "bytes": 81198797,
-    "sha256": "6ccb8a885ddc90bda831f400e88aeef97cfc1feb1f67e350cfc31bb3a97b2098",
-    "sourceCommit": "b85681c327f9fc732c11fc12a0a91cf4143c0a6d",
+    "path": "/downloads/DIANA-PC-0.8.0-dev-paired11-win-x64.zip",
+    "bytes": 81199056,
+    "sha256": "4ecce6855e7954699dc02890a5922ef77c0c77b9fc44cab8f71808b6bb2c68e3",
+    "sourceCommit": "014eaf9ab0b6ede0978e76c543f53655c4c096b4",
     "crlfBuildInputs": [
       "personal-ai/documents/parser.mjs",
       "personal-ai/documents/worker.mjs",
