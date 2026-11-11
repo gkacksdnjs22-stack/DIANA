@@ -27,6 +27,7 @@ import java.util.concurrent.ExecutorService;
 public final class PairedActivity extends Activity {
  private final ExecutorService io=Executors.newSingleThreadExecutor(); private final Handler clock=new Handler(Looper.getMainLooper());
  private LinearLayout page,rows,dock,archiveFiles; private TextView note,connection; private EditText editor; private SecureStore store;
+ private AlertDialog workDialog;
  private JSONObject session;private SharedPreferences local;private String screen="",signature="";private boolean pending=false,active=false;private TextView pairWait;private CountDownTimer pairingTimer;
  interface Work {void run() throws Exception;}
  static JSONObject obj(Object... pairs)throws JSONException{JSONObject o=new JSONObject();for(int i=0;i<pairs.length;i+=2)o.put((String)pairs[i],pairs[i+1]);return o;}
@@ -34,8 +35,8 @@ public final class PairedActivity extends Activity {
  static byte[] read(InputStream stream,int max)throws IOException{return PairedWire.read(stream,max);}
  protected void onCreate(Bundle b){super.onCreate(b);store=new SecureStore(this);try{session=store.load();}catch(Exception e){session=null;}if(session!=null&&!session.optString("device").isEmpty())getSharedPreferences("pairing",MODE_PRIVATE).edit().putString("previousDevice",session.optString("device")).commit();if(session!=null&&!session.optString("device").isEmpty()&&session.optString("token").startsWith("v1.")&&PairedLink.ORIGIN.equals(session.optString("origin")))work();else login();}
  protected void onResume(){super.onResume();active=true;clock.post(tick);}protected void onPause(){active=false;clock.removeCallbacks(tick);super.onPause();}
- protected void onDestroy(){if(pairingTimer!=null)pairingTimer.cancel();io.shutdown();super.onDestroy();}
- final Runnable tick=new Runnable(){public void run(){if(!active)return;if(screen.equals("work")&&!pending)async(()->refresh());clock.postDelayed(this,3500);}};
+ protected void onDestroy(){if(pairingTimer!=null)pairingTimer.cancel();if(workDialog!=null)workDialog.dismiss();io.shutdown();super.onDestroy();}
+ final Runnable tick=new Runnable(){public void run(){if(!active)return;if(screen.equals("work")&&!pending&&workDialog==null)async(()->refresh());clock.postDelayed(this,3500);}};
  void async(Work task){
   if(pending){
    note.setText("현재 요청을 처리 중입니다. 잠시 뒤 다시 시도하세요.");
@@ -218,7 +219,8 @@ public final class PairedActivity extends Activity {
      boolean any=false;for(boolean item:selected)any|=item;
      ((AlertDialog)dialog).getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(any);
     });
-    AlertDialog dialog=builder.show();
+    AlertDialog dialog=builder.create();
+    showWorkDialog(dialog,null);
     Button submit=dialog.getButton(AlertDialog.BUTTON_POSITIVE);submit.setEnabled(false);
     submit.setOnClickListener(v->{
      if(pending)return;
@@ -247,10 +249,28 @@ public final class PairedActivity extends Activity {
     TextView text=new TextView(this);
     text.setText(preview);text.setTextSize(15);text.setPadding(dp(22),dp(12),dp(22),dp(12));
     scroll.addView(text);
-    new AlertDialog.Builder(this).setTitle((retry?"다시 저장할 결과":"저장 전 미리보기")+" · "+format).setView(scroll)
+    AlertDialog dialog=new AlertDialog.Builder(this)
+     .setTitle((retry?"다시 저장할 결과":"저장 전 미리보기")+" · "+format).setView(scroll)
      .setNegativeButton("닫기",null)
-     .setPositiveButton(retry?"다시 저장":"승인 후 저장",(dialog,which)->approvePhone(id,nonce)).show();
+     .setPositiveButton(retry?"다시 저장":"승인 후 저장",null).create();
+    showApprovalDialog(dialog,id,nonce,null);
    });
+  });
+ }
+ private void showWorkDialog(AlertDialog dialog,Runnable onDismiss){
+  workDialog=dialog;
+  dialog.setOnDismissListener(d->{
+   if(workDialog==d)workDialog=null;
+   if(onDismiss!=null)onDismiss.run();
+  });
+  dialog.show();
+ }
+ private void showApprovalDialog(AlertDialog dialog,String id,String nonce,Runnable onDismiss){
+  showWorkDialog(dialog,onDismiss);
+  dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+   if(pending)return;
+   dialog.dismiss();
+   approvePhone(id,nonce);
   });
  }
  void approvePhone(String id,String nonce){async(()->{
@@ -291,9 +311,8 @@ public final class PairedActivity extends Activity {
    button(nav,"다음 쪽",()->load(pageNumber+1));next=(Button)nav.getChildAt(1);
    dialog=new AlertDialog.Builder(PairedActivity.this).setTitle("PDF 내용 확인").setView(content)
     .setNegativeButton("닫기",null)
-    .setPositiveButton(retry?"다시 저장":"승인 후 저장",(d,w)->approvePhone(id,nonce)).create();
-   dialog.setOnDismissListener(d->{viewer.stopLoading();viewer.destroy();});
-   dialog.show();
+    .setPositiveButton(retry?"다시 저장":"승인 후 저장",null).create();
+   showApprovalDialog(dialog,id,nonce,()->{viewer.stopLoading();viewer.destroy();});
    display(first);
   }
   void display(JSONObject result){

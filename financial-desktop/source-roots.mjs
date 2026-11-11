@@ -121,7 +121,7 @@ function sourceName(term){
   .replace(/\s+(?:의\s+)?(?:(?:전체|주요|핵심)\s+)?(?:내용|본문)$/u,'')
   .replace(/^["“]|["”]$/gu,'').trim();
 }
-export const fileSendSuffix=/(?:보내|전송해|전달해|공유해)\s*(?:줘요?|주세요|주십시오)\s*[.!]?\s*$/u;
+export const fileSendSuffix=/(?:(?:^|\s)다시\s+)?(?:보내|전송해|전달해|공유해)\s*(?:줘요?|주세요|주십시오|달라(?:고(?:요)?)?)\s*[.!]?\s*$/u;
 export const fileSendFormatSuffix=/(?:^|\s)(pptx?|docx?|json|txt|md|pdf|hwp[x]?|xlsx?|html|csv|png|jpe?g|rtf|odt|pages|keynote|텍스트|마크다운)\s*(?:으로|로)\s*$/iu;
 export function fileSendPrefix(text){
  return text.replace(fileSendSuffix,'').trim().replace(/\s+(?:내\s+)?(?:휴대폰|폰|모바일)(?:으로|로|에)$/u,'').trim();
@@ -129,7 +129,7 @@ export function fileSendPrefix(text){
 export function sourceQuery(text){
  // Protect file names before looking for operation verbs inside the surrounding request.
  const literals=[];
- const masked=text.replace(/["“]([^"”]+\.[a-z0-9]{1,12})["”]|([^\s"'“”,]+\.[a-z0-9]{1,12})(?=\s|[,，]|$|을|를|랑|이랑|와|과|으로|로)/giu,(_,quoted,bare)=>{
+ const masked=text.replace(/["“]([^"”]+\.[a-z0-9]{1,12})["”]|([^\s"'“”,]+\.[a-z0-9]{1,12})(?=\s|[,，]|$|을|를|랑|이랑|와|과|으로|로|도)/giu,(_,quoted,bare)=>{
   literals.push(quoted||bare);return '\u0001'+(literals.length-1)+'\u0002';
  });
  const reportStart=reportOutputStart(masked);
@@ -154,7 +154,12 @@ export function sourceQuery(text){
  const raw=source.split(/(?:이랑|랑|하고|와|과)(?=\s)(?!\s+(?:파일|문서|자료)(?:들)?(?:의|을|를)?(?:\s|$))|\s+(?:및|그리고)\s+|[,，]/u).map(t=>t.trim().replace(/^(?:모든|전체|여러)\s+/u,'').replace(/(?:을|를)$/u,'').trim()).filter(Boolean);
  const unmask=t=>t.replace(/\u0001(\d+)\u0002/g,(_,i)=>literals[Number(i)]);
  const sending=fileSendSuffix.test(sourceClause);
- const name=t=>unmask(sourceName(sending?t.replace(/([가-힣A-Za-z0-9])파일$/u,'$1'):t));
+ const name=t=>{
+  // Preserve rawTerms for literal names such as 조직도.pdf.
+  const cleaned=sending?t.replace(/^다시\s+/u,'').replace(/\s+다시$/u,'')
+   .replace(/(.)도$/u,'$1').trim().replace(/([가-힣A-Za-z0-9])파일$/u,'$1'):t;
+  return unmask(sourceName(cleaned));
+ };
  return {terms:raw.map(name),rawTerms:raw.map(t=>unmask(t.replace(/^["“]|["”]$/gu,''))),content:content?.[1]||content?.[2],latest,start,end,quarters};
 }
 function matchName(candidates,q,term,rawTerm){

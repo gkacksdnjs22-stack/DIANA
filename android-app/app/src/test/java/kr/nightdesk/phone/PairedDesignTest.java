@@ -110,6 +110,7 @@ public class PairedDesignTest {
  }
  @Test public void pdfDialogDisplaysPageControlsAndBlocksNetworkLoads()throws Exception{
   PairedActivity a=activity();
+  setupWork(a);
   Bitmap bitmap=Bitmap.createBitmap(16,20,Bitmap.Config.ARGB_8888);
   ByteArrayOutputStream bytes=new ByteArrayOutputStream();
   assertTrue(bitmap.compress(Bitmap.CompressFormat.JPEG,85,bytes));bitmap.recycle();
@@ -131,6 +132,21 @@ public class PairedDesignTest {
   android.webkit.WebView viewer=(android.webkit.WebView)viewerField.get(preview);
   assertTrue(viewer.getSettings().getBlockNetworkLoads());
   assertFalse(viewer.getSettings().getAllowFileAccess());
-  dialog.dismiss();a.finish();
+  Field active=PairedActivity.class.getDeclaredField("active");
+  active.setAccessible(true);
+  Field pending=PairedActivity.class.getDeclaredField("pending");
+  pending.setAccessible(true);
+  active.setBoolean(a,true);
+  try {
+   a.tick.run();
+   assertFalse("A preview pauses background polling",pending.getBoolean(a));
+   pending.setBoolean(a,true);
+   assertTrue(dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick());
+   assertTrue("An approval click must keep the preview open while busy",dialog.isShowing());
+  } finally {
+   active.setBoolean(a,false);
+   pending.setBoolean(a,false);
+   dialog.dismiss();a.finish();
+  }
  }
 }

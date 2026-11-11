@@ -65,6 +65,27 @@ test('sending a named original keeps the file query inside the named folder', ()
   assert.deepEqual(groupsFor([...files, literal], sourceQuery('이력서파일 보내줘'))[0].hits, [literal]);
 });
 
+test('follow-up delivery finds the requested filename and preserves literal names', () => {
+  const resume={name:'이력서.pdf'}, coverLetter={name:'자기소개서.txt'};
+  const diagram={name:'조직도.pdf'}, organization={name:'조직.pdf'};
+  const files=[resume,coverLetter,diagram,organization];
+  const roots=[{label:'바탕화면',path:'desktop'}];
+  for (const [request,expected,kind] of [
+    ['이력서 다시 보내줘',resume,'send'],
+    ['다시 바탕화면에서 이력서 보내 주세요',resume,'send'],
+    ['자기소개서도 보내달라',coverLetter,'send'],
+    ['자기소개서 파일도 보내 주세요',coverLetter,'send'],
+    ['자기소개서.txt도 전송해 달라고요',coverLetter,'send'],
+    ['"자기소개서.txt"도 TXT로 다시 보내줘',coverLetter,'convert'],
+    ['조직도 보내줘',diagram,'send'],
+  ]) {
+    assert.equal(route(request).kind,kind,request);
+    assert.deepEqual(groupsFor(files,sourceQuery(scope(roots,request).query))[0].hits,[expected],request);
+  }
+  assert.equal(route('결과도 보내달라').recentResult,true);
+  assert.equal(route('자기소개서도 TXT로 다시 보내줘').format,'txt');
+});
+
 test('a specified delivery format is separate from the source name', () => {
   const roots = [{ label: '바탕화면', path: 'desktop' }];
   for (const [request, term] of [
