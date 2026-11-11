@@ -427,6 +427,15 @@ try {
     await mobile({ op: 'phone-approve', id, nonce: preview.nonce, confirm: true });
     assert.deepEqual(await receive(id), reportBytes);
   }
+  const organizationChart=Buffer.from('가상 조직도 원본입니다.');
+  await writeFile(path.join(known.downloads,'조직.txt'),'다른 조직 자료입니다.');
+  await writeFile(path.join(downloadArchive,'2025 조직도.txt'),organizationChart);
+  const chart=await send('다운로드에서 조직도 보내줘');
+  await waitFor(chart,'approval');
+  const chartPreview=await mobile({op:'phone-preview',id:chart});
+  assert.match(chartPreview.preview,/보낼 원본 파일 · 2025 조직도\.txt/);
+  await mobile({op:'phone-approve',id:chart,nonce:chartPreview.nonce,confirm:true});
+  assert.deepEqual(await receive(chart),organizationChart);
   console.log('Transfer format, literal names and a named subfolder take precedence in file discovery');
   await pc({ op: 'directory', kind: 'exclude', path: deepBranch });
 

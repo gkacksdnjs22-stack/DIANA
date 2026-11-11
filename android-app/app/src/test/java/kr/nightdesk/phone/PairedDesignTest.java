@@ -1,5 +1,9 @@
 package kr.nightdesk.phone;
+import android.content.ContentProvider;
+import android.content.ContentValues;
+import android.database.Cursor;
 import android.graphics.*;
+import android.net.Uri;
 import android.os.Looper;
 import android.view.*;
 import android.widget.*;
@@ -7,7 +11,9 @@ import java.io.*;
 import java.lang.reflect.*;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -16,6 +22,7 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.GraphicsMode;
+import org.robolectric.shadows.ShadowContentResolver;
 import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class)
@@ -75,6 +82,69 @@ public class PairedDesignTest {
    assertTrue(text(root,name));
   } finally {
    finishReceive.countDown();
+   controller.destroy();
+  }
+ }
+ @Test public void deletingACopyWhileReceiptIsInProgressKeepsItRemoved()throws Exception{
+  var controller=Robolectric.buildActivity(PairedActivity.class).create();
+  PairedActivity a=controller.get();
+  setupWork(a);
+  String id="00000000-0000-4000-8000-000000000002",name="수신 확인 중.txt";
+  String device="00000000-0000-4000-8000-000000000001";
+  File dir=new File(a.getFilesDir(),"results/"+device);
+  assertTrue(dir.mkdirs()||dir.isDirectory());
+  File copy=new File(dir,name);
+  try(FileOutputStream output=new FileOutputStream(copy)){output.write(1);}
+  var uri=Uri.parse("content://paired.test.copy/result");
+  ShadowContentResolver.registerProviderInternal(uri.getAuthority(),new ContentProvider(){
+   @Override public boolean onCreate(){return true;}
+   @Override public Cursor query(Uri u,String[] p,String s,String[] a,String o){throw new UnsupportedOperationException();}
+   @Override public String getType(Uri u){return "text/plain";}
+   @Override public Uri insert(Uri u,ContentValues v){throw new UnsupportedOperationException();}
+   @Override public int update(Uri u,ContentValues v,String s,String[] a){throw new UnsupportedOperationException();}
+   @Override public int delete(Uri u,String s,String[] a){return copy.delete()?1:0;}
+  });
+  var preferences=a.getSharedPreferences("paired-"+device,0);
+  String metadata=new JSONObject().put("name",name).put("uri",uri.toString()).toString();
+  assertTrue(preferences.edit().putString("file-"+id,metadata).commit());
+  a.archive();
+
+  CountDownLatch receiptStarted=new CountDownLatch(1),finishReceipt=new CountDownLatch(1);
+  ExecutorService receiver=Executors.newSingleThreadExecutor();
+  var receipt=receiver.submit(()->{
+   synchronized(PairedFiles.lock){
+    receiptStarted.countDown();
+    if(!finishReceipt.await(10,TimeUnit.SECONDS))throw new IOException("Receipt test timed out");
+    assertTrue(preferences.edit().putString("file-"+id,metadata).commit());
+   }
+   return null;
+  });
+  try{
+   assertTrue(receiptStarted.await(5,TimeUnit.SECONDS));
+   a.deleteArchivedFile(id);
+   Field ioField=PairedActivity.class.getDeclaredField("io");
+   ioField.setAccessible(true);
+   var deletionFinished=((ExecutorService)ioField.get(a)).submit(()->{});
+   View root=a.findViewById(android.R.id.content);
+   tapTab(root,"설정");
+   assertTrue(text(root,"내 PC 연결"));
+   tapTab(root,"파일");
+   assertThrows(TimeoutException.class,()->deletionFinished.get(250,TimeUnit.MILLISECONDS));
+   assertTrue(copy.exists());
+   finishReceipt.countDown();
+   receipt.get(5,TimeUnit.SECONDS);
+   deletionFinished.get(5,TimeUnit.SECONDS);
+   Shadows.shadowOf(Looper.getMainLooper()).idle();
+   assertFalse(copy.exists());
+   assertFalse(preferences.contains("file-"+id));
+   assertTrue(preferences.getBoolean("removed-"+id,false));
+   PairedFiles files=new PairedFiles(a,new JSONObject().put("device",device));
+   files.receive(new JSONObject().put("id",id).put("name",name).put("sha256","unused"));
+   assertFalse(preferences.contains("file-"+id));
+   assertFalse(text(root,name));
+  }finally{
+   finishReceipt.countDown();
+   receiver.shutdown();
    controller.destroy();
   }
  }

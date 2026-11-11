@@ -372,15 +372,27 @@ public final class PairedActivity extends Activity {
      ()->new AlertDialog.Builder(this).setTitle("휴대폰 사본 삭제")
       .setMessage(file.optString("name")+"\n\nPC에 있는 파일은 그대로 유지됩니다.")
       .setNegativeButton("유지",null)
-      .setPositiveButton("삭제",(dialog,button)->{
-       try{
-        if(getContentResolver().delete(Uri.parse(file.optString("uri")),null,null)!=1)throw new IOException();
-        local.edit().remove(key).putBoolean("removed-"+id,true).commit();
-        renderArchiveFiles();
-       }catch(Exception e){note.setText("파일을 삭제하지 못했습니다.");}
-      }).show());
+      .setPositiveButton("삭제",(dialog,button)->deleteArchivedFile(id)).show());
    }catch(JSONException e){note.setText("보관 파일 정보를 확인하세요.");}
   }
+ }
+ void deleteArchivedFile(String id){
+  PairedFiles files=new PairedFiles(this,session);
+  SharedPreferences preferences=local;
+  TextView status=note;
+  status.setText("휴대폰 사본을 삭제하는 중입니다.");
+  io.execute(()->{
+   try{
+    files.deleteLocalCopy(id);
+    runOnUiThread(()->{
+     if(isDestroyed()||isFinishing()||local!=preferences||!screen.equals("archive"))return;
+     if(note==status)status.setText("");
+     renderArchiveFiles();
+    });
+   }catch(Exception e){
+    runOnUiThread(()->{if(!isDestroyed()&&note==status)status.setText("파일을 삭제하지 못했습니다.");});
+   }
+  });
  }
  void settings(){page("settings","설정");LinearLayout pc=card(page);TextView pcTitle=label(pc,"내 PC 연결");pcTitle.setTextSize(17);pcTitle.setTypeface(Typeface.DEFAULT_BOLD);caption(pc,"연결 정보는 이 기기에 안전하게 보관됩니다.");button(pc,"기기 연결 해제",()->new AlertDialog.Builder(this).setTitle("기기 연결 해제").setMessage("현재 휴대폰과 PC의 연결을 해제할까요? 받은 파일은 유지됩니다.").setNegativeButton("유지",null).setPositiveButton("해제",(d,b)->async(()->{call(obj("op","revoke","device",session.getString("device")));store.clear();runOnUiThread(()->login());})).show());LinearLayout storage=card(page);TextView storageTitle=label(storage,"파일 저장");storageTitle.setTextSize(17);storageTitle.setTypeface(Typeface.DEFAULT_BOLD);caption(storage,local.getString("tree","").isEmpty()?"앱의 보관 파일에 자동 저장":"선택한 폴더에 저장");button(storage,"저장 폴더 변경",()->startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE),22));LinearLayout app=card(page);label(app,"DIANA");caption(app,"버전 "+BuildConfig.VERSION_NAME);}
  protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(result!=RESULT_OK||data==null||data.getData()==null)return;Uri uri=data.getData();

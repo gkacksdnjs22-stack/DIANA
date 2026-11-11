@@ -86,6 +86,16 @@ test('follow-up delivery finds the requested filename and preserves literal name
   assert.equal(route('자기소개서도 TXT로 다시 보내줘').format,'txt');
 });
 
+test('a literal filename ending in 도 outranks a shortened exact match', () => {
+  const literal={name:'2025 조직도.txt'}, shortened={name:'조직.txt'};
+  const files=[shortened,literal];
+  assert.deepEqual(groupsFor(files,sourceQuery('조직도 보내줘'))[0].hits,[literal]);
+  assert.deepEqual(groupsFor([shortened],sourceQuery('조직도 보내줘'))[0].hits,[shortened]);
+  const unsupported={name:'2025 조직도.png'};
+  assert.deepEqual(groupsFor([shortened,unsupported],sourceQuery('조직도 보내줘'),false,
+    file=>file.name.endsWith('.txt'))[0].hits,[unsupported]);
+  assert.deepEqual(groupsFor(files,sourceQuery('"조직.txt"도 보내줘'))[0].hits,[shortened]);
+});
 test('a specified delivery format is separate from the source name', () => {
   const roots = [{ label: '바탕화면', path: 'desktop' }];
   for (const [request, term] of [
