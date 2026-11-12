@@ -8,10 +8,41 @@ import {createControlServer} from '../lib/control.mjs';
 import {checkPhoneApproval} from '../agent/pair-approval.mjs';
 import {pairRequest} from './helpers/phone-pair.mjs';
 import {keyStore} from '../agent/secure-keys.mjs';
-import {mkdtemp,readFile,rm} from 'node:fs/promises';
+import {mkdtemp,readFile,rm,mkdir,writeFile,readdir,open} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import {fileCipher} from '../agent/file-cipher.mjs';
+import {fileCipher,publishCiphertext} from '../agent/file-cipher.mjs';
+
+test('a failed cache write publishes nothing and the next process can retry',async t=>{
+ const dir=await mkdtemp(path.join(os.tmpdir(),'diana-cache-write-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ const target=path.join(dir,'fixture.complete'),wire=Buffer.from('synthetic complete ciphertext');
+ await assert.rejects(()=>publishCiphertext(target,wire,{openFile:async(...args)=>{const handle=await open(...args);return{async writeFile(b){await handle.writeFile(b.subarray(0,4));throw Error('interrupted write');},sync:()=>handle.sync(),close:()=>handle.close()};}}),/interrupted write/);
+ assert.deepEqual(await readdir(dir),[]);assert.deepEqual(await publishCiphertext(target,wire),wire);assert.deepEqual(await readFile(target),wire);
+});
+
+test('a complete old cache retains its exact ciphertext when migrated',async t=>{
+ const stateDir=await mkdtemp(path.join(os.tmpdir(),'diana-old-cache-'));t.after(()=>rm(stateDir,{recursive:true,force:true}));
+ const key=randomBytes(32).toString('hex'),bytes=Buffer.from('old immutable ciphertext'),meta={id:randomUUID(),filename:'fixture.txt'};
+ const bound={...meta,direction:'pc-phone',sha256:digest(bytes),bytes:bytes.length},wire=seal(bytes,[key],bound),directory=path.join(stateDir,'e2ee-spool');await mkdir(directory);
+ await writeFile(path.join(directory,digest(Buffer.from(JSON.stringify(bound)))+'.bin'),wire);
+ const options={stateDir,request:async()=>({devices:[{id:'phone'}]}),keys:{async all(){return{'device:phone':{key}};}}};
+ assert.deepEqual(await fileCipher(options).encrypt(bytes,meta),wire);assert.deepEqual(await fileCipher(options).encrypt(bytes,meta),wire);
+});
+
+test('a partial legacy cache and abandoned temporary write cannot poison retries',async t=>{
+ const stateDir=await mkdtemp(path.join(os.tmpdir(),'diana-partial-cache-'));t.after(()=>rm(stateDir,{recursive:true,force:true}));
+ const key=randomBytes(32).toString('hex'),bytes=Buffer.from('interrupted cache fixture'),meta={id:randomUUID(),filename:'fixture.txt'};
+ const directory=path.join(stateDir,'e2ee-spool');await mkdir(directory);
+ const stem=digest(Buffer.from(JSON.stringify({...meta,direction:'pc-phone',sha256:digest(bytes),bytes:bytes.length})));
+ await writeFile(path.join(directory,stem+'.bin'),'DIANA-E2EE-1\n{"v":1');
+ await writeFile(path.join(directory,stem+'.interrupted.tmp'),'partial uncommitted bytes');
+ const options={stateDir,request:async()=>({devices:[{id:'phone'}]}),keys:{async all(){return{'device:phone':{key}};}}};
+ const wires=await Promise.all(Array.from({length:4},()=>fileCipher(options).encrypt(bytes,meta)));
+ assert(wires.every(w=>w.equals(wires[0])));assert.deepEqual(openEnvelope(wires[0],[key],{...meta,direction:'pc-phone'}),bytes);
+ assert.deepEqual(await fileCipher(options).encrypt(bytes,meta),wires[0]);
+ const committed=(await readdir(directory)).filter(p=>p.endsWith('.complete'));assert.equal(committed.length,1);
+ assert.deepEqual(await readFile(path.join(directory,committed[0])),wires[0]);
+});
 
 test('PC file sender retries immutable ciphertext and excludes revoked devices from new files',async t=>{
  const stateDir=await mkdtemp(path.join(os.tmpdir(),'diana-file-fixture-'));t.after(()=>rm(stateDir,{recursive:true,force:true}));

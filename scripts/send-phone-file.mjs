@@ -10,7 +10,7 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 
 /** Explicit owner-selected files only. A replay keeps the same delivery UUID. */
 export async function sendPhoneFile(filename, { env = process.env, fetchImpl = fetch,
-  stateDir = path.join(PROJECT_ROOT, '.local', 'phone-deliveries'), now = Date.now, cipher } = {}) {
+  stateDir = path.join(PROJECT_ROOT, '.local', 'phone-deliveries'), now = Date.now, cipher,appUpdate=false } = {}) {
   const base = new URL(env.API_BASE_URL || '');
   const loopback = base.hostname === 'localhost' || base.hostname === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(base.hostname);
   if ((base.protocol !== 'https:' && !(base.protocol === 'http:' && loopback)) || base.username || base.password || base.search || base.hash || /[?#]/.test(env.API_BASE_URL)) {
@@ -36,7 +36,8 @@ export async function sendPhoneFile(filename, { env = process.env, fetchImpl = f
     bytes = buffer.subarray(0, size);
   } finally { await handle.close(); }
   const metadata = validateUploadMetadata({ filename: path.basename(input), sha256: hash(bytes), bytes: bytes.length });
-  const signature = hash(`${apiBase}\0${hash(env.USER_TOKEN.trim())}\0${metadata.filename}\0${metadata.sha256}`);
+  if(appUpdate&&!/\.apk$/i.test(metadata.filename))throw Error('공개 앱 업데이트 경로에는 APK만 사용할 수 있습니다.');
+  const signature = hash(`${apiBase}\0${hash(env.USER_TOKEN.trim())}\0${metadata.filename}\0${metadata.sha256}${appUpdate?'\0public-app-update':''}`);
   await mkdir(stateDir, { recursive: true, mode: 0o700 });
   const ledger = path.join(stateDir, signature + '.json');
   let saved;
@@ -49,18 +50,23 @@ export async function sendPhoneFile(filename, { env = process.env, fetchImpl = f
     await writeFile(temporary, JSON.stringify(saved), { mode: 0o600, flag: 'wx' });
     await rename(temporary, ledger);
   }
-  cipher??=fileCipher({stateDir:env.AGENT_STATE_DIR||path.join(PROJECT_ROOT,'.local'),request:async()=>{const r=await fetchImpl(apiBase+'/api/phone/devices',{headers:{Authorization:'Bearer '+env.USER_TOKEN.trim()},redirect:'error',signal:AbortSignal.timeout(20000)});if(!r.ok)throw Error('휴대폰 연결을 확인하세요.');return r.json();}});
-  const encrypted=await cipher.encrypt(bytes,{id:saved.id,filename:metadata.filename});
-  const response = await fetchImpl(apiBase + '/api/deliveries/' + saved.id, {
+  let body;
+  if(appUpdate)body=JSON.stringify(metadata);
+  else{
+    cipher??=fileCipher({stateDir:env.AGENT_STATE_DIR||path.join(PROJECT_ROOT,'.local'),request:async()=>{const r=await fetchImpl(apiBase+'/api/phone/devices',{headers:{Authorization:'Bearer '+env.USER_TOKEN.trim()},redirect:'error',signal:AbortSignal.timeout(20000)});if(!r.ok)throw Error('휴대폰 연결을 확인하세요.');return r.json();}});
+    body=await cipher.encrypt(bytes,{id:saved.id,filename:metadata.filename});
+  }
+  const response = await fetchImpl(apiBase + (appUpdate?'/api/app-updates/':'/api/deliveries/') + saved.id, {
     method: 'POST', redirect: 'error', signal: AbortSignal.timeout(45_000),
-    headers: { Authorization: `Bearer ${env.USER_TOKEN.trim()}`, 'Content-Type': 'application/octet-stream',
-      'X-File-Name': encodeURIComponent(metadata.filename), 'X-File-SHA256': metadata.sha256 }, body: encrypted,
+    headers: { Authorization: `Bearer ${env.USER_TOKEN.trim()}`, 'Content-Type': appUpdate?'application/json':'application/octet-stream',
+      'X-File-Name': encodeURIComponent(metadata.filename), 'X-File-SHA256': metadata.sha256 }, body,
   });
   if (!response.ok) { await response.body?.cancel().catch(() => {}); throw new Error(`DIANA 파일 전송을 접수하지 못했습니다. (HTTP ${response.status})`); }
   const result = await response.json();
   const job = result.job;
   if (job?.id !== saved.id || job.kind !== 'delivery' || job.state !== 'download_ready' ||
-      job.artifact?.filename !== metadata.filename || job.artifact.sha256 !== metadata.sha256 || job.artifact.bytes !== metadata.bytes) {
+      job.artifact?.filename !== metadata.filename || job.artifact.sha256 !== metadata.sha256 || job.artifact.bytes !== metadata.bytes ||
+      appUpdate&&job.artifact.transferEncoding!=='public-app-update') {
     throw new Error('DIANA 전송 접수 응답을 확인하지 못했습니다. 같은 명령으로 다시 시도하세요.');
   }
   return { id: job.id, filename: metadata.filename, bytes: metadata.bytes, sha256: metadata.sha256,
@@ -68,12 +74,13 @@ export async function sendPhoneFile(filename, { env = process.env, fetchImpl = f
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  if (process.argv.length !== 3) {
-    console.error('사용법: node --env-file=.env scripts/send-phone-file.mjs "전송할 파일 경로"'); process.exitCode = 1;
+  const args=process.argv.slice(2),appUpdate=args[0]==='--app-update';if(appUpdate)args.shift();
+  if (args.length !== 1||args[0].startsWith('--')) {
+    console.error('사용법: node --env-file=.env scripts/send-phone-file.mjs [--app-update] "전송할 파일 경로"'); process.exitCode = 1;
   } else {
-    sendPhoneFile(process.argv[2]).then(result => {
+    sendPhoneFile(args[0],{appUpdate}).then(result => {
       console.log(JSON.stringify(result));
       console.log(result.phoneSavedAt ? '갤럭시 저장 확인을 받았습니다.' : 'DIANA에 전송을 접수했습니다. 갤럭시 앱에서 ‘지금 결과 확인’을 누르세요.');
-    }).catch(() => { console.error('파일 전송을 확인하지 못했습니다. 파일 경로·크기·서버 배포 상태·연결 설정을 확인한 뒤 같은 명령으로 재시도하세요.'); process.exitCode = 1; });
+    }).catch(() => { console.error(appUpdate?'공개 배포 APK의 파일·SHA-256·서버 배포 목록을 확인하세요.':'파일 전송을 확인하지 못했습니다. 파일 경로·크기·서버 배포 상태·연결 설정을 확인하세요. 기존 앱 업데이트는 공개 배포 APK와 --app-update를 사용하세요.'); process.exitCode = 1; });
   }
 }

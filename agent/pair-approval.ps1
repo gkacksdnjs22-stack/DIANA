@@ -1,6 +1,6 @@
 ﻿$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
-if (-not [Environment]::UserInteractive) { exit 1 }
+if (-not [Environment]::UserInteractive -or [Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0) { exit 1 }
 $pairRequest = [Console]::In.ReadToEnd() | ConvertFrom-Json
 $pairDialog = New-Object System.Windows.Forms.Form
 $pairDialog.Text = 'DIANA - 새 휴대폰 연결 승인'
@@ -26,5 +26,7 @@ $pairDialog.Controls.AddRange(@($pairText,$pairReject,$pairAccept))
 $pairDialog.AcceptButton = $pairReject
 $pairDialog.CancelButton = $pairReject
 try {
-    if ($pairDialog.ShowDialog() -eq 'OK') { [Console]::Out.Write('approve') }
+    $decision = $pairDialog.ShowDialog()
+    if ($decision -eq 'OK') { [Console]::Out.Write('approve') }
+    elseif ($decision -eq 'Cancel') { [Console]::Out.Write('reject') }
 } finally { $pairDialog.Dispose() }

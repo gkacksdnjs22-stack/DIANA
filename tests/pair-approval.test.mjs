@@ -1,10 +1,22 @@
 import {offerKey,newIdentity} from '../lib/e2ee.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {once} from 'node:events';
+import {once,EventEmitter} from 'node:events';
+import {PassThrough} from 'node:stream';
 import {createControlServer} from '../lib/control.mjs';
 import {pairRequest} from './helpers/phone-pair.mjs';
-import {checkPhoneApproval} from '../agent/pair-approval.mjs';
+import {checkPhoneApproval,confirmPhoneOnPc} from '../agent/pair-approval.mjs';
+
+test('unavailable desktop, process errors, empty output and abort are not user rejection',async()=>{
+ const pending={deviceName:'Fixture',expiresAt:new Date(Date.now()+30000).toISOString()};
+ for(const [code,output,expected] of [[1,'',null],[0,'',null],[0,'unknown',null],[0,'approve',true],[0,'reject',false],[1,'reject',null]]){
+  const spawnImpl=()=>{const child=new EventEmitter();child.stdin=new PassThrough();child.stdout=new PassThrough();child.kill=()=>{};setImmediate(()=>{child.stdout.end(output);child.emit('close',code);});return child;};
+  assert.equal(await confirmPhoneOnPc(pending,{platform:'win32',spawnImpl}),expected);
+ }
+ assert.equal(await confirmPhoneOnPc(pending,{platform:'linux'}),null);
+ assert.equal(await confirmPhoneOnPc(pending,{platform:'win32',spawnImpl(){throw Error('unavailable');}}),null);
+ assert.equal(await confirmPhoneOnPc(pending,{signal:AbortSignal.abort()}),null);
+});
 
 const USER='u'.repeat(40),AGENT='a'.repeat(40),GATEWAY='g'.repeat(40);
 async function fixture(t){
@@ -46,6 +58,13 @@ test('a copied code and matching name cannot steal a pending claim',async t=>{
   assert.equal((await f.decide(pending.id,true)).status,200);
   assert.equal((await f.pair()).status,201);
 });
+
+test('an unavailable UI leaves the same server request pending for later explicit approval',async t=>{
+ const f=await fixture(t);assert.equal((await f.pair()).status,202);const first=await f.pending();
+ const changed=await checkPhoneApproval({request:async(route,options)=>{const r=await f.request(route,{...options,token:AGENT});assert.equal(r.status,200);return r.data;},confirm:async()=>null});
+ assert.equal(changed,false);assert.equal((await f.pending()).id,first.id);assert.equal((await f.pair()).status,202);
+ assert.equal((await f.decide(first.id,true)).status,200);assert.equal((await f.pair()).status,201);
+});
 test('denial, expiry, code replacement and legacy clients never produce a phone token',async t=>{
   const f=await fixture(t);assert.equal((await f.pair()).status,202);
   assert.equal((await f.decide((await f.pending()).id,false)).status,200);
@@ -59,10 +78,11 @@ test('denial, expiry, code replacement and legacy clients never produce a phone 
   await f.request('/api/phone/pair-code',{method:'POST'});assert.equal((await f.decide(obsolete.id,true)).status,409);
   const legacy=await f.request('/api/phone/pair',{method:'POST',token:'',body:{code:f.body.code,deviceName:'old client'}});assert.equal(legacy.status,400);
 });
-test('PC confirmation posts approval only for an explicit true decision',async()=>{
-  for(const decision of [true,false,undefined]){
+test('PC confirmation changes state only after an explicit approval or rejection',async()=>{
+  for(const decision of [true,false,undefined,null]){
     const sent=[];
     await checkPhoneApproval({request:async(route,options)=>{if(!options)return{pending:{id:'request',deviceName:'Test',publicKey:newIdentity().publicKey,requestId:'test-request',expiresAt:new Date(Date.now()+30000).toISOString()}};sent.push(options.body);},confirm:async()=>decision,keys:{async get(){return null;},async set(){}}});
-    assert.equal(sent.length,1);assert.equal(sent[0].approve,decision===true);assert.equal(!!sent[0].e2ee,decision===true);
+    assert.equal(sent.length,typeof decision==='boolean'?1:0);
+    if(sent.length){assert.equal(sent[0].approve,decision);assert.equal(!!sent[0].e2ee,decision);}
   }
 });
