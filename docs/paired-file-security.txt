@@ -18,6 +18,14 @@ Android는 Android Keystore의 AES-256-GCM 키로 세션 및 대기 중인 개�
 캐시는 임시 파일 기록·sync·close 이후 독점 hard link로 .complete 파일을 게시한다.
 이전 .bin 캐시가 정상이라면 그대로 계승하고, 부분 기록 파일은 게시하지 않은 채 재생성한다.
 비대화형 서비스·창 실행 실패·중단은 사용자 거절로 기록하지 않는다. 명시적 승인/거절만 전송한다.
+승인 스크립트는 Windows PowerShell 하위 프로세스에만 -ExecutionPolicy Bypass를 적용한다.
+시스템/사용자 정책은 변경하지 않고 그룹 정책을 존중한다. 실행 실패 로그는 고정된 원인 분류와
+종료 코드만 포함하며 stderr 원문·기기 이름·인증 비밀값을 기록하지 않는다.
+send-phone-file.mjs 일반 전송은 owner 전용 GET /api/deliveries/:id로 접수 상태를 먼저 확인한다.
+접수된 건은 로컬 키가 바뀌어도 기존 접수/저장 확인 정보를 반환하며 암호문을 교체하지 않는다.
+명시적인 job:null 응답으로 미접수가 확인된 건만 현재 수신 키 집합별 캐시를 사용해 같은 ID로
+재암호화할 수 있다. 조회 실패·404·손상 응답은 미접수가 아니다. 이전 캐시는 덮어쓰지 않는다.
+조회 뒤 늦은 요청과 경합해도 서버의 기존 전송 ID는 최초 접수된 암호문을 유지한다.
 기존 HTTP 파일 API는 바이너리만 암호화한다. 목록·파일명·해시·크기·작업 메타데이터는 서버에 보인다.
 DIANA.exe 기기 중계는 인증 후 RPC 본문과 응답 전체를 감싸므로 파일·미리보기·명령 내용도 암호화한다.
 이 경로는 방향·요청 ID·2분 시각 범위·PC SQLite 재사용 기록을 검사한다. 토큰과 트래픽 크기는 중계에 보인다.
@@ -56,7 +64,7 @@ Android는 공개 설치 파일 표시·APK 형식·해시·길이를 확인한�
 기기 폐기, 재연결, 최대 크기 양방향 전송을 별도 시험 서비스에서 확인한다.
 
 검증 명령
-node --test tests/e2ee.test.mjs tests/pair-approval.test.mjs tests/phone-pairing-retry.test.mjs
+node --test tests/e2ee.test.mjs tests/pair-approval.test.mjs tests/pair-approval-windows.test.mjs tests/delivery-retry.test.mjs tests/phone-pairing-retry.test.mjs
 gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest
 gradle --no-daemon -PpairedProduct=true :app:testDebugUnitTest :app:assembleDebug
 node scripts/check-paired-product.mjs BUILT_DIANA_PC_FOLDER FIXTURE_PARENT

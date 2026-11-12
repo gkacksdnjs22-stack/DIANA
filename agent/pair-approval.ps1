@@ -1,6 +1,6 @@
 ﻿$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
-if (-not [Environment]::UserInteractive -or [Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0) { exit 1 }
+if (-not [Environment]::UserInteractive -or [Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0) { [Console]::Error.Write('DIANA_PAIR_UI_UNAVAILABLE'); exit 1 }
 $pairRequest = [Console]::In.ReadToEnd() | ConvertFrom-Json
 $pairDialog = New-Object System.Windows.Forms.Form
 $pairDialog.Text = 'DIANA - 새 휴대폰 연결 승인'

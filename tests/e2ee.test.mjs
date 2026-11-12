@@ -59,6 +59,21 @@ test('PC file sender retries immutable ciphertext and excludes revoked devices f
  active=[];await assert.rejects(()=>fileCipher(options).encrypt(plain,{...meta,id:randomUUID()}));
 });
 
+test('confirmed unaccepted delivery can leave a legacy cache behind when all recipient keys change',async t=>{
+ const stateDir=await mkdtemp(path.join(os.tmpdir(),'diana-key-replacement-'));t.after(()=>rm(stateDir,{recursive:true,force:true}));
+ const first=randomBytes(32).toString('hex'),second=randomBytes(32).toString('hex');let key=first;
+ const options={stateDir,request:async()=>({devices:[{id:'phone'}]}),keys:{async all(){return{'device:phone':{key}};}}};
+ const plain=Buffer.from('legacy cache key replacement'),meta={id:randomUUID(),filename:'fixture.txt'};
+ const previous=await fileCipher(options).encrypt(plain,meta);key=second;
+ await assert.rejects(()=>fileCipher(options).encrypt(plain,meta));
+ const renewed=await fileCipher(options).encrypt(plain,meta,{unaccepted:true});
+ assert.deepEqual(openEnvelope(renewed,[second],{...meta,direction:'pc-phone'}),plain);
+ assert.throws(()=>openEnvelope(renewed,[first],{...meta,direction:'pc-phone'}));
+ assert.deepEqual(await fileCipher(options).encrypt(plain,meta,{unaccepted:true}),renewed);
+ const files=await Promise.all((await readdir(path.join(stateDir,'e2ee-spool'))).map(n=>readFile(path.join(stateDir,'e2ee-spool',n))));
+ assert(files.some(b=>b.equals(previous)));
+});
+
 test('maximum existing attachments survive encryption and JSON wrapping',()=>{
  const key=randomBytes(32),meta={id:randomUUID(),filename:'request.json',direction:'phone-pc'};
  const payload=Buffer.from(JSON.stringify({at:Date.now(),body:{op:'job',action:'desk-upload',base64:Buffer.alloc(8000000,75).toString('base64')}}));

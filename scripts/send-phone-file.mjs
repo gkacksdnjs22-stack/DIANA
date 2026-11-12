@@ -50,11 +50,28 @@ export async function sendPhoneFile(filename, { env = process.env, fetchImpl = f
     await writeFile(temporary, JSON.stringify(saved), { mode: 0o600, flag: 'wx' });
     await rename(temporary, ledger);
   }
+  const receipt=result=>{
+    const job=result?.job;
+    if (job?.id !== saved.id || job.kind !== 'delivery' || job.state !== 'download_ready' ||
+        job.artifact?.filename !== metadata.filename || job.artifact.sha256 !== metadata.sha256 || job.artifact.bytes !== metadata.bytes ||
+        (job.artifact.transferEncoding==='public-app-update')!==appUpdate || job.artifact.expired) {
+      throw new Error('DIANA 전송 접수 응답을 확인하지 못했습니다. 같은 명령으로 다시 시도하세요.');
+    }
+    return { id:job.id,filename:metadata.filename,bytes:metadata.bytes,sha256:metadata.sha256,state:job.state,
+      ...(job.phoneSavedAt?{phoneSavedAt:job.phoneSavedAt}:{}),duplicate:result.duplicate===true };
+  };
   let body;
   if(appUpdate)body=JSON.stringify(metadata);
   else{
+    // A timeout/404/invalid response is NOT proof of non-acceptance. Fail closed.
+    // Accepted deliveries stay immutable and do not require the former recipient's key locally.
+    const status=await fetchImpl(apiBase+'/api/deliveries/'+saved.id,{method:'GET',redirect:'error',signal:AbortSignal.timeout(20000),headers:{Authorization:'Bearer '+env.USER_TOKEN.trim()}});
+    if(!status.ok){await status.body?.cancel().catch(()=>{});throw Error(`DIANA 전송 접수 여부를 확인하지 못했습니다. (HTTP ${status.status})`);}
+    const existing=await status.json();
+    if(!existing||!Object.hasOwn(existing,'job'))throw Error('DIANA 전송 접수 조회 응답을 확인하지 못했습니다.');
+    if(existing.job!==null)return receipt({...existing,duplicate:true});
     cipher??=fileCipher({stateDir:env.AGENT_STATE_DIR||path.join(PROJECT_ROOT,'.local'),request:async()=>{const r=await fetchImpl(apiBase+'/api/phone/devices',{headers:{Authorization:'Bearer '+env.USER_TOKEN.trim()},redirect:'error',signal:AbortSignal.timeout(20000)});if(!r.ok)throw Error('휴대폰 연결을 확인하세요.');return r.json();}});
-    body=await cipher.encrypt(bytes,{id:saved.id,filename:metadata.filename});
+    body=await cipher.encrypt(bytes,{id:saved.id,filename:metadata.filename},{unaccepted:true});
   }
   const response = await fetchImpl(apiBase + (appUpdate?'/api/app-updates/':'/api/deliveries/') + saved.id, {
     method: 'POST', redirect: 'error', signal: AbortSignal.timeout(45_000),
@@ -62,15 +79,7 @@ export async function sendPhoneFile(filename, { env = process.env, fetchImpl = f
       'X-File-Name': encodeURIComponent(metadata.filename), 'X-File-SHA256': metadata.sha256 }, body,
   });
   if (!response.ok) { await response.body?.cancel().catch(() => {}); throw new Error(`DIANA 파일 전송을 접수하지 못했습니다. (HTTP ${response.status})`); }
-  const result = await response.json();
-  const job = result.job;
-  if (job?.id !== saved.id || job.kind !== 'delivery' || job.state !== 'download_ready' ||
-      job.artifact?.filename !== metadata.filename || job.artifact.sha256 !== metadata.sha256 || job.artifact.bytes !== metadata.bytes ||
-      appUpdate&&job.artifact.transferEncoding!=='public-app-update') {
-    throw new Error('DIANA 전송 접수 응답을 확인하지 못했습니다. 같은 명령으로 다시 시도하세요.');
-  }
-  return { id: job.id, filename: metadata.filename, bytes: metadata.bytes, sha256: metadata.sha256,
-    state: job.state, ...(job.phoneSavedAt ? { phoneSavedAt: job.phoneSavedAt } : {}), duplicate: result.duplicate === true };
+  return receipt(await response.json());
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

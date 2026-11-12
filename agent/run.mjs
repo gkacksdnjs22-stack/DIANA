@@ -201,7 +201,7 @@ export async function runAgent({ env = process.env, fetchImpl = fetch, mailSende
   cipher??=fileCipher({stateDir,request});
   const keys=keyStore(path.join(stateDir,'e2ee'));
   const approvalStop=new AbortController(),approvalSignal=signal?AbortSignal.any([signal,approvalStop.signal]):approvalStop.signal;
-  const approvals=once?Promise.resolve():(async()=>{while(!approvalSignal.aborted){try{await checkPhoneApproval({request:(route,options={})=>apiRequest(config,route,{fetchImpl,signal:approvalSignal,...options}),signal:approvalSignal,keys});}catch{if(!approvalSignal.aborted)logger.error('휴대폰 연결 승인 상태를 다시 확인합니다.');}try{await delay(5000,undefined,{signal:approvalSignal});}catch{break;}}})();
+  const approvals=once?Promise.resolve():(async()=>{while(!approvalSignal.aborted){try{await checkPhoneApproval({request:(route,options={})=>apiRequest(config,route,{fetchImpl,signal:approvalSignal,...options}),signal:approvalSignal,keys,logger});}catch{if(!approvalSignal.aborted)logger.error('휴대폰 연결 승인 상태를 다시 확인합니다.');}try{await delay(5000,undefined,{signal:approvalSignal});}catch{break;}}})();
   try {
   let failures = 0;
   let catalogAt = 0;

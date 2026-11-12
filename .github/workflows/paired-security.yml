@@ -26,4 +26,4 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: node --test tests/e2ee.test.mjs tests/pair-approval.test.mjs tests/phone-pairing-retry.test.mjs tests/incoming-agent.test.mjs tests/push-control.test.mjs tests/send-phone-file.test.mjs tests/app-update.test.mjs
+      - run: node --test tests/e2ee.test.mjs tests/pair-approval.test.mjs tests/pair-approval-windows.test.mjs tests/delivery-retry.test.mjs tests/phone-pairing-retry.test.mjs tests/incoming-agent.test.mjs tests/push-control.test.mjs tests/send-phone-file.test.mjs tests/app-update.test.mjs

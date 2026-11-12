@@ -10,12 +10,28 @@ import {checkPhoneApproval,confirmPhoneOnPc} from '../agent/pair-approval.mjs';
 test('unavailable desktop, process errors, empty output and abort are not user rejection',async()=>{
  const pending={deviceName:'Fixture',expiresAt:new Date(Date.now()+30000).toISOString()};
  for(const [code,output,expected] of [[1,'',null],[0,'',null],[0,'unknown',null],[0,'approve',true],[0,'reject',false],[1,'reject',null]]){
-  const spawnImpl=()=>{const child=new EventEmitter();child.stdin=new PassThrough();child.stdout=new PassThrough();child.kill=()=>{};setImmediate(()=>{child.stdout.end(output);child.emit('close',code);});return child;};
-  assert.equal(await confirmPhoneOnPc(pending,{platform:'win32',spawnImpl}),expected);
+  const spawnImpl=()=>{const child=new EventEmitter();child.stdin=new PassThrough();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};setImmediate(()=>{child.stdout.end(output);child.emit('close',code);});return child;};
+  assert.equal(await confirmPhoneOnPc(pending,{platform:'win32',spawnImpl,logger:{error(){}}}),expected);
  }
  assert.equal(await confirmPhoneOnPc(pending,{platform:'linux'}),null);
- assert.equal(await confirmPhoneOnPc(pending,{platform:'win32',spawnImpl(){throw Error('unavailable');}}),null);
+ assert.equal(await confirmPhoneOnPc(pending,{platform:'win32',spawnImpl(){throw Error('unavailable');},logger:{error(){}}}),null);
  assert.equal(await confirmPhoneOnPc(pending,{signal:AbortSignal.abort()}),null);
+});
+
+test('approval launch is process scoped and failure logs exclude raw stderr and request data',async()=>{
+ const secret='private-token-and-device-name';
+ for(const [stderr,reason] of [['PSSecurityException UnauthorizedAccess '+secret,'execution-policy-blocked'],['DIANA_PAIR_UI_UNAVAILABLE '+secret,'desktop-unavailable'],['unexpected '+secret,'script-error']]){
+  const logs=[];
+  const spawnImpl=(command,args,options)=>{
+   assert.equal(command,'powershell.exe');assert.deepEqual(args.slice(0,6),['-NoProfile','-NonInteractive','-STA','-ExecutionPolicy','Bypass','-File']);
+   assert(args.at(-1).endsWith('pair-approval.ps1'));assert.deepEqual(options.stdio,['pipe','pipe','pipe']);assert.equal(options.windowsHide,true);
+   assert(!args.join(' ').includes(secret));
+   const child=new EventEmitter();child.stdin=new PassThrough();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{};
+   setImmediate(()=>{child.stderr.end(stderr);child.emit('close',1);});return child;
+  };
+  assert.equal(await confirmPhoneOnPc({deviceName:secret,expiresAt:new Date(Date.now()+30000).toISOString()},{platform:'win32',spawnImpl,logger:{error:message=>logs.push(message)}}),null);
+  assert.equal(logs.length,1);assert(logs[0].includes(reason));assert(!logs[0].includes(secret));
+ }
 });
 
 const USER='u'.repeat(40),AGENT='a'.repeat(40),GATEWAY='g'.repeat(40);
