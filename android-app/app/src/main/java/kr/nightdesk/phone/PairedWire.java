@@ -34,7 +34,7 @@ public final class PairedWire {
   conn.setInstanceFollowRedirects(false);conn.setConnectTimeout(8000);conn.setReadTimeout(45000);conn.setRequestMethod("POST");conn.setDoOutput(true);
   conn.setRequestProperty("Content-Type","application/json");conn.setRequestProperty("Authorization","Bearer "+token);
   try{try(OutputStream out=conn.getOutputStream()){out.write(json.getBytes(StandardCharsets.UTF_8));}
-   int status=conn.getResponseCode();return new Reply(status,read(status==200?conn.getInputStream():conn.getErrorStream(),16000000));
+   int status=conn.getResponseCode();return new Reply(status,read(status>=200&&status<300?conn.getInputStream():conn.getErrorStream(),32000000));
   }finally{conn.disconnect();}
  }
 }

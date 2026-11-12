@@ -1,3 +1,5 @@
+import {approvedRequest as approveRequest} from './helpers/phone-pair.mjs';
+const approvedRequest=(request,options)=>approveRequest(request,options,AGENT);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
@@ -5,14 +7,16 @@ import { randomUUID,createHash } from 'node:crypto';
 import { mkdir,mkdtemp,rm,writeFile } from 'node:fs/promises';
 import { resolve,join } from 'node:path';
 import { createControlServer } from '../lib/control.mjs';
-import { runOnce } from '../agent/run.mjs';
+import {runOnce as secureRunOnce} from '../agent/run.mjs';
+const testCipher={async encrypt(b){return b;},async decrypt(b){return b;}};
+const runOnce=opts=>secureRunOnce({...opts,cipher:testCipher});
 
 const root=resolve(import.meta.dirname,'..');
 const USER='user-'+ 'u'.repeat(40), AGENT='agent-'+ 'a'.repeat(40), GATEWAY='gateway-'+ 'g'.repeat(40);
 async function fixture(t){
   const tempParent=join(root,'.local');await mkdir(tempParent,{recursive:true});
   const dir=await mkdtemp(join(tempParent,'test-control-'));
-  const server=createControlServer({userToken:USER,agentToken:AGENT,gatewayToken:GATEWAY,transferDir:join(dir,'transfers')});
+  const server=createControlServer({allowLegacyPlaintextTransfers:true,userToken:USER,agentToken:AGENT,gatewayToken:GATEWAY,transferDir:join(dir,'transfers')});
   server.listen(0,'127.0.0.1');await once(server,'listening');const base=`http://127.0.0.1:${server.address().port}`;
   t.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));assert(dir.startsWith(tempParent+'\\')||dir.startsWith(tempParent+'/'));await rm(dir,{recursive:true,force:true});});
   const request=async(route,{token=USER,method='GET',body,headers={}}={})=>{
@@ -67,7 +71,7 @@ test('paired Galaxy can fetch a single search file and acknowledge its verified 
   await runOnce({env:f.env,stateDir:join(f.dir,'agent')});job=(await f.request('/api/jobs')).data.jobs[0];
   assert.equal(job.state,'download_ready');assert.equal(job.phoneSavedAt,undefined);
   const code=(await f.request('/api/phone/pair-code',{method:'POST'})).data.code;
-  const pair=await f.request('/api/phone/pair',{method:'POST',token:'',body:{code,deviceName:'테스트 갤럭시'}});
+  const pair=await approvedRequest(f.request,{method:'POST',token:'',body:{code,deviceName:'테스트 갤럭시'}});
   assert.equal(pair.status,201);const phoneToken=pair.data.phoneToken;
   const file=await fetch(`${f.base}/api/jobs/${job.id}/file`,{headers:{Authorization:`Bearer ${phoneToken}`}});
   assert.equal(file.status,200);
@@ -89,7 +93,7 @@ test('both delivery retains phone file and creates exactly one dry-run email on 
   const result=await runOnce({env:f.env,stateDir:join(f.dir,'agent')});assert.equal(result.status,'dry_run');
   job=(await f.request('/api/jobs')).data.jobs[0];assert(job.artifact);assert.equal(job.state,'dry_run');
   const code=(await f.request('/api/phone/pair-code',{method:'POST'})).data.code;
-  const paired=await f.request('/api/phone/pair',{method:'POST',token:'',body:{code,deviceName:'테스트 갤럭시'}});
+  const paired=await approvedRequest(f.request,{method:'POST',token:'',body:{code,deviceName:'테스트 갤럭시'}});
   assert.equal(paired.status,201);
   const digest=job.artifact.sha256;
   const acknowledged=await f.request(`/api/phone/jobs/${job.id}/received`,{method:'POST',token:paired.data.phoneToken,body:{savedAt:new Date().toISOString(),artifacts:[{id:digest,sha256:digest}]}});

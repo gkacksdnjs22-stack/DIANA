@@ -7,9 +7,12 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { resolveAiConfig, requestStructuredResponse } from '../agent/ai-provider.mjs';
 import { searchDocuments } from '../agent/search.mjs';
 import { prepareEditedArtifact } from '../agent/edit.mjs';
-import { runOvernight } from '../agent/overnight.mjs';
+import {runOvernight as realRunOvernight} from '../agent/overnight.mjs';
+const runOvernight=(job,options)=>realRunOvernight(job,{...options,encryptFile:async b=>b});
 import { scanDocuments } from '../agent/documents.mjs';
-import { runOnce } from '../agent/run.mjs';
+import {runOnce as secureRunOnce} from '../agent/run.mjs';
+const testCipher={async encrypt(b){return b;},async decrypt(b){return b;}};
+const runOnce=opts=>secureRunOnce({...opts,cipher:testCipher});
 
 const groqEnv = { AI_MODE: 'groq', GROQ_OPENAI_KEY: 'test-groq-alias-key', GROQ_MODEL: 'openai/gpt-oss-120b' };
 const openaiEnv = { AI_MODE: 'openai', OPENAI_API_KEY: 'test-openai-key', OPENAI_MODEL: 'test-openai-model' };

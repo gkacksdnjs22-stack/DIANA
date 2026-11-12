@@ -1,0 +1,29 @@
+name: Pairing and file encryption
+on:
+  pull_request:
+    paths:
+      - 'lib/**'
+      - 'agent/**'
+      - 'financial-desktop/**'
+      - 'android-app/**'
+      - 'tests/**'
+      - 'scripts/check-paired-product.mjs'
+      - '.github/workflows/paired-security.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  protocol:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node --test tests/e2ee.test.mjs tests/pair-approval.test.mjs tests/pair-approval-windows.test.mjs tests/delivery-retry.test.mjs tests/delivery-control.test.mjs tests/transfer-store.test.mjs tests/phone-pairing-retry.test.mjs tests/incoming-agent.test.mjs tests/push-control.test.mjs tests/send-phone-file.test.mjs tests/app-update.test.mjs

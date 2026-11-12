@@ -1,3 +1,5 @@
+import {offerKey} from '../lib/e2ee.mjs';
+import {pairRequest} from './helpers/phone-pair.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter, once } from 'node:events';
@@ -72,7 +74,7 @@ async function fixture(t) {
   let app;
   async function start() {
     const db = await createPersistentState({ pool, retryDelays: [] });
-    const server = createControlServer({
+    const server = createControlServer({allowLegacyPlaintextTransfers:true,
       ...TOKENS, db, now: () => time,
       transfers: { async read() { return null; }, async put() {}, async remove() {} },
     });
@@ -103,7 +105,12 @@ async function fixture(t) {
   }
   return {
     pool, request, issueCode,
-    pair: body => request('/api/phone/pair', { method: 'POST', token: '', body }),
+    pair: body => request('/api/phone/pair', { method: 'POST', token: '', body:pairRequest(body) }),
+    async prepare(body){
+      const waiting=await request('/api/phone/pair',{method:'POST',token:'',body:pairRequest(body)});assert.equal(waiting.status,202);
+      const pending=await request('/api/agent/pair-pending',{token:TOKENS.agentToken});
+      assert.equal((await request('/api/agent/pair-approve',{method:'POST',token:TOKENS.agentToken,body:{id:pending.data.pending.id,approve:true,e2ee:offerKey(pending.data.pending.publicKey,pending.data.pending.requestId).reply}})).status,200);
+    },
     advance: ms => { time += ms; },
     async restart() { await app.close(); app = await start(); },
   };
@@ -112,6 +119,7 @@ async function fixture(t) {
 test('a pairing that returned 503 can retry its code and receive one usable phone credential', async t => {
   const f = await fixture(t);
   const body = { code: await f.issueCode(), deviceName: 'Galaxy' };
+  await f.prepare(body);
   f.pool.failWrites = true;
   const failed = await f.pair(body);
   assert.equal(failed.status, 503);
@@ -129,6 +137,7 @@ test('a pairing that returned 503 can retry its code and receive one usable phon
 test('a repeated pairing before phone authentication returns the same credential without storing its plaintext', async t => {
   const f = await fixture(t);
   const body = { code: await f.issueCode(), deviceName: ' Galaxy ', fcmToken: 'push-token' };
+  await f.prepare(body);
   const first = await f.pair(body);
   assert.equal(first.status, 201);
   const repeated = await f.pair({ ...body, deviceName: 'Galaxy' });
@@ -143,6 +152,7 @@ test('a repeated pairing before phone authentication returns the same credential
 test('an unacknowledged pairing can replay the same credential after a server restart', async t => {
   const f = await fixture(t);
   const body = { code: await f.issueCode(), deviceName: 'Galaxy' };
+  await f.prepare(body);
   const first = await f.pair(body);
   assert.equal(first.status, 201);
   await f.restart();
@@ -157,6 +167,7 @@ test('an unacknowledged pairing can replay the same credential after a server re
 test('a committed pairing whose COMMIT response was lost survives a restart and retry', async t => {
   const f = await fixture(t);
   const body = { code: await f.issueCode(), deviceName: 'Galaxy' };
+  await f.prepare(body);
   f.pool.loseCommitResponse = true;
   const failed = await f.pair(body);
   assert.equal(failed.status, 503);
@@ -175,6 +186,7 @@ test('a committed pairing whose COMMIT response was lost survives a restart and 
 test('a consumed pairing code rejects a changed phone name or push token without changing the paired phone', async t => {
   const f = await fixture(t);
   const body = { code: await f.issueCode(), deviceName: 'Galaxy', fcmToken: 'push-token' };
+  await f.prepare(body);
   const first = await f.pair(body);
   assert.equal(first.status, 201);
   const phone = { ...f.pool.phones.get(first.data.phoneId) };
@@ -190,6 +202,7 @@ test('a consumed pairing code rejects a changed phone name or push token without
 test('pairing replay expires at the original code deadline', async t => {
   const f = await fixture(t);
   const body = { code: await f.issueCode(), deviceName: 'Galaxy' };
+  await f.prepare(body);
   assert.equal((await f.pair(body)).status, 201);
   f.advance(5 * 60_000);
   assert.equal((await f.pair(body)).status, 401);
@@ -199,6 +212,7 @@ test('pairing replay expires at the original code deadline', async t => {
 test('issuing a replacement code invalidates replay of the previous pairing', async t => {
   const f = await fixture(t);
   const body = { code: await f.issueCode(), deviceName: 'Galaxy' };
+  await f.prepare(body);
   assert.equal((await f.pair(body)).status, 201);
   let replacement;
   do { replacement = await f.issueCode(); } while (replacement === body.code);
@@ -209,6 +223,7 @@ test('issuing a replacement code invalidates replay of the previous pairing', as
 test('revoking a phone prevents its pairing receipt from issuing its credential again', async t => {
   const f = await fixture(t);
   const body = { code: await f.issueCode(), deviceName: 'Galaxy' };
+  await f.prepare(body);
   const first = await f.pair(body);
   assert.equal(first.status, 201);
   const revoked = await f.request('/api/phone/devices/' + first.data.phoneId, { method: 'DELETE' });
@@ -221,6 +236,7 @@ test('revoking a phone prevents its pairing receipt from issuing its credential 
 test('the first authenticated phone request removes its pairing replay receipt durably', async t => {
   const f = await fixture(t);
   const body = { code: await f.issueCode(), deviceName: 'Galaxy' };
+  await f.prepare(body);
   const first = await f.pair(body);
   assert.equal(first.status, 201);
   assert.equal((await f.request('/api/jobs', { token: first.data.phoneToken })).status, 200);

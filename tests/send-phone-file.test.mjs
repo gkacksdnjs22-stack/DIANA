@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, open, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
-import { sendPhoneFile } from '../scripts/send-phone-file.mjs';
+import {sendPhoneFile as secureSend} from '../scripts/send-phone-file.mjs';
+// These legacy file/ledger fixtures model an unaccepted delivery; real acceptance is covered in delivery-retry.test.mjs.
+const fixtureKid='1'.repeat(64);
+const sendPhoneFile=(file,opts)=>secureSend(file,{...opts,fetchImpl:(url,init)=>init.method==='GET'?Promise.resolve(json({job:null,storageChecked:true})):opts.fetchImpl(url,init),cipher:{async encrypt(b){return b;},async recipientIds(){return[fixtureKid];}}});
 import { isUploadId, MAX_UPLOAD_BYTES } from '../lib/upload-contract.mjs';
 
 const testsRoot = path.resolve(import.meta.dirname);
@@ -30,7 +33,7 @@ async function fixture(t) {
 
 function accepted(url, options, overrides = {}) {
   const id = new URL(url).pathname.split('/').at(-1);
-  return { job: { id, kind: 'delivery', state: 'download_ready', artifact: {
+  return {ciphertext:{sha256:hash(options.body),recipientKeyIds:[fixtureKid]}, job: { id, kind: 'delivery', state: 'download_ready', artifact: {
     filename: decodeURIComponent(options.headers['X-File-Name']), sha256: options.headers['X-File-SHA256'], bytes: options.body.length,
   }, ...overrides } };
 }

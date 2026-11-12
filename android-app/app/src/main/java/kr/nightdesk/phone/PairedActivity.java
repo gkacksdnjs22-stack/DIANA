@@ -33,7 +33,7 @@ public final class PairedActivity extends Activity {
  static JSONObject obj(Object... pairs)throws JSONException{JSONObject o=new JSONObject();for(int i=0;i<pairs.length;i+=2)o.put((String)pairs[i],pairs[i+1]);return o;}
  static String sha(byte[] b)throws Exception{return PairedWire.hash(b);}
  static byte[] read(InputStream stream,int max)throws IOException{return PairedWire.read(stream,max);}
- protected void onCreate(Bundle b){super.onCreate(b);store=new SecureStore(this);try{session=store.load();}catch(Exception e){session=null;}if(session!=null&&!session.optString("device").isEmpty())getSharedPreferences("pairing",MODE_PRIVATE).edit().putString("previousDevice",session.optString("device")).commit();if(session!=null&&!session.optString("device").isEmpty()&&session.optString("token").startsWith("v1.")&&PairedLink.ORIGIN.equals(session.optString("origin")))work();else login();}
+ protected void onCreate(Bundle b){super.onCreate(b);getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);store=new SecureStore(this);try{session=store.load();}catch(Exception e){session=null;}if(session!=null&&!session.optString("device").isEmpty())getSharedPreferences("pairing",MODE_PRIVATE).edit().putString("previousDevice",session.optString("device")).commit();if(session!=null&&!session.optString("device").isEmpty()&&session.optString("token").startsWith("v1.")&&PairedLink.ORIGIN.equals(session.optString("origin")))work();else login();}
  protected void onResume(){super.onResume();active=true;clock.post(tick);}protected void onPause(){active=false;clock.removeCallbacks(tick);super.onPause();}
  protected void onDestroy(){if(pairingTimer!=null)pairingTimer.cancel();if(workDialog!=null)workDialog.dismiss();io.shutdown();super.onDestroy();}
  final Runnable tick=new Runnable(){public void run(){if(!active)return;if(screen.equals("work")&&!pending&&workDialog==null)async(()->refresh());clock.postDelayed(this,3500);}};
@@ -120,19 +120,28 @@ public final class PairedActivity extends Activity {
  void pair(){page("pair","내 PC와 연결");LinearLayout container=page;page=card(container);TextView intro=label(page,"내 PC를 연결하세요");intro.setTextSize(24);intro.setTypeface(Typeface.DEFAULT_BOLD);
   label(page,"PC의 기기 연결 화면에서 코드를 만든 뒤 입력하세요.");
   label(page,"같은 와이파이가 아니어도 연결됩니다. PC 앱은 켜 두세요.");
-  label(page,"PC에서 모바일 승인 안내와 함께 발급된 코드로 연결하면 이 휴대폰에서 바로 승인할 수 있습니다.");
-  label(page,"이전 PC 버전에서 발급한 코드라면 연결 후 PC의 기기 연결 설정에서 ‘모바일 승인 허용’을 눌러 주세요.");
+  label(page,"코드 입력 후 PC 화면에서 연결 승인을 눌러 주세요.");
+  label(page,"문서 저장 승인 권한은 PC의 기기 연결 설정에서 따로 관리합니다.");
   pairWait=label(page,"");pairWait.setTextColor(CYAN);pairWait.setTextSize(24);pairWait.setGravity(Gravity.CENTER);pairWait.setVisibility(View.GONE);pairWait.setContentDescription("다시 입력할 수 있을 때까지 남은 시간");
   EditText code=field("6자리 연결 코드");code.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);code.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(6)});code.setTextSize(26);code.setGravity(Gravity.CENTER);code.setLetterSpacing(.18f);code.setContentDescription("6자리 연결 코드");code.setHint("000000");
   long waiting=getSharedPreferences("pairing",MODE_PRIVATE).getLong("until",0);if(waiting>System.currentTimeMillis())showPairWait(waiting);
   button(page,"기기 연결",()->{long until=getSharedPreferences("pairing",MODE_PRIVATE).getLong("until",0);if(until>System.currentTimeMillis()){showPairWait(until);return;}String c=code.getText().toString().trim();if(!c.matches("[0-9]{6}")){note.setText("PC에 표시된 6자리 코드를 입력하세요.");return;}
    note.setText("PC에 연결하는 중입니다.");async(()->{
-    JSONObject attempt=store.load();
-    if(attempt==null||!c.equals(attempt.optString("pendingCode"))){String previous=attempt==null?"":attempt.optString("device",attempt.optString("previousDevice",""));if(previous.isEmpty()&&session!=null)previous=session.optString("device",session.optString("previousDevice",""));if(previous.isEmpty())previous=getSharedPreferences("pairing",MODE_PRIVATE).getString("previousDevice","");attempt=obj("origin",PairedLink.ORIGIN,"pendingCode",c,"requestId",PairedLink.requestId(),"pairKey",PairedLink.pairKey(),"previousDevice",previous);store.save(attempt);}
-    PairedWire.Reply reply=PairedLink.pair(PairedLink.ORIGIN,c,attempt.getString("requestId"),attempt.getString("pairKey"));
-    JSONObject r=new JSONObject(reply.body);if(reply.status!=200){if(reply.status==429&&r.has("retryAfter")){long deadline=System.currentTimeMillis()+r.getInt("retryAfter")*1000L;getSharedPreferences("pairing",MODE_PRIVATE).edit().putLong("until",deadline).commit();runOnUiThread(()->showPairWait(deadline));return;}if(reply.status==403)store.clear();throw new IOException(r.optString("error","연결하지 못했습니다. PC에서 새 코드를 만들고 다시 시도하세요.")+(r.has("remaining")?" 남은 시도 "+r.getInt("remaining")+"회":""));}
+    JSONObject attempt; synchronized(SecureStore.LOCK){attempt=store.load();
+    if(attempt==null||!attempt.has("identity")||!c.equals(attempt.optString("pendingCode"))){String previous=attempt==null?"":attempt.optString("device",attempt.optString("previousDevice",""));if(previous.isEmpty()&&session!=null)previous=session.optString("device",session.optString("previousDevice",""));if(previous.isEmpty())previous=getSharedPreferences("pairing",MODE_PRIVATE).getString("previousDevice","");attempt=obj("origin",PairedLink.ORIGIN,"pendingCode",c,"requestId",PairedLink.requestId(),"pairKey",PairedLink.pairKey(),"previousDevice",previous,"identity",E2ee.identity());store.save(attempt);}
+    }
+    PairedWire.Reply reply;
+    long pairDeadline=System.currentTimeMillis()+300000;
+    do {
+     reply=PairedLink.pair(PairedLink.ORIGIN,c,attempt.getString("requestId"),attempt.getString("pairKey"),attempt.getJSONObject("identity").getString("publicKey"));
+     if(reply.status!=202)break;
+     runOnUiThread(()->{if(!isDestroyed())note.setText("PC 화면에서 연결을 승인해 주세요…");});
+     if(isDestroyed()||System.currentTimeMillis()>=pairDeadline)throw new IOException("같은 코드로 다시 시도해 PC 승인 상태를 확인하세요.");
+     Thread.sleep(10000);
+    } while(true);
+    JSONObject r=new JSONObject(reply.body);if(reply.status!=200){if(reply.status==429&&r.has("retryAfter")){long deadline=System.currentTimeMillis()+r.getInt("retryAfter")*1000L;getSharedPreferences("pairing",MODE_PRIVATE).edit().putLong("until",deadline).commit();runOnUiThread(()->showPairWait(deadline));return;}if(reply.status==403)store.clearPending(attempt.getString("requestId"));throw new IOException(r.optString("error","연결하지 못했습니다. PC에서 새 코드를 만들고 다시 시도하세요.")+(r.has("remaining")?" 남은 시도 "+r.getInt("remaining")+"회":""));}
     String previous=attempt.optString("previousDevice"),device=r.getString("device");if(!previous.isEmpty()&&!previous.equals(device)){SharedPreferences.Editor files=getSharedPreferences("paired-"+device,MODE_PRIVATE).edit();for(Map.Entry<String,?> item:getSharedPreferences("paired-"+previous,MODE_PRIVATE).getAll().entrySet()){String key=item.getKey();if((key.startsWith("file-")||key.equals("tree"))&&item.getValue() instanceof String)files.putString(key,(String)item.getValue());else if(key.startsWith("removed-")&&item.getValue() instanceof Boolean)files.putBoolean(key,(Boolean)item.getValue());}if(!files.commit())throw new IOException("기존 보관 파일 정보를 옮기지 못했습니다. 다시 시도하세요.");}
-    session=obj("origin",PairedLink.ORIGIN,"token",r.getString("token"),"device",device);store.save(session);getSharedPreferences("pairing",MODE_PRIVATE).edit().remove("until").commit();PairedReceiver.schedule(this);runOnUiThread(()->work());
+    session=obj("origin",PairedLink.ORIGIN,"token",r.getString("token"),"device",device,"fileKey",E2ee.accept(attempt.getJSONObject("identity"),r.getJSONObject("e2ee"),attempt.getString("requestId")));store.replacePending(attempt.getString("requestId"),session);getSharedPreferences("pairing",MODE_PRIVATE).edit().remove("until").commit();PairedReceiver.schedule(this);runOnUiThread(()->{if(!isDestroyed())work();});
    });
   });
   label(page,"한 번 연결하면 다음 실행부터 자동으로 연결됩니다.");
@@ -208,7 +217,7 @@ public final class PairedActivity extends Activity {
    runOnUiThread(()->{
     if(isDestroyed()||isFinishing()||!active||note!=requestNote)return;
     boolean[] selected=new boolean[ids.length];
-    AlertDialog.Builder builder=new AlertDialog.Builder(this).setTitle("사용할 파일 선택")
+    AlertDialog.Builder builder=new SecureDialogBuilder(this).setTitle("사용할 파일 선택")
      .setNegativeButton("닫기",null).setPositiveButton("선택 확인",null);
     if(result.optBoolean("single"))builder.setSingleChoiceItems(labels,-1,(dialog,index)->{
      Arrays.fill(selected,false);selected[index]=true;
@@ -249,7 +258,7 @@ public final class PairedActivity extends Activity {
     TextView text=new TextView(this);
     text.setText(preview);text.setTextSize(15);text.setPadding(dp(22),dp(12),dp(22),dp(12));
     scroll.addView(text);
-    AlertDialog dialog=new AlertDialog.Builder(this)
+    AlertDialog dialog=new SecureDialogBuilder(this)
      .setTitle((retry?"다시 저장할 결과":"저장 전 미리보기")+" · "+format).setView(scroll)
      .setNegativeButton("닫기",null)
      .setPositiveButton(retry?"다시 저장":"승인 후 저장",null).create();
@@ -309,7 +318,7 @@ public final class PairedActivity extends Activity {
    LinearLayout nav=line(content);
    button(nav,"이전 쪽",()->load(pageNumber-1));previous=(Button)nav.getChildAt(0);
    button(nav,"다음 쪽",()->load(pageNumber+1));next=(Button)nav.getChildAt(1);
-   dialog=new AlertDialog.Builder(PairedActivity.this).setTitle("PDF 내용 확인").setView(content)
+   dialog=new SecureDialogBuilder(PairedActivity.this).setTitle("PDF 내용 확인").setView(content)
     .setNegativeButton("닫기",null)
     .setPositiveButton(retry?"다시 저장":"승인 후 저장",null).create();
    showApprovalDialog(dialog,id,nonce,()->{viewer.stopLoading();viewer.destroy();});
@@ -369,7 +378,7 @@ public final class PairedActivity extends Activity {
     JSONObject file=new JSONObject(local.getString(key,""));
     String id=key.substring(5);
     fileRow(archiveFiles,file.getString("name"),"휴대폰 보관 파일",()->open(id),
-     ()->new AlertDialog.Builder(this).setTitle("휴대폰 사본 삭제")
+     ()->new SecureDialogBuilder(this).setTitle("휴대폰 사본 삭제")
       .setMessage(file.optString("name")+"\n\nPC에 있는 파일은 그대로 유지됩니다.")
       .setNegativeButton("유지",null)
       .setPositiveButton("삭제",(dialog,button)->deleteArchivedFile(id)).show());
@@ -394,7 +403,7 @@ public final class PairedActivity extends Activity {
    }
   });
  }
- void settings(){page("settings","설정");LinearLayout pc=card(page);TextView pcTitle=label(pc,"내 PC 연결");pcTitle.setTextSize(17);pcTitle.setTypeface(Typeface.DEFAULT_BOLD);caption(pc,"연결 정보는 이 기기에 안전하게 보관됩니다.");button(pc,"기기 연결 해제",()->new AlertDialog.Builder(this).setTitle("기기 연결 해제").setMessage("현재 휴대폰과 PC의 연결을 해제할까요? 받은 파일은 유지됩니다.").setNegativeButton("유지",null).setPositiveButton("해제",(d,b)->async(()->{call(obj("op","revoke","device",session.getString("device")));store.clear();runOnUiThread(()->login());})).show());LinearLayout storage=card(page);TextView storageTitle=label(storage,"파일 저장");storageTitle.setTextSize(17);storageTitle.setTypeface(Typeface.DEFAULT_BOLD);caption(storage,local.getString("tree","").isEmpty()?"앱의 보관 파일에 자동 저장":"선택한 폴더에 저장");button(storage,"저장 폴더 변경",()->startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE),22));LinearLayout app=card(page);label(app,"DIANA");caption(app,"버전 "+BuildConfig.VERSION_NAME);}
+ void settings(){page("settings","설정");LinearLayout pc=card(page);TextView pcTitle=label(pc,"내 PC 연결");pcTitle.setTextSize(17);pcTitle.setTypeface(Typeface.DEFAULT_BOLD);caption(pc,"연결 정보는 이 기기에 안전하게 보관됩니다.");button(pc,"기기 연결 해제",()->new SecureDialogBuilder(this).setTitle("기기 연결 해제").setMessage("현재 휴대폰과 PC의 연결을 해제할까요? 받은 파일은 유지됩니다.").setNegativeButton("유지",null).setPositiveButton("해제",(d,b)->async(()->{call(obj("op","revoke","device",session.getString("device")));store.clear();runOnUiThread(()->login());})).show());LinearLayout storage=card(page);TextView storageTitle=label(storage,"파일 저장");storageTitle.setTextSize(17);storageTitle.setTypeface(Typeface.DEFAULT_BOLD);caption(storage,local.getString("tree","").isEmpty()?"앱의 보관 파일에 자동 저장":"선택한 폴더에 저장");button(storage,"저장 폴더 변경",()->startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE),22));LinearLayout app=card(page);label(app,"DIANA");caption(app,"버전 "+BuildConfig.VERSION_NAME);}
  protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(result!=RESULT_OK||data==null||data.getData()==null)return;Uri uri=data.getData();
  if(request==22){try{getContentResolver().takePersistableUriPermission(uri,data.getFlags()&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION));local.edit().putString("tree",uri.toString()).commit();settings();}catch(Exception e){note.setText("선택한 위치를 사용할 수 없습니다.");}}
  if(request==21)async(()->{String name;try(Cursor c=getContentResolver().query(uri,new String[]{OpenableColumns.DISPLAY_NAME},null,null,null)){if(c==null||!c.moveToFirst())throw new IOException("파일 이름을 확인할 수 없습니다.");name=c.getString(0);}byte[] bytes=read(getContentResolver().openInputStream(uri),8000000);call(obj("op","job","action","desk-upload","requestId",UUID.randomUUID().toString(),"name",name,"sha256",sha(bytes),"base64",android.util.Base64.encodeToString(bytes,android.util.Base64.NO_WRAP)));runOnUiThread(()->note.setText(name+" 첨부됨"));});}

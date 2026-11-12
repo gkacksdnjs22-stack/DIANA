@@ -37,8 +37,8 @@ async function loadCatalog() {
   }catch(error){$('catalog-state').textContent=error.message;}
 }
 function saveArtifact(job,artifact) {
-  const button=node('button',`휴대폰에서 열기 · ${artifact.filename}`,'download');
-  button.addEventListener('click',async()=>{button.disabled=true;try{const response=await fetch(`/api/jobs/${encodeURIComponent(job.id)}/artifacts/${encodeURIComponent(artifact.id)}`,{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(30000)});if(!response.ok){const error=await response.json();throw new Error(error.error||'파일을 받지 못했습니다.');}const url=URL.createObjectURL(await response.blob());const link=node('a');link.href=url;link.download=artifact.filename;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);notice('파일 다운로드를 시작했습니다. 갤럭시에서는 이어 앱이 저장을 확인하면 완료로 표시됩니다.');}catch(error){notice(error.message,true);}finally{button.disabled=false;}});return button;
+  const button=node('button',`연결된 앱에서 받기 · ${artifact.filename}`,'download');
+  button.addEventListener('click',()=>notice('암호화된 파일은 연결된 DIANA 앱에서 받아 주세요.'));return button;
 }
 function renderJob(job) {
   const card = node('article',undefined,'job'); const top=node('div',undefined,'job-top');
@@ -71,7 +71,7 @@ function renderJob(job) {
     select.addEventListener('click',async()=>{ select.disabled=true; try {await api(`/api/jobs/${encodeURIComponent(job.id)}/selection`,{candidateId:file.id,approve:true}); notice('선택한 파일의 발송을 요청했습니다.'); await refresh();}catch(e){notice(e.message,true);select.disabled=false;} });
     c.append(select); card.append(c);
   }
-  if(job.artifact){const download=node('button','이 기기에 파일 다운로드','download');download.addEventListener('click',async()=>{download.disabled=true;try{const response=await fetch(`/api/jobs/${encodeURIComponent(job.id)}/file`,{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(30000)});if(!response.ok){const data=await response.json();throw new Error(data.error);}const url=URL.createObjectURL(await response.blob());const a=node('a');a.href=url;a.download=job.artifact.filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);notice('다운로드를 시작했습니다. 이 기기의 다운로드 폴더에서 확인하세요.');}catch(e){notice(e.message,true);}finally{download.disabled=false;}});card.append(download);}
+  if(job.artifact){const download=node('button','연결된 앱에서 파일 받기','download');download.addEventListener('click',()=>notice('암호화된 파일은 연결된 DIANA 앱에서 받아 주세요.'));card.append(download);}
   const events=node('ul',undefined,'event-list'); for(const item of job.events.slice(-5)) events.append(node('li',item.text)); card.append(events); return card;
 }
 async function refresh() {

@@ -98,8 +98,9 @@ function safeJob(job, deviceId) {
   return job;
 }
 
-export async function runOvernight(jobInput,{documentRoot,deviceId,apiRequest,fetchImpl=fetch,env=process.env,stateDir,signal,now=Date.now,onProgress,exportArtifacts=exportReportArtifacts}={}) {
+export async function runOvernight(jobInput,{documentRoot,deviceId,apiRequest,fetchImpl=fetch,env=process.env,stateDir,signal,now=Date.now,onProgress,exportArtifacts=exportReportArtifacts,encryptFile}={}) {
   const job=safeJob(jobInput,deviceId);
+  encryptFile??=async()=>{throw Error('암호화 전송 설정이 필요합니다.');};
   try { resolveAiConfig(env); } catch {
     await apiRequest(`/api/agent/jobs/${job.id}/result`,{method:'POST',body:{status:'needs_attention',error:'PC 에이전트의 AI_MODE와 해당 제공자 API 키·모델 설정이 필요합니다.'}});
     return {status:'needs_attention',reason:'AI connection is not configured'};
@@ -162,7 +163,7 @@ export async function runOvernight(jobInput,{documentRoot,deviceId,apiRequest,fe
         if(deadlineSignal.aborted||now()>=Date.parse(job.deadlineAt))throw new Error('Upload stopped after the user deadline.');
         const artifact=exported.artifacts[index];const bytes=await readFile(artifact.absolutePath);
         if(bytes.length!==artifact.bytes||hash(bytes)!==artifact.sha256)throw new Error('An exported artifact changed before upload.');
-        await apiRequest(`/api/agent/jobs/${job.id}/artifacts/${artifact.id}`,{method:'POST',binaryBody:bytes,headers:{'Content-Type':'application/octet-stream'}});
+        await apiRequest(`/api/agent/jobs/${job.id}/artifacts/${artifact.id}`,{method:'POST',binaryBody:await encryptFile(bytes,{id:job.id,filename:artifact.filename}),headers:{'Content-Type':'application/octet-stream'}});
       }
       return {status:'delivered',artifactCount:exported.artifacts.length};
     }
