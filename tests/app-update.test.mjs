@@ -34,7 +34,8 @@ test('an existing keyless phone receives a published APK through the unchanged d
  const response=await fetch(f.base+'/api/jobs/'+first.id+'/file',{headers:{authorization:'Bearer '+PHONE}});assert.equal(response.status,200);assert.deepEqual(Buffer.from(await response.arrayBuffer()),apk);
  const receipt=await f.request('/api/phone/jobs/'+first.id+'/received',{token:PHONE,body:{savedAt:new Date().toISOString(),artifacts:[{id:f.metadata.sha256,sha256:f.metadata.sha256,bytes:apk.length}]}});assert.equal(receipt.status,200);
  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM phone_devices').get().n,1);
- const replay=await sendPhoneFile(f.filename,options);assert.ok(replay.phoneSavedAt);
+ await writeFile(path.join(f.directory,'releases.json'),JSON.stringify({android:{...f.registry.android,sha256:'0'.repeat(64)}}));
+ const replay=await sendPhoneFile(f.filename,options);assert.ok(replay.phoneSavedAt);assert.equal(replay.id,first.id);
 });
 
 test('public update rejects unregistered bytes, document disguises, caller paths, unauthorized callers and plaintext fallback',async t=>{
