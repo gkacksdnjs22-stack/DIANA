@@ -1,3 +1,5 @@
+import {approvedRequest as approveRequest} from './helpers/phone-pair.mjs';
+const approvedRequest=(request,options)=>approveRequest(request,options,AGENT);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
@@ -11,7 +13,7 @@ const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const source={id:'1'.repeat(64),sha256:'2'.repeat(64),filename:'보고서.txt',bytes:100,modifiedAt:'2026-10-22T00:00:00.000Z',excerpt:'2026년 보고서'};
 async function fixture(t){
   let time=Date.parse('2026-10-22T00:00:00Z');const parent=resolve(import.meta.dirname,'../.local');await mkdir(parent,{recursive:true});const dir=await mkdtemp(join(parent,'test-overnight-'));
-  const server=createControlServer({userToken:USER,agentToken:AGENT,gatewayToken:GATEWAY,transferDir:join(dir,'transfers'),now:()=>time});
+  const server=createControlServer({allowLegacyPlaintextTransfers:true,userToken:USER,agentToken:AGENT,gatewayToken:GATEWAY,transferDir:join(dir,'transfers'),now:()=>time});
   server.listen(0,'127.0.0.1');await once(server,'listening');const base=`http://127.0.0.1:${server.address().port}`;
   t.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));assert(dir.startsWith(parent+sep));await rm(dir,{recursive:true,force:true});});
   const request=async(path,{token=USER,method='GET',body,bytes}={})=>{
@@ -24,7 +26,7 @@ async function fixture(t){
 }
 async function pair(f){
   const code=(await f.request('/api/phone/pair-code',{method:'POST'})).data.code;
-  const result=await f.request('/api/phone/pair',{token:'',method:'POST',body:{code,deviceName:'테스트 갤럭시'}});assert.equal(result.status,201);return {...result.data,code};
+  const result=await approvedRequest(f.request,{token:'',method:'POST',body:{code,deviceName:'테스트 갤럭시'}});assert.equal(result.status,201);return {...result.data,code};
 }
 async function start(f){const payload=f.mission();const created=await f.request('/api/jobs',{method:'POST',body:payload});assert.equal(created.status,201);f.advance(60_000);assert.equal((await f.request('/api/agent/next',{token:AGENT})).data.job.action,'overnight');return payload.requestId;}
 function artifacts(){
@@ -61,9 +63,9 @@ test('pairing is one-time, expiring and phone credentials cannot enroll other ph
   assert.equal((await f.request('/api/jobs',{token:phone.phoneToken})).status,200);
   assert.equal((await f.request('/api/agent/next',{token:phone.phoneToken})).status,401);
   assert.equal((await f.request('/api/phone/pair-code',{token:phone.phoneToken,method:'POST'})).status,401);
-  assert.equal((await f.request('/api/phone/pair',{method:'POST',token:'',body:{code:phone.code,deviceName:'추가 기기'}})).status,401);
+  assert.equal((await approvedRequest(f.request,{method:'POST',token:'',body:{code:phone.code,deviceName:'추가 기기'}})).status,401);
   const other=(await f.request('/api/phone/pair-code',{method:'POST'})).data.code;f.advance(5*60_000);
-  assert.equal((await f.request('/api/phone/pair',{token:'',method:'POST',body:{code:other,deviceName:'만료기기'}})).status,401);
+  assert.equal((await approvedRequest(f.request,{token:'',method:'POST',body:{code:other,deviceName:'만료기기'}})).status,401);
   await f.request(`/api/phone/devices/${phone.phoneId}`,{method:'DELETE'});assert.equal((await f.request('/api/jobs',{token:phone.phoneToken})).status,401);
 });
 test('partial output cannot become a final result; phone acknowledges every hash after publication',async t=>{

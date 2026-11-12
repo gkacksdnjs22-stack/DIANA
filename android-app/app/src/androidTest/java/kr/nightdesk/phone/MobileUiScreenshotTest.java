@@ -390,6 +390,8 @@ public final class MobileUiScreenshotTest {
     private ImeGeometry imeGeometry(String tag) {
         AtomicReference<ImeGeometry> result = new AtomicReference<>();
         scenario.onActivity(activity -> {
+            assertTrue("Document windows must retain screenshot protection",
+                (activity.getWindow().getAttributes().flags & android.view.WindowManager.LayoutParams.FLAG_SECURE) != 0);
             View decor = activity.getWindow().getDecorView();
             EditText field = decor.findViewWithTag(tag);
             assertNotNull("The focused request field must exist", field);
@@ -547,6 +549,7 @@ public final class MobileUiScreenshotTest {
         assertTrue("The activity must present two frames before capture", presented.await(5, TimeUnit.SECONDS));
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
         if (menuOpen) assertBrandVisibleBehindMenu(); else assertBrandVisible();
+        // System captures now redact the secure app surface; layout is checked through views above.
         Bitmap bitmap = InstrumentationRegistry.getInstrumentation().getUiAutomation().takeScreenshot();
         assertNotNull("The emulator must provide a real screenshot", bitmap);
         assertTrue("A phone screenshot must have a useful resolution", bitmap.getWidth() >= 600 && bitmap.getHeight() >= 1000);

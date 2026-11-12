@@ -26,9 +26,16 @@ final class PairedFiles {
  final Context ctx;final JSONObject session;final SharedPreferences local;
  PairedFiles(Context context,JSONObject value){ctx=context.getApplicationContext();session=value;local=ctx.getSharedPreferences("paired-"+value.optString("device"),0);}
  JSONObject call(JSONObject b)throws Exception{
-  PairedWire.Reply reply=PairedWire.post(session.getString("origin"),session.optString("token"),b.toString());
+  if(!session.has("fileKey"))throw new AuthError("암호화 연결이 필요합니다. 기기를 다시 연결하세요.");
+  String id=UUID.randomUUID().toString();
+  byte[] wire=E2ee.seal(obj("at",System.currentTimeMillis(),"body",b).toString().getBytes(StandardCharsets.UTF_8),session.getString("fileKey"),id,"request.json","phone-pc");
+  PairedWire.Reply reply=PairedWire.post(session.getString("origin"),session.optString("token"),obj("op","encrypted","id",id,"data",E2ee.b64(wire)).toString());
   JSONObject r=new JSONObject(reply.body);
-  if(reply.status!=200){String msg=r.optString("error","요청을 처리하지 못했습니다.");if(!session.optString("device").isEmpty()&&(reply.status==401||reply.status==403&&(msg.contains("만료")||msg.contains("해제"))))throw new AuthError(msg);throw new IOException(msg);}return r;}
+  if(reply.status!=200){if(reply.status==401||reply.status==403)throw new AuthError("암호화 연결이 만료됐거나 해제되었습니다. 다시 연결하세요.");throw new IOException("암호화 응답을 받지 못했습니다.");}
+  JSONObject decoded=new JSONObject(new String(E2ee.open(E2ee.un64(r.getString("encrypted"),E2ee.MAX_WIRE),session.getString("fileKey"),id,"reply.json","pc-phone"),StandardCharsets.UTF_8));
+  JSONObject answer=decoded.getJSONObject("body");int status=decoded.getInt("status");
+  if(status!=200){String msg=answer.optString("error","요청을 처리하지 못했습니다.");if(status==401||status==403&&(msg.contains("만료")||msg.contains("해제")))throw new AuthError(msg);throw new IOException(msg);}return answer;}
+
  void receive(JSONObject f)throws Exception{synchronized(lock){receiveLocked(f);}}
  void deleteLocalCopy(String id)throws Exception{
   synchronized(lock){

@@ -4,7 +4,8 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { scanDocuments } from '../agent/documents.mjs';
-import { runOvernight } from '../agent/overnight.mjs';
+import {runOvernight as realRunOvernight} from '../agent/overnight.mjs';
+const runOvernight=(job,options)=>realRunOvernight(job,{...options,encryptFile:async b=>b});
 
 const SOURCE = '매출액 1,100만원';
 const FILENAME = '자료-001.txt';

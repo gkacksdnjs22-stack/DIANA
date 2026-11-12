@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
-import { receiveIncomingOnce, INCOMING_FOLDER } from '../agent/incoming.mjs';
+import { receiveIncomingOnce as receiveSecureIncoming, INCOMING_FOLDER } from '../agent/incoming.mjs';
+// Filesystem/retry fixtures use synthetic plaintext; e2ee.test covers the encrypted transport.
+const receiveIncomingOnce=options=>receiveSecureIncoming({decryptFile:async bytes=>bytes,...options});
 import { sha256 } from '../agent/documents.mjs';
 import { runAgent } from '../agent/run.mjs';
 import { MAX_UPLOAD_BYTES } from '../lib/upload-contract.mjs';
@@ -144,7 +146,7 @@ for (const [name, makeResponse] of [
   ['corrupt bytes', () => new Response(Buffer.alloc(sample.length, 66))],
   ['empty bytes', () => new Response(new Uint8Array())],
   ['too many streamed bytes', () => new Response(Buffer.alloc(MAX_UPLOAD_BYTES + 1, 67))],
-  ['an oversized declared length', () => new Response(sample, { headers: { 'Content-Length': String(MAX_UPLOAD_BYTES + 1) } })],
+  ['an oversized declared length', () => new Response(sample, { headers: { 'Content-Length': String(15 * 1024 * 1024 + 1) } })],
   ['an invalid declared length', () => new Response(sample, { headers: { 'Content-Length': 'not-a-number' } })],
 ]) {
   test(`incoming receiver rejects ${name} without publishing or acknowledging`, async t => {
@@ -251,7 +253,8 @@ test('the normal agent receives a file and refreshes its searchable catalog', as
   const controller = new AbortController();
   const catalogs = [];
   const env = { API_BASE_URL: config.apiBase, AGENT_TOKEN: config.token, DEVICE_ID: config.deviceId, DOCUMENT_ROOT: config.documentRoot, AI_MODE: 'lexical', MAIL_MODE: 'dry-run' };
-  await runAgent({ env, signal: controller.signal, logger: { log() {}, error(message) { assert.fail(message); } }, fetchImpl: async (url, options) => {
+  await runAgent({ env, cipher:{decrypt:async bytes=>bytes}, signal: controller.signal, logger: { log() {}, error(message) { assert.fail(message); } }, fetchImpl: async (url, options) => {
+    if (url.endsWith('/api/agent/pair-pending')) return jsonResponse({pending:null});
     if (url.endsWith('/api/agent/catalog')) { catalogs.push(JSON.parse(options.body)); controller.abort(); return jsonResponse({ ok: true }); }
     if (url.endsWith('/api/agent/next')) return jsonResponse({ job: null });
     return mock.fetchImpl(url, options);

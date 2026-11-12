@@ -1,3 +1,5 @@
+import {approvedRequest as approveRequest} from './helpers/phone-pair.mjs';
+const approvedRequest=(request,options)=>approveRequest(request,options,AGENT);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
@@ -32,7 +34,7 @@ async function fixture(t, { configured = true } = {}) {
     try { calls.push({ args, files:new Map(files) }); return { accepted:true }; }
     finally { activeSends--; }
   } };
-  const server = createControlServer({ userToken:OWNER, agentToken:AGENT, gatewayToken:GATEWAY, transfers,
+  const server = createControlServer({allowLegacyPlaintextTransfers:true, userToken:OWNER, agentToken:AGENT, gatewayToken:GATEWAY, transfers,
     now:() => time, push:{ publicConfig:configured ? FIREBASE : { enabled:false }, sender:configured ? sender : null }, pushPollMs:0 });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -50,7 +52,7 @@ async function fixture(t, { configured = true } = {}) {
   };
   const pair = async (fcmToken, name = '푸시 확인 갤럭시') => {
     const issued = await request('/api/phone/pair-code', { method:'POST' }); assert.equal(issued.status, 200);
-    const result = await request('/api/phone/pair', { token:'', method:'POST', body:{ code:issued.data.code, deviceName:name, ...(fcmToken ? { fcmToken } : {}) } });
+    const result = await approvedRequest(request, { token:'', method:'POST', body:{ code:issued.data.code, deviceName:name, ...(fcmToken ? { fcmToken } : {}) } });
     assert.equal(result.status, 201); return result.data;
   };
   const register = async (phone, fcmToken = FCM) => request('/api/phone/token', { token:phone.phoneToken, method:'POST', body:{ fcmToken } });
@@ -62,7 +64,8 @@ async function fixture(t, { configured = true } = {}) {
 
 test('pairing returns allowlisted Firebase fields and each authenticated phone retrieves its own ID', async t => {
   const f = await fixture(t), first = await f.pair(), second = await f.pair(undefined, '두 번째 갤럭시');
-  assert.deepEqual(Object.keys(first).sort(), ['firebase','phoneId','phoneToken']);
+  assert.deepEqual(Object.keys(first).sort(), ['e2ee','firebase','phoneId','phoneToken']);
+  assert.deepEqual(Object.keys(first.e2ee).sort(), ['confirm','publicKey']);
   assertPublicFirebase(first.firebase); assertPublicFirebase(second.firebase);
   assert.notEqual(first.phoneId, second.phoneId); assert.notEqual(first.phoneToken, second.phoneToken);
   for (const phone of [first, second]) {

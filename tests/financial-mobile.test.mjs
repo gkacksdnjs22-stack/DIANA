@@ -1,3 +1,5 @@
+import {approvedRequest as approveRequest} from './helpers/phone-pair.mjs';
+const approvedRequest=(request,options)=>approveRequest(request,options,tokens.agentToken);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
@@ -29,7 +31,7 @@ async function fixture(t,{ttl=300_000,localView=false,onPresentation=()=>{}}={})
   const config={schema_version:1,coreConfig,stateDir:state,tasks:[task]};await writeFile(workerConfig,JSON.stringify(config));
   let now=Date.now(),server,base,deviceId='home-pc';const wire=[],consoleOutput=[],presentation=[];
   const dbPath=path.join(root,'control.sqlite');
-  const start=async()=>{server=createControlServer({...tokens,deviceId,dbPath,transferDir:path.join(root,'relay'),now:()=>now});server.listen(0,'127.0.0.1');await once(server,'listening');base='http://127.0.0.1:'+server.address().port;};
+  const start=async()=>{server=createControlServer({allowLegacyPlaintextTransfers:true,...tokens,deviceId,dbPath,transferDir:path.join(root,'relay'),now:()=>now});server.listen(0,'127.0.0.1');await once(server,'listening');base='http://127.0.0.1:'+server.address().port;};
   const stop=async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));};
   await start();
   let dropState=null;let saveStarts=0;let onGate=null;const faults=[];
@@ -51,7 +53,7 @@ async function fixture(t,{ttl=300_000,localView=false,onPresentation=()=>{}}={})
     const res=await fetch(base+route,{method,headers:{Authorization:'Bearer '+token,...(text===undefined?{}:{'Content-Type':'application/json'})},body:text});
     const response=await res.text();wire.push({route,request:text,response});return{status:res.status,data:JSON.parse(response)};
   }
-  async function pair(){const code=(await request('/api/phone/pair-code',{method:'POST'})).data.code;return(await request('/api/phone/pair',{method:'POST',token:'',body:{code,deviceName:'Finance test phone'}})).data.phoneToken;}
+  async function pair(){const code=(await request('/api/phone/pair-code',{method:'POST'})).data.code;return(await approvedRequest(request,{method:'POST',token:'',body:{code,deviceName:'Finance test phone'}})).data.phoneToken;}
   const phoneToken=await pair();
   const phone=(route,opts={})=>request(route,{...opts,token:phoneToken});
   const create=async(action='patch',format='md',id=randomUUID())=>{const body={requestId:id,taskId:task.id,action,format};const r=await phone('/api/financial/jobs',{method:'POST',body});assert.ok([200,201].includes(r.status),JSON.stringify(r));return r.data.job;};

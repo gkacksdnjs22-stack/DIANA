@@ -1,3 +1,5 @@
+import {fileCipher} from './file-cipher.mjs';
+import {keyStore} from './secure-keys.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
@@ -7,6 +9,7 @@ import { scanDocuments, resolveDocumentRoot, validateAttachment, readVerifiedArt
 import { searchDocuments } from './search.mjs';
 import { runOvernight } from './overnight.mjs';
 import { receiveIncomingOnce } from './incoming.mjs';
+import {checkPhoneApproval} from './pair-approval.mjs';
 
 const PROJECT_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const JOB_ID = /^[A-Za-z0-9_-]{1,128}$/;
@@ -104,9 +107,10 @@ function publicError(error, env) {
   return message.slice(0, 300);
 }
 
-export async function runOnce({ env = process.env, fetchImpl = fetch, mailSender, artifactPreparer, stateDir = path.join(PROJECT_ROOT, '.local'), signal } = {}) {
+export async function runOnce({ env = process.env, fetchImpl = fetch, mailSender, artifactPreparer, stateDir = path.join(PROJECT_ROOT, '.local'), signal, cipher } = {}) {
   const config = readAgentConfig(env);
   const request = (route, options = {}) => apiRequest(config, route, { fetchImpl, signal, ...options });
+  cipher??=fileCipher({stateDir,request});
   const next = await request('/api/agent/next');
   if (next?.job == null) return { idle: true };
   const job = next.job;
@@ -115,7 +119,7 @@ export async function runOnce({ env = process.env, fetchImpl = fetch, mailSender
   if (job.action === 'overnight') {
     try {
       return { idle:false, jobId:job.id, action:'overnight', ...(await runOvernight(job, {
-        documentRoot:config.documentRoot, deviceId:config.deviceId, apiRequest:request, fetchImpl, env, stateDir, signal,
+        documentRoot:config.documentRoot, deviceId:config.deviceId, apiRequest:request, fetchImpl, env, stateDir, signal, encryptFile:(bytes,meta)=>cipher.encrypt(bytes,meta),
       })) };
     } catch (error) {
       const status = Date.now() >= Date.parse(job.deadlineAt) ? 'deadline_exceeded' : 'needs_attention';
@@ -162,7 +166,7 @@ export async function runOnce({ env = process.env, fetchImpl = fetch, mailSender
     }
     if (delivery !== 'email') {
       await request(`/api/agent/jobs/${job.id}/file`, {
-        method: 'POST', binaryBody: buffer,
+        method: 'POST', binaryBody: await cipher.encrypt(buffer,{id:job.id,filename:attachment.attachmentName}),
         headers: {
           'Content-Type': 'application/octet-stream', 'X-File-SHA256': attachment.expectedSha256,
           'X-File-Name': encodeURIComponent(attachment.attachmentName), 'X-Source-File-Id': job.candidateId,
@@ -190,8 +194,15 @@ export async function runOnce({ env = process.env, fetchImpl = fetch, mailSender
   return { idle: false, jobId: job.id, action: 'send', ...result };
 }
 
-export async function runAgent({ env = process.env, fetchImpl = fetch, mailSender, artifactPreparer, stateDir, signal, once = false, logger = console } = {}) {
+export async function runAgent({ env = process.env, fetchImpl = fetch, mailSender, artifactPreparer, stateDir, signal, once = false, logger = console, cipher } = {}) {
   const config = readAgentConfig(env);
+  stateDir??=path.join(PROJECT_ROOT,'.local');
+  const request=(route,options={})=>apiRequest(config,route,{fetchImpl,signal,...options});
+  cipher??=fileCipher({stateDir,request});
+  const keys=keyStore(path.join(stateDir,'e2ee'));
+  const approvalStop=new AbortController(),approvalSignal=signal?AbortSignal.any([signal,approvalStop.signal]):approvalStop.signal;
+  const approvals=once?Promise.resolve():(async()=>{while(!approvalSignal.aborted){try{await checkPhoneApproval({request:(route,options={})=>apiRequest(config,route,{fetchImpl,signal:approvalSignal,...options}),signal:approvalSignal,keys});}catch{if(!approvalSignal.aborted)logger.error('휴대폰 연결 승인 상태를 다시 확인합니다.');}try{await delay(5000,undefined,{signal:approvalSignal});}catch{break;}}})();
+  try {
   let failures = 0;
   let catalogAt = 0;
   let incomingAt = 0;
@@ -199,7 +210,7 @@ export async function runAgent({ env = process.env, fetchImpl = fetch, mailSende
     try {
       if (Date.now() >= incomingAt) {
         try {
-          const incoming = await receiveIncomingOnce({ config, fetchImpl, signal });
+          const incoming = await receiveIncomingOnce({ config, fetchImpl, signal, decryptFile:(bytes,meta)=>cipher.decrypt(bytes,meta) });
           incomingAt = Date.now() + (incoming.unsupported ? 60_000 : config.pollMs);
           if (!incoming.idle) {
             logger.log(`Agent receive: ${incoming.status}`);
@@ -219,7 +230,7 @@ export async function runAgent({ env = process.env, fetchImpl = fetch, mailSende
         }))}});
         catalogAt = Date.now() + 60_000;
       }
-      const result = await runOnce({ env, fetchImpl, mailSender, artifactPreparer, stateDir, signal });
+      const result = await runOnce({ env, fetchImpl, mailSender, artifactPreparer, stateDir, signal, cipher });
       failures = 0;
       if (!result.idle) logger.log(`Agent ${result.action}: ${result.status ?? `${result.candidates.length} candidates (${result.mode})`}`);
       if (once) return result;
@@ -232,6 +243,7 @@ export async function runAgent({ env = process.env, fetchImpl = fetch, mailSende
     const wait = Math.min(60_000, config.pollMs * (2 ** Math.min(failures, 5)));
     try { await delay(wait, undefined, { signal }); } catch (error) { if (signal?.aborted) return; throw error; }
   } while (!signal?.aborted);
+  }finally{approvalStop.abort();await approvals;}
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);

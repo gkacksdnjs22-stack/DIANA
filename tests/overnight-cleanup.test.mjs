@@ -107,7 +107,7 @@ test('Storage cleanup does not delay job, agent, or phone management APIs', asyn
   db.prepare('INSERT INTO jobs(id,data) VALUES(?,?)').run(expired.id, JSON.stringify(expired));
   const deleting = deferred(), resume = deferred(), finished = deferred();
   const tokens = { userToken:'u'.repeat(40), agentToken:'a'.repeat(40), gatewayToken:'g'.repeat(40) };
-  const server = createControlServer({ ...tokens, db, now:() => NOW, transfers:{
+  const server = createControlServer({allowLegacyPlaintextTransfers:true, ...tokens, db, now:() => NOW, transfers:{
     async remove() { deleting.resolve(); await resume.promise; finished.resolve(); throw new Error('Storage unavailable'); },
   } });
   server.listen(0, '127.0.0.1');
@@ -137,7 +137,7 @@ test('single-file expiry returns 410 without Storage and preserves a concurrent 
   const deleting = deferred(), resume = deferred();
   let deleteCalls = 0;
   const tokens = { userToken:'u'.repeat(40), agentToken:'a'.repeat(40), gatewayToken:'g'.repeat(40) };
-  const server = createControlServer({ ...tokens, db, now:() => NOW, transfers:{
+  const server = createControlServer({allowLegacyPlaintextTransfers:true, ...tokens, db, now:() => NOW, transfers:{
     async remove() { deleteCalls++; deleting.resolve(); await resume.promise; },
   } });
   const phoneToken = 'p'.repeat(40);

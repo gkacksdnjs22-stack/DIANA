@@ -1,3 +1,4 @@
+import {fileCipher} from '../agent/file-cipher.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdir, open, readFile, rename, writeFile } from 'node:fs/promises';
@@ -9,7 +10,7 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 
 /** Explicit owner-selected files only. A replay keeps the same delivery UUID. */
 export async function sendPhoneFile(filename, { env = process.env, fetchImpl = fetch,
-  stateDir = path.join(PROJECT_ROOT, '.local', 'phone-deliveries'), now = Date.now } = {}) {
+  stateDir = path.join(PROJECT_ROOT, '.local', 'phone-deliveries'), now = Date.now, cipher } = {}) {
   const base = new URL(env.API_BASE_URL || '');
   const loopback = base.hostname === 'localhost' || base.hostname === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(base.hostname);
   if ((base.protocol !== 'https:' && !(base.protocol === 'http:' && loopback)) || base.username || base.password || base.search || base.hash || /[?#]/.test(env.API_BASE_URL)) {
@@ -48,10 +49,12 @@ export async function sendPhoneFile(filename, { env = process.env, fetchImpl = f
     await writeFile(temporary, JSON.stringify(saved), { mode: 0o600, flag: 'wx' });
     await rename(temporary, ledger);
   }
+  cipher??=fileCipher({stateDir:env.AGENT_STATE_DIR||path.join(PROJECT_ROOT,'.local'),request:async()=>{const r=await fetchImpl(apiBase+'/api/phone/devices',{headers:{Authorization:'Bearer '+env.USER_TOKEN.trim()},redirect:'error',signal:AbortSignal.timeout(20000)});if(!r.ok)throw Error('휴대폰 연결을 확인하세요.');return r.json();}});
+  const encrypted=await cipher.encrypt(bytes,{id:saved.id,filename:metadata.filename});
   const response = await fetchImpl(apiBase + '/api/deliveries/' + saved.id, {
     method: 'POST', redirect: 'error', signal: AbortSignal.timeout(45_000),
     headers: { Authorization: `Bearer ${env.USER_TOKEN.trim()}`, 'Content-Type': 'application/octet-stream',
-      'X-File-Name': encodeURIComponent(metadata.filename), 'X-File-SHA256': metadata.sha256 }, body: bytes,
+      'X-File-Name': encodeURIComponent(metadata.filename), 'X-File-SHA256': metadata.sha256 }, body: encrypted,
   });
   if (!response.ok) { await response.body?.cancel().catch(() => {}); throw new Error(`DIANA 파일 전송을 접수하지 못했습니다. (HTTP ${response.status})`); }
   const result = await response.json();

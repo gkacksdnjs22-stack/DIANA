@@ -202,19 +202,13 @@ final class SyncEngine {
         AtomicFile file = new AtomicFile(target); FileOutputStream output = null;
         try {
             int status = connection.getResponseCode(); if (status < 200 || status >= 300) throw new Api.ApiException(status);
-            long expected = artifact.getLong("bytes"); long declared = connection.getContentLengthLong();
-            if (declared >= 0 && declared != expected) throw new IOException("서버의 파일 크기가 명세와 다릅니다.");
-            MessageDigest digest = MessageDigest.getInstance("SHA-256"); long total = 0;
-            output = file.startWrite();
-            try (InputStream input = connection.getInputStream()) {
-                byte[] bytes = new byte[16384]; int count;
-                while ((count = input.read(bytes)) != -1) {
-                    if (stopped.getAsBoolean() || Thread.currentThread().isInterrupted()) throw new InterruptedIOException("동기화가 중단되었습니다.");
-                    total += count; if (total > expected || total > FileSafety.MAX_BYTES) throw new IOException("파일 크기가 명세를 벗어났습니다.");
-                    digest.update(bytes, 0, count); output.write(bytes, 0, count);
-                }
-            }
-            if (total != expected || !FileSafety.hex(digest.digest()).equalsIgnoreCase(artifact.getString("sha256"))) throw new IOException("파일 무결성 검증에 실패했습니다. 다시 동기화해 주세요.");
+            if(!session.has("fileKey"))throw new IOException("암호화 연결이 필요합니다. 기기를 다시 연결하세요.");
+            if(connection.getContentLengthLong()>E2ee.MAX_WIRE)throw new IOException("파일 크기 한도를 넘었습니다.");
+            byte[] wire;try(InputStream input=connection.getInputStream()){wire=E2ee.read(input);}
+            byte[] plain=E2ee.open(wire,session.getString("fileKey"),jobId,artifact.getString("filename"),"pc-phone");
+            if(plain.length!=artifact.getLong("bytes")||!E2ee.hash(plain).equals(artifact.getString("sha256")))throw new IOException("파일 무결성 검증에 실패했습니다.");
+            if(stopped.getAsBoolean()||Thread.currentThread().isInterrupted())throw new InterruptedIOException();
+            output=file.startWrite();output.write(plain);
             file.finishWrite(output); output = null;
             if (!verified(target, artifact)) throw new IOException("저장된 파일을 다시 검증하지 못했습니다.");
         } catch (Exception error) { if (output != null) file.failWrite(output); throw error; }

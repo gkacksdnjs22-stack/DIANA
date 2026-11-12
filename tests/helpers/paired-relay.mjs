@@ -10,8 +10,8 @@ const fail=(status,error)=>{throw Object.assign(Error(error),{status});};
 const same=(a,b)=>typeof a==='string'&&typeof b==='string'&&a.length===b.length&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
 export function mobileAllowed(b){
  if(!b||typeof b!=='object'||Array.isArray(b))return false;
- if(['state','file','receipt','revoke','phone-preview','phone-approve'].includes(b.op))return true;
- return b.op==='job'&&['desk-start','desk-upload','desk-retry','desk-cancel','desk-invalidate'].includes(b.action);
+ if(b.op==='encrypted'&&typeof b.id==='string'&&/^[a-f0-9-]{36}$/.test(b.id)&&typeof b.data==='string'&&b.data.length<=32000000)return true;
+ return false;
 }
 export async function createRelay({port=0,host='127.0.0.1',clock=Date.now,codeTtl=300000,pollMs=20000,requestMs=35000,renderProxy=false}={}){
  const hosts=new Map(),codes=new Map(),requests=new Map(),claims=new Map(),limits=new Map(),nonces=new Map(),failures=new Map();
@@ -21,7 +21,16 @@ export async function createRelay({port=0,host='127.0.0.1',clock=Date.now,codeTt
  function auth(req){const m=/^Host ([a-f0-9]{64})\.([a-f0-9]{64})$/.exec(req.headers.authorization||'');const h=m&&hosts.get(m[1]);if(!h||!same(h.lease,hash(m[2])))fail(401,'PC 연결을 다시 확인하세요.');h.seen=clock();return h;}
  function done(r,result){if(!requests.delete(r.id))return;clearTimeout(r.timer);buffered-=r.size;r.resolve(result);}
  function deliver(h){if(!h.poll)return;const r=[...requests.values()].find(x=>x.host===h.id&&!x.sent);if(r){r.sent=true;const res=h.poll;h.poll=null;clearTimeout(h.timer);send(res,200,{message:{id:r.id,...r.payload}});}}
- function queue(h,payload){if(!h||clock()-h.seen>65000)fail(503,'PC가 연결되어 있지 않습니다. PC 앱을 확인하세요.');if(requests.size>=150||[...requests.values()].filter(r=>r.host===h.id).length>=8)fail(429,'PC가 다른 요청을 처리하고 있습니다.');const size=Buffer.byteLength(JSON.stringify(payload));if(buffered+size>48000000)fail(429,'전송 중인 자료가 많습니다. 잠시 뒤 다시 시도하세요.');buffered+=size;return new Promise(resolve=>{const r={id:randomUUID(),host:h.id,payload,size,resolve,sent:false};r.timer=setTimeout(()=>done(r,{status:503,body:{error:'PC 응답이 지연됩니다. 같은 작업에서 다시 시도하세요.'}}),requestMs);requests.set(r.id,r);deliver(h);});}
+ function queue(h,payload){if(!h||clock()-h.seen>65000)fail(503,'PC가 연결되어 있지 않습니다. PC 앱을 확인하세요.');if(requests.size>=150||[...requests.values()].filter(r=>r.host===h.id).length>=8)fail(429,'PC가 다른 요청을 처리하고 있습니다.');const size=Buffer.byteLength(JSON.stringify(payload));if(buffered+size>64000000)fail(429,'전송 중인 자료가 많습니다. 잠시 뒤 다시 시도하세요.');buffered+=size;return new Promise(resolve=>{const r={id:randomUUID(),host:h.id,payload,size,resolve,sent:false};r.timer=setTimeout(()=>done(r,{status:503,body:{error:'PC 응답이 지연됩니다. 같은 작업에서 다시 시도하세요.'}}),requestMs);requests.set(r.id,r);deliver(h);});}
+ async function claimResult(entry){
+  if(!entry.result)entry.result=Promise.resolve().then(()=>queue(hosts.get(entry.host),entry.payload)).then(r=>{
+   if(r.status===200){if(!hex(r.body.token)||typeof r.body.device!=='string')return {status:502,body:{error:'PC 연결 응답을 확인하지 못했습니다.'}};return{status:200,body:{...r.body,token:'v1.'+entry.host+'.'+r.body.token}};}return r;
+  }).catch(e=>({status:e.status||503,body:{error:e.status?e.message:'PC 연결을 확인하세요.'}}));
+  const result=await entry.result;
+  // Pending and transient failures must reach the PC again after a decision.
+  if(result.status===202||result.status>=500)entry.result=null;
+  return result;
+ }
  function sweep(){const now=clock();for(const [k,v]of codes)if(v.expires<=now)codes.delete(k);for(const [k,v]of claims)if(v.expires<=now)claims.delete(k);for(const [k,v]of limits)if(v.until<=now)limits.delete(k);for(const[k,v]of failures)if(v.until<=now)failures.delete(k);for(const[k,v]of nonces)if(v<=now)nonces.delete(k);for(const[k,h]of hosts)if(now-h.seen>180000&&!h.poll){hosts.delete(k);for(const r of requests.values())if(r.host===k)done(r,{status:503,body:{error:'PC 연결이 끊어졌습니다.'}});}}
  const server=http.createServer(async(req,res)=>{
   try{
@@ -30,7 +39,7 @@ export async function createRelay({port=0,host='127.0.0.1',clock=Date.now,codeTt
    // Trust the platform client-IP header only on the Render-hosted entry point.
    const forwarded=String(req.headers['x-forwarded-for']||'').split(',')[0].trim();
    const ip=renderProxy&&isIP(forwarded)?forwarded:req.socket.remoteAddress;limit(ip+':http',1800);
-   let bytes=0,chunks=[];const max=req.url==='/host/reply'?16000000:req.url==='/v1'?11000000:16000;
+   let bytes=0,chunks=[];const max=req.url==='/host/reply'?32000000:req.url==='/v1'?32000000:16000;
    for await(const c of req){if((bytes+=c.length)>max)fail(413,'전송 크기 한도를 넘었습니다.');chunks.push(c);}
    let b;try{b=JSON.parse(Buffer.concat(chunks));}catch{fail(400,'요청 형식을 확인하세요.');}if(!b||typeof b!=='object'||Array.isArray(b))fail(400,'요청 형식을 확인하세요.');
    if(req.url==='/host/register'){
@@ -56,7 +65,8 @@ export async function createRelay({port=0,host='127.0.0.1',clock=Date.now,codeTt
    if(req.url!=='/v1')fail(404,'지원하지 않는 요청입니다.');
    if(b.op==='pair-code'){
     limit(ip+':pair',60,600000);if(!/^\d{6}$/.test(b.code)||!hex(b.pairKey)||typeof b.requestId!=='string'||!/^[a-f0-9-]{36}$/.test(b.requestId))fail(400,'6자리 코드를 확인하세요.');
-    const claimKey=hash(b.requestId+'|'+b.pairKey),existing=claims.get(claimKey);if(existing){const result=await existing.result;send(res,result.status,result.body);return;}
+    if(typeof b.publicKey!=='string'||b.publicKey.length>180||typeof b.deviceName!=='string'||b.deviceName.length>100)fail(400,'앱을 업데이트한 뒤 다시 연결하세요.');
+    const claimKey=hash(b.requestId+'|'+b.pairKey),existing=claims.get(claimKey);if(existing){if(existing.expires<=clock()||existing.code!==hash(b.code)||existing.payload.deviceName!==b.deviceName||existing.payload.publicKey!==b.publicKey)fail(403,'연결 요청이 만료됐거나 변경되었습니다.');const result=await claimResult(existing);send(res,result.status,result.body);return;}
     const failKey=ip+':pair-fail';let f=failures.get(failKey);if(f&&f.until<=clock()){failures.delete(failKey);f=null;}
     if(f?.n>=5){const seconds=Math.ceil((f.until-clock())/1000);send(res,429,{error:'코드를 5회 잘못 입력했습니다. 잠시 뒤 다시 시도하세요.',retryAfter:seconds});return;}
     limit('code:'+hash(b.code),8,600000);const c=codes.get(hash(b.code));if(!c||c.expires<=clock()){
@@ -65,9 +75,8 @@ export async function createRelay({port=0,host='127.0.0.1',clock=Date.now,codeTt
      send(res,403,{error:'연결 코드가 만료됐거나 일치하지 않습니다. PC에서 확인하세요.',remaining:5-f.n});return;
     }
     failures.delete(failKey);
-    codes.delete(hash(b.code));const entry={expires:clock()+600000};claims.set(claimKey,entry);
-    entry.result=Promise.resolve().then(()=>queue(hosts.get(c.host),{kind:'pair',grant:c.grant,requestId:b.requestId,pairKey:b.pairKey})).then(r=>{if(r.status===200){if(!hex(r.body.token)||typeof r.body.device!=='string')return {status:502,body:{error:'PC 연결 응답을 확인하지 못했습니다.'}};return{status:200,body:{...r.body,token:'v1.'+c.host+'.'+r.body.token}};}return r;}).catch(e=>({status:e.status||503,body:{error:e.status?e.message:'PC 연결을 확인하세요.'}}));
-    const result=await entry.result;send(res,result.status,result.body);return;
+    codes.delete(hash(b.code));const entry={expires:clock()+600000,host:c.host,code:hash(b.code),payload:{kind:'pair',grant:c.grant,requestId:b.requestId,pairKey:b.pairKey,deviceName:b.deviceName,publicKey:b.publicKey}};claims.set(claimKey,entry);
+    const result=await claimResult(entry);send(res,result.status,result.body);return;
    }
    const match=/^Bearer v1\.([a-f0-9]{64})\.([a-f0-9]{64})$/.exec(req.headers.authorization||'');if(!match)fail(401,'기기를 다시 연결하세요.');if(!mobileAllowed(b))fail(403,'현재 PC에서 확인하세요.');
    limit(match[1]+':mobile',800);const result=await queue(hosts.get(match[1]),{kind:'call',token:match[2],body:b});send(res,result.status,result.body);

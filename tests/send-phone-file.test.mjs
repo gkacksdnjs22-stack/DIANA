@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, open, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
-import { sendPhoneFile } from '../scripts/send-phone-file.mjs';
+import {sendPhoneFile as secureSend} from '../scripts/send-phone-file.mjs';
+const sendPhoneFile=(file,opts)=>secureSend(file,{...opts,cipher:{async encrypt(b){return b;}}});
 import { isUploadId, MAX_UPLOAD_BYTES } from '../lib/upload-contract.mjs';
 
 const testsRoot = path.resolve(import.meta.dirname);

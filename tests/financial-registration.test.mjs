@@ -1,3 +1,5 @@
+import {approvedRequest as approveRequest} from './helpers/phone-pair.mjs';
+const approvedRequest=(request,options)=>approveRequest(request,options,tokens.agentToken);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
@@ -21,7 +23,7 @@ async function fixture(t){
  const core={schema_version:1,principal:'test-analyst',role:'analyst',readRoots:[input],outputRoot:output,python,write_roles:['analyst'],approval_ttl_ms:300000,documents:[['REVIEW_A','review.md'],['DD_A','due-diligence.txt'],['PE-02','guideline.json']].map(([id,relativePath])=>({id,relativePath,rootIndex:0,version:'1',classification:'synthetic',read_roles:['analyst']}))};
  const task={id:randomUUID(),label:'기존 보완',actions:['patch','checklist_review','convert'],formats:['md','txt','json'],target_doc:'REVIEW_A',source_ids:['DD_A'],guideline_id:'PE-02',item_ids:['KEY_MAN']};
  const config={schema_version:1,coreConfig:corePath,stateDir:state,tasks:[task]};await writeFile(corePath,JSON.stringify(core));await writeFile(configPath,JSON.stringify(config));
- const wire=[],events=[];const server=createControlServer({...tokens,deviceId:'registration-test',dbPath:path.join(root,'relay.sqlite'),transferDir:path.join(root,'relay')});server.listen(0,'127.0.0.1');await once(server,'listening');const base='http://127.0.0.1:'+server.address().port;
+ const wire=[],events=[];const server=createControlServer({allowLegacyPlaintextTransfers:true,...tokens,deviceId:'registration-test',dbPath:path.join(root,'relay.sqlite'),transferDir:path.join(root,'relay')});server.listen(0,'127.0.0.1');await once(server,'listening');const base='http://127.0.0.1:'+server.address().port;
  async function req(route,{token=tokens.userToken,body}={}){const response=await fetch(base+route,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+token,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});const data=await response.json();wire.push({route,body,data});return{status:response.status,data};}
  const api=async(route,body)=>{const r=await req(route,{token:tokens.agentToken,body});if(r.status>=400)throw Object.assign(Error('CONTROL_REJECTED'),{status:r.status});return r.data;};
  let worker=await FinancialWorker.create({configPath,api,documentRoot:generic,detailOutput:false,onEvent:event=>{events.push(event);viewer?.accept(event);}}),viewer;
@@ -29,7 +31,7 @@ async function fixture(t){
  viewer=await createReviewViewer({onCommand:(action,id)=>worker.localCommand(action,id),onRecheck:id=>worker.reviewSaved(id),onReadCatalog:()=>registry.view(),onRegister:(type,body)=>registry.register(type,body)});
  const viewURL=new URL(viewer.url),session=new URLSearchParams(viewURL.hash.slice(1)).get('view');
  async function local(route,body,headers={}){const response=await fetch(viewURL.origin+route,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+session,...(body?{Origin:viewURL.origin,'Content-Type':'application/json'}:{}),...headers},body:body?JSON.stringify(body):undefined});return{status:response.status,text:await response.text()};}
- const code=(await req('/api/phone/pair-code',{body:{}})).data.code,phone=(await req('/api/phone/pair',{token:'',body:{code,deviceName:'Registration QA phone'}})).data.phoneToken;
+ const code=(await req('/api/phone/pair-code',{body:{}})).data.code,phone=(await approvedRequest(req,{token:'',body:{code,deviceName:'Registration QA phone'}})).data.phoneToken;
  t.after(async()=>{await worker.close();await viewer.close();server.closeAllConnections();await new Promise(r=>server.close(r));assert.equal(path.dirname(root),parent);assert.match(path.basename(root),/^financial-registration-test-/u);await rm(root,{recursive:true,force:true});});
  const upload=async values=>registry.register('document',{requestId:randomUUID(),revision:registry.revision,id:'PRIVATE_REVIEW_B',version:'1',kind:'target',classification:'internal',name:'private-review.md',content:'# '+marker+'\n\n원문입니다.',...values});
  return{root,input,output,generic,state,core,corePath,config,configPath,task,wire,events,req,local,upload,session,viewURL,phone,get worker(){return worker;},get registry(){return registry;},

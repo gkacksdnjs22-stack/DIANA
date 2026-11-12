@@ -1,3 +1,4 @@
+import {approvedPhone} from './helpers/phone-pair.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter, once } from 'node:events';
@@ -265,7 +266,7 @@ test('HTTP 503 after a checked-out connection event is followed by automatic rec
   const pool = new FakeSupabasePool();
   const db = await createPersistentState({pool, retryDelays: []});
   const tokens = {userToken:'u'.repeat(40),agentToken:'a'.repeat(40),gatewayToken:'g'.repeat(40)};
-  const server = createControlServer({...tokens,db});
+  const server = createControlServer({allowLegacyPlaintextTransfers:true,...tokens,db});
   server.listen(0,'127.0.0.1');
   await once(server,'listening');
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -308,7 +309,7 @@ test('phone pairing and a verified document remain usable after server restart',
   const tokens = {userToken:'u'.repeat(40),agentToken:'a'.repeat(40),gatewayToken:'g'.repeat(40)};
   async function start() {
     const db = await createPersistentState({pool});
-    const server = createControlServer({...tokens,db,transfers});
+    const server = createControlServer({allowLegacyPlaintextTransfers:true,...tokens,db,transfers});
     server.listen(0,'127.0.0.1');
     await once(server,'listening');
     const base = `http://127.0.0.1:${server.address().port}`;
@@ -338,9 +339,9 @@ test('phone pairing and a verified document remain usable after server restart',
     assert.equal((await app.request(`/api/agent/jobs/${jobId}/file`,{method:'POST',token:tokens.agentToken,bytes:source,headers:{'x-source-file-id':digest,'x-file-sha256':digest,'x-file-name':'report.txt'}})).status,200);
     assert.equal((await app.request(`/api/agent/jobs/${jobId}/result`,{method:'POST',token:tokens.agentToken,body:{status:'download_ready'}})).status,200);
     const code = (await (await app.request('/api/phone/pair-code',{method:'POST'})).json()).code;
-    const paired = await app.request('/api/phone/pair',{method:'POST',token:'',body:{code,deviceName:'Galaxy'}});
+    const paired = await approvedPhone(async(route,options)=>{const r=await app.request(route,options);return{status:r.status,data:await r.json()};},{code,deviceName:'Galaxy'},tokens.agentToken);
     assert.equal(paired.status,201);
-    const {phoneToken} = await paired.json();
+    const {phoneToken} = paired.data;
 
     await app.close();
     app = await start();
