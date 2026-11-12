@@ -17,11 +17,16 @@ export async function publishCiphertext(file,wire,{openFile=open}={}){
 }
 
 export function fileCipher({stateDir,request,keys=keyStore(path.join(stateDir,'e2ee'))}){
+  async function currentRecipients(){
+    const active=new Set((await request('/api/agent/phone-devices')).devices.map(d=>d.id));
+    const saved=await keys.all(),recipients=Object.entries(saved).filter(([id])=>id.startsWith('device:')&&active.has(id.slice(7))).map(([,v])=>v.key);
+    if(!recipients.length)throw Error('암호화 연결된 휴대폰이 없습니다. PC에서 새 연결을 승인하세요.');
+    return recipients;
+  }
   return {
+    async recipientIds(){return (await currentRecipients()).map(key=>keyId(Buffer.from(key,'hex'))).sort();},
     async encrypt(bytes,{id,filename},{unaccepted=false}={}){
-      const active=new Set((await request('/api/agent/phone-devices')).devices.map(d=>d.id));
-      const saved=await keys.all(),recipients=Object.entries(saved).filter(([id])=>id.startsWith('device:')&&active.has(id.slice(7))).map(([,v])=>v.key);
-      if(!recipients.length)throw Error('암호화 연결된 휴대폰이 없습니다. PC에서 새 연결을 승인하세요.');
+      const recipients=await currentRecipients();
       const meta={id,filename,direction:'pc-phone',sha256:digest(bytes),bytes:bytes.length};
       const stem=path.join(stateDir,'e2ee-spool',digest(Buffer.from(JSON.stringify(meta))));
       // Only a caller that confirmed server non-acceptance may select a new recipient generation.
