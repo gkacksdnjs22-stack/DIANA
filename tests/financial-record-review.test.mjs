@@ -60,9 +60,9 @@ test('same execution ID is idempotent for double click and retry after service r
  const history=await f.records.handle({action:'review-history',recordId:record.id});assert.equal(history.executions.length,1);assert.equal(f.apiCalls.length,0);assert.deepEqual(await readdir(f.output),[]);
 });
 
-test('selected document mutation after confirmation is a failed CONTENT_CHANGED, not empty success',async t=>{
+test('selected document mutation after confirmation is a failed RECORD_REVIEW_CHANGED, not empty success',async t=>{
  const f=await fixture(t),record=await f.saveRecord(),preview=await f.reviewPreview(record),filename=path.join(f.input,'due-diligence.txt');await writeFile(filename,(await readFile(filename,'utf8'))+'\n가상 변경 내용');
- const result=await f.start(preview);assert.equal(result.execution.state,'failed');assert.equal(result.execution.diagnostic.code,'CONTENT_CHANGED');assert.ok(!result.execution.review);assert.equal(result.execution.saved,false);assert.equal((await f.start(preview)).duplicate,true);assert.deepEqual(await readdir(f.output),[]);
+ const result=await f.start(preview);assert.equal(result.execution.state,'failed');assert.equal(result.execution.diagnostic.code,'RECORD_REVIEW_CHANGED');assert.ok(!result.execution.review);assert.equal(result.execution.saved,false);assert.equal((await f.start(preview)).duplicate,true);assert.deepEqual(await readdir(f.output),[]);
 });
 
 test('unknown/denied IDs, incomplete selections, paths and non-review actions are rejected',async t=>{
