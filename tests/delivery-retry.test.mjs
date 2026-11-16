@@ -36,13 +36,14 @@ async function fixture(t,{supabase=false}={}){
  await start();t.after(async()=>{await close();await rm(directory,{recursive:true,force:true});});
  const stateDir=path.join(directory,'ledger'),agentDir=path.join(directory,'agent');
  let saved={};
- const replacePhone=()=>{const key=randomBytes(32).toString('hex');db.prepare('DELETE FROM phone_devices').run();db.prepare('INSERT INTO phone_devices(id,token_hash,name,created_at) VALUES(?,?,?,?)').run('phone-'+key.slice(0,8),hash(PHONE),'Fixture',new Date().toISOString());saved={['device:phone-'+key.slice(0,8)]:{key}};return key;};
+ const addPhone=()=>{const key=randomBytes(32).toString('hex');db.prepare('INSERT INTO phone_devices(id,token_hash,name,created_at) VALUES(?,?,?,?)').run('phone-'+key.slice(0,8),hash(PHONE+Object.keys(saved).length),'Fixture',new Date().toISOString());saved['device:phone-'+key.slice(0,8)]={key};return key;};
+ const replacePhone=()=>{db.prepare('DELETE FROM phone_devices').run();saved={};return addPhone();};
  const firstKey=replacePhone(),plain=Buffer.from('synthetic reconnect retry document'),filename=path.join(directory,'fixture.txt');await writeFile(filename,plain);
  const cipher=()=>fileCipher({stateDir:agentDir,keys:{async all(){return saved;}},request:async()=>{const r=await fetch(base+'/api/phone/devices',{headers:{Authorization:'Bearer '+OWNER}});assert.equal(r.status,200);return r.json();}});
  const options=()=>({env:{API_BASE_URL:base,USER_TOKEN:OWNER},stateDir,cipher:cipher()});
  const ledger=async()=>JSON.parse(await readFile(path.join(stateDir,(await readdir(stateDir)).find(n=>n.endsWith('.json'))),'utf8'));
  const status=(id,token=OWNER)=>fetch(base+'/api/deliveries/'+id,{headers:{Authorization:'Bearer '+token}});
- return{directory,get db(){return db;},files,get base(){return base;},plain,filename,firstKey,replacePhone,options,ledger,status,agentDir,transfers,
+ return{directory,get db(){return db;},files,get base(){return base;},plain,filename,firstKey,replacePhone,addPhone,options,ledger,status,agentDir,transfers,
    loseStorageAck(){failWriteAck=true;},failStorageRead(){failRead=true;},async restart(){const port=server.address().port;await close();db=new DatabaseSync(path.join(directory,'test.sqlite'));server=createControlServer({userToken:OWNER,agentToken:AGENT,gatewayToken:GATEWAY,db,transfers});server.prependListener('request',(_req,res)=>res.setHeader('Connection','close'));server.listen(port,'127.0.0.1');await once(server,'listening');}};
 }
 
@@ -187,4 +188,21 @@ test('a first POST response must identify the exact ciphertext retained by this 
  }}),/암호문/);
  assert.equal((await f.ledger()).id,id);
  assert.equal((await sendPhoneFile(f.filename,f.options())).id,id);
+});
+
+test('a damaged second recipient key in the retry cache is rejected before upload',async t=>{
+ const f=await fixture(t),second=f.addPhone();
+ await assert.rejects(()=>sendPhoneFile(f.filename,{...f.options(),fetchImpl:async(url,init)=>{
+   if(init.method==='POST')throw Error('stopped before upload');return fetch(url,init);
+ }}),/stopped before upload/);
+ const pending=await f.ledger(),directory=path.join(f.agentDir,'e2ee-spool'),cache=path.join(directory,(await readdir(directory))[0]);
+ const wire=await readFile(cache),envelope=inspectEnvelope(wire),wrapped=Buffer.from(envelope.recipients[1].key,'base64');wrapped[0]^=1;envelope.recipients[1].key=wrapped.toString('base64');
+ const damaged=Buffer.from('DIANA-E2EE-1\n'+JSON.stringify(envelope)),meta={id:pending.id,filename:'fixture.txt',direction:'pc-phone'};
+ assert.deepEqual(openEnvelope(damaged,[f.firstKey],meta),f.plain);assert.throws(()=>openEnvelope(damaged,[second],meta));
+ await writeFile(cache,damaged);let posts=0;
+ await assert.rejects(()=>sendPhoneFile(f.filename,{...f.options(),fetchImpl:async(url,init)=>{if(init.method==='POST')posts++;return fetch(url,init);}}));
+ assert.equal(posts,0);assert.equal(f.files.size,0);assert.equal((await f.ledger()).id,pending.id);
+ await writeFile(cache,wire);
+ const result=await sendPhoneFile(f.filename,f.options());assert.equal(result.id,pending.id);
+ for(const key of [f.firstKey,second])assert.deepEqual(openEnvelope(f.files.get(result.id+'.bin'),[key],meta),f.plain);
 });

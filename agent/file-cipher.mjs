@@ -4,6 +4,12 @@ import {randomUUID} from 'node:crypto';
 import {digest,keyId,seal,openEnvelope,inspectEnvelope} from '../lib/e2ee.mjs';
 import {keyStore} from './secure-keys.mjs';
 
+// openEnvelope selects one matching key for receivers. A sender holds every
+// recipient key and must authenticate each wrapped file key before using a cache.
+function verifyAllRecipients(wire,recipients,meta){
+  for(const key of recipients)openEnvelope(wire,[key],meta);
+}
+
 // A hard link publishes a closed, synced file without replacing another writer's winner.
 export async function publishCiphertext(file,wire,{openFile=open}={}){
   const temporary=file+'.'+randomUUID()+'.tmp';let handle;
@@ -37,7 +43,7 @@ export function fileCipher({stateDir,request,keys=keyStore(path.join(stateDir,'e
         if(digest(wire)!==receipt.sha256)continue;
         const envelope=inspectEnvelope(wire);
         if(JSON.stringify(envelope.recipients.map(r=>r.kid).sort())!==JSON.stringify(recipientIds))continue;
-        openEnvelope(wire,recipients,meta);return;
+        verifyAllRecipients(wire,recipients,meta);return;
       }
       throw Error('저장된 암호문이 PC 전송 기록과 일치하지 않습니다.');
     },
@@ -49,20 +55,20 @@ export function fileCipher({stateDir,request,keys=keyStore(path.join(stateDir,'e
       // Separate immutable files avoid overwriting a cached payload in use by another sender.
       const recipientIds=recipients.map(key=>keyId(Buffer.from(key,'hex'))).sort();
       const file=stem+(unaccepted?'.'+digest(Buffer.from(JSON.stringify(recipientIds))):'')+'.complete';
-      try{const old=await readFile(file);openEnvelope(old,recipients,meta);return old;}catch(e){if(e.code!=='ENOENT')throw e;}
+      try{const old=await readFile(file);verifyAllRecipients(old,recipients,meta);return old;}catch(e){if(e.code!=='ENOENT')throw e;}
       let wire;
       if(unaccepted){
         try{const old=await readFile(stem+'.complete'),envelope=inspectEnvelope(old);
-          if(JSON.stringify(envelope.recipients.map(r=>r.kid).sort())===JSON.stringify(recipientIds)){openEnvelope(old,recipients,meta);wire=old;}
+          if(JSON.stringify(envelope.recipients.map(r=>r.kid).sort())===JSON.stringify(recipientIds)){verifyAllRecipients(old,recipients,meta);wire=old;}
         }catch(e){if(e.code!=='ENOENT')throw e;}
       }
       try{const old=await readFile(stem+'.bin');
         // Earlier versions could leave a partial file at the published filename.
         let complete=false;try{inspectEnvelope(old);complete=true;}catch{}
-        if(complete&&(!unaccepted||JSON.stringify(inspectEnvelope(old).recipients.map(r=>r.kid).sort())===JSON.stringify(recipientIds))){openEnvelope(old,recipients,meta);wire??=old;}
+        if(complete&&(!unaccepted||JSON.stringify(inspectEnvelope(old).recipients.map(r=>r.kid).sort())===JSON.stringify(recipientIds))){verifyAllRecipients(old,recipients,meta);wire??=old;}
       }catch(e){if(e.code!=='ENOENT')throw e;}
       wire??=seal(bytes,recipients,meta);await mkdir(path.dirname(file),{recursive:true});
-      const published=await publishCiphertext(file,wire);openEnvelope(published,recipients,meta);return published;
+      const published=await publishCiphertext(file,wire);verifyAllRecipients(published,recipients,meta);return published;
     },
     async decrypt(wire,expected){const saved=await keys.all();return openEnvelope(wire,Object.entries(saved).filter(([id])=>id.startsWith('device:')).map(([,v])=>v.key),{...expected,direction:'phone-pc'});}
   };

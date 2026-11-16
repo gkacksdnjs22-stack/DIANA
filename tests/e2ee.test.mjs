@@ -45,6 +45,17 @@ test('receipt verification cannot replace a missing cache or trust a matching ha
  assert.deepEqual(await readFile(file),damaged);
 });
 
+test('receipt authentication checks every recipient even when the first key can decrypt',async t=>{
+ const stateDir=await mkdtemp(path.join(os.tmpdir(),'diana-all-recipients-'));t.after(()=>rm(stateDir,{recursive:true,force:true}));
+ const first=randomBytes(32).toString('hex'),second=randomBytes(32).toString('hex'),plain=Buffer.from('all recipients fixture'),meta={id:randomUUID(),filename:'fixture.txt'};
+ const cipher=fileCipher({stateDir,request:async()=>({devices:[{id:'first'},{id:'second'}]}),keys:{async all(){return{'device:first':{key:first},'device:second':{key:second}};}}});
+ const wire=await cipher.encrypt(plain,meta,{unaccepted:true}),envelope=inspectEnvelope(wire),wrapped=Buffer.from(envelope.recipients[1].key,'base64');wrapped[0]^=1;envelope.recipients[1].key=wrapped.toString('base64');
+ const damaged=Buffer.from('DIANA-E2EE-1\n'+JSON.stringify(envelope)),directory=path.join(stateDir,'e2ee-spool');
+ await writeFile(path.join(directory,(await readdir(directory))[0]),damaged);
+ assert.deepEqual(openEnvelope(damaged,[first],{...meta,direction:'pc-phone'}),plain);
+ await assert.rejects(()=>cipher.verifyReceipt(plain,meta,{sha256:digest(damaged),recipientKeyIds:envelope.recipients.map(r=>r.kid)}));
+});
+
 test('a partial legacy cache and abandoned temporary write cannot poison retries',async t=>{
  const stateDir=await mkdtemp(path.join(os.tmpdir(),'diana-partial-cache-'));t.after(()=>rm(stateDir,{recursive:true,force:true}));
  const key=randomBytes(32).toString('hex'),bytes=Buffer.from('interrupted cache fixture'),meta={id:randomUUID(),filename:'fixture.txt'};

@@ -1,7 +1,8 @@
 import {fileCipher} from '../agent/file-cipher.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdir, open, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, writeFile, unlink } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { randomUUID, createHash } from 'node:crypto';
 import { isUploadId, MAX_UPLOAD_BYTES, validateUploadMetadata } from '../lib/upload-contract.mjs';
 
@@ -13,6 +14,29 @@ function replacementId(id,recipientIds){
   const bytes=createHash('sha256').update(JSON.stringify(['DIANA delivery replacement v1',id,recipientIds])).digest().subarray(0,16);
   bytes[6]=(bytes[6]&15)|128;bytes[8]=(bytes[8]&63)|128;
   const hex=bytes.toString('hex');return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
+
+export async function persistDeliveryRecord(ledger,next,{renameFile=rename,now=Date.now}={}){
+  const temporary=path.join(path.dirname(ledger),randomUUID()+'.tmp');
+  await writeFile(temporary,JSON.stringify(next),{mode:0o600,flag:'wx'});
+  try{
+    try{await renameFile(temporary,ledger);return next;}
+    catch(error){
+      if(!['EPERM','EBUSY'].includes(error.code))throw error;
+      // Windows can deny replacement while another process publishes/reads the
+      // same ledger. Adopt only a fresh matching ID; never overwrite a rival ID.
+      for(let attempt=0;attempt<5;attempt++){
+        if(attempt)await delay(20*attempt);
+        try{
+          const winner=JSON.parse(await readFile(ledger,'utf8')),age=now()-Date.parse(winner?.createdAt);
+          if(winner?.id===next.id&&isUploadId(winner.id)&&Number.isFinite(age)&&age>=0&&age<24*3600_000)return winner;
+        }catch(readError){
+          if(!(readError instanceof SyntaxError)&&!['ENOENT','EPERM','EBUSY','EACCES'].includes(readError.code))throw readError;
+        }
+      }
+      throw error;
+    }
+  }finally{await unlink(temporary).catch(error=>{if(error.code!=='ENOENT')throw error;});}
 }
 
 /** Explicit owner-selected files only. Accepted incompatible recipients get a stable replacement ID. */
@@ -52,10 +76,7 @@ export async function sendPhoneFile(filename, { env = process.env, fetchImpl = f
   catch (error) { if (error.code !== 'ENOENT') throw new Error('전송 대기 기록을 읽지 못했습니다.'); }
   if (saved && (!isUploadId(saved.id) || !Number.isFinite(Date.parse(saved.createdAt)))) throw new Error('전송 대기 기록을 확인하세요.');
   async function persist(next){
-    const temporary = path.join(stateDir, randomUUID() + '.tmp');
-    await writeFile(temporary, JSON.stringify(next), { mode: 0o600, flag: 'wx' });
-    await rename(temporary, ledger);
-    saved=next;
+    saved=await persistDeliveryRecord(ledger,next,{now});
   }
   if (!saved || now() - Date.parse(saved.createdAt) >= 24 * 3600_000) await persist({id:randomUUID(),createdAt:new Date(now()).toISOString()});
   const receipt=result=>{
