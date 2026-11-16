@@ -20,13 +20,29 @@ test('a failed cache write publishes nothing and the next process can retry',asy
  assert.deepEqual(await readdir(dir),[]);assert.deepEqual(await publishCiphertext(target,wire),wire);assert.deepEqual(await readFile(target),wire);
 });
 
-test('a complete old cache retains its exact ciphertext when migrated',async t=>{
+for(const suffix of ['.bin','.complete'])test('a complete old '+suffix+' cache verifies receipts without re-encryption and retains its bytes when migrated',async t=>{
  const stateDir=await mkdtemp(path.join(os.tmpdir(),'diana-old-cache-'));t.after(()=>rm(stateDir,{recursive:true,force:true}));
  const key=randomBytes(32).toString('hex'),bytes=Buffer.from('old immutable ciphertext'),meta={id:randomUUID(),filename:'fixture.txt'};
  const bound={...meta,direction:'pc-phone',sha256:digest(bytes),bytes:bytes.length},wire=seal(bytes,[key],bound),directory=path.join(stateDir,'e2ee-spool');await mkdir(directory);
- await writeFile(path.join(directory,digest(Buffer.from(JSON.stringify(bound)))+'.bin'),wire);
+ await writeFile(path.join(directory,digest(Buffer.from(JSON.stringify(bound)))+suffix),wire);
  const options={stateDir,request:async()=>({devices:[{id:'phone'}]}),keys:{async all(){return{'device:phone':{key}};}}};
+ await fileCipher(options).verifyReceipt(bytes,meta,{sha256:digest(wire),recipientKeyIds:inspectEnvelope(wire).recipients.map(r=>r.kid)});
+ assert.equal((await readdir(directory)).length,1);
  assert.deepEqual(await fileCipher(options).encrypt(bytes,meta),wire);assert.deepEqual(await fileCipher(options).encrypt(bytes,meta),wire);
+});
+
+test('receipt verification cannot replace a missing cache or trust a matching hash with a bad GCM tag',async t=>{
+ const stateDir=await mkdtemp(path.join(os.tmpdir(),'diana-receipt-cache-'));t.after(()=>rm(stateDir,{recursive:true,force:true}));
+ const key=randomBytes(32).toString('hex'),plain=Buffer.from('receipt verification fixture'),meta={id:randomUUID(),filename:'fixture.txt'};
+ const cipher=fileCipher({stateDir,request:async()=>({devices:[{id:'phone'}]}),keys:{async all(){return{'device:phone':{key}};}}});
+ const wire=seal(plain,[key],{...meta,direction:'pc-phone'}),recipientKeyIds=inspectEnvelope(wire).recipients.map(r=>r.kid);
+ await assert.rejects(()=>cipher.verifyReceipt(plain,meta,{sha256:digest(wire),recipientKeyIds}),/암호문/);
+ assert.deepEqual(await readdir(stateDir),[]);
+ const cached=await cipher.encrypt(plain,meta,{unaccepted:true}),directory=path.join(stateDir,'e2ee-spool'),file=path.join(directory,(await readdir(directory))[0]);
+ const envelope=inspectEnvelope(cached),data=Buffer.from(envelope.data,'base64');data[0]^=1;envelope.data=data.toString('base64');
+ const damaged=Buffer.from('DIANA-E2EE-1\n'+JSON.stringify(envelope));await writeFile(file,damaged);
+ await assert.rejects(()=>cipher.verifyReceipt(plain,meta,{sha256:digest(damaged),recipientKeyIds}));
+ assert.deepEqual(await readFile(file),damaged);
 });
 
 test('a partial legacy cache and abandoned temporary write cannot poison retries',async t=>{

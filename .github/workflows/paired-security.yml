@@ -8,6 +8,7 @@ on:
       - 'android-app/**'
       - 'tests/**'
       - 'scripts/check-paired-product.mjs'
+      - 'scripts/send-phone-file.mjs'
       - '.github/workflows/paired-security.yml'
   workflow_dispatch:
 permissions:

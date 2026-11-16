@@ -25,6 +25,22 @@ export function fileCipher({stateDir,request,keys=keyStore(path.join(stateDir,'e
   }
   return {
     async recipientIds(){return (await currentRecipients()).map(key=>keyId(Buffer.from(key,'hex'))).sort();},
+    async verifyReceipt(bytes,{id,filename},receipt){
+      const recipients=await currentRecipients(),recipientIds=recipients.map(key=>keyId(Buffer.from(key,'hex'))).sort();
+      const meta={id,filename,direction:'pc-phone',sha256:digest(bytes),bytes:bytes.length};
+      const stem=path.join(stateDir,'e2ee-spool',digest(Buffer.from(JSON.stringify(meta))));
+      if(JSON.stringify(recipientIds)!==JSON.stringify([...receipt.recipientKeyIds].sort()))throw Error('암호문 수신 기기가 변경됐습니다. 다시 확인하세요.');
+      // Acceptance is proved against an existing, authenticated local payload.
+      // Never generate a replacement merely to validate an accepted transfer.
+      for(const file of [stem+'.'+digest(Buffer.from(JSON.stringify(recipientIds)))+'.complete',stem+'.complete',stem+'.bin']){
+        let wire;try{wire=await readFile(file);}catch(e){if(e.code==='ENOENT')continue;throw e;}
+        if(digest(wire)!==receipt.sha256)continue;
+        const envelope=inspectEnvelope(wire);
+        if(JSON.stringify(envelope.recipients.map(r=>r.kid).sort())!==JSON.stringify(recipientIds))continue;
+        openEnvelope(wire,recipients,meta);return;
+      }
+      throw Error('저장된 암호문이 PC 전송 기록과 일치하지 않습니다.');
+    },
     async encrypt(bytes,{id,filename},{unaccepted=false}={}){
       const recipients=await currentRecipients();
       const meta={id,filename,direction:'pc-phone',sha256:digest(bytes),bytes:bytes.length};

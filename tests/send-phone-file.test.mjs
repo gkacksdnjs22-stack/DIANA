@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, open, readFile, readdir, realpath, rm, stat, writeFile 
 import {sendPhoneFile as secureSend} from '../scripts/send-phone-file.mjs';
 // These legacy file/ledger fixtures model an unaccepted delivery; real acceptance is covered in delivery-retry.test.mjs.
 const fixtureKid='1'.repeat(64);
-const sendPhoneFile=(file,opts)=>secureSend(file,{...opts,fetchImpl:(url,init)=>init.method==='GET'?Promise.resolve(json({job:null,storageChecked:true})):opts.fetchImpl(url,init),cipher:{async encrypt(b){return b;},async recipientIds(){return[fixtureKid];}}});
+const sendPhoneFile=(file,opts)=>secureSend(file,{...opts,fetchImpl:(url,init)=>init.method==='GET'?Promise.resolve(json({job:null,storageChecked:true})):opts.fetchImpl(url,init),cipher:{async encrypt(b){return b;},async recipientIds(){return[fixtureKid];},async verifyReceipt(b,_meta,receipt){assert.equal(hash(b),receipt.sha256);}}});
 import { isUploadId, MAX_UPLOAD_BYTES } from '../lib/upload-contract.mjs';
 
 const testsRoot = path.resolve(import.meta.dirname);

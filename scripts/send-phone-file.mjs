@@ -78,7 +78,10 @@ export async function sendPhoneFile(filename, { env = process.env, fetchImpl = f
     const current=await cipher.recipientIds();
     if(!Array.isArray(current)||current.length<1||current.length>32||current.some(id=>! /^[a-f0-9]{64}$/.test(id))||new Set(current).size!==current.length)throw Error('현재 수신 기기를 확인하지 못했습니다.');
     current.sort();
-    if(JSON.stringify([...info.recipientKeyIds].sort())===JSON.stringify(current))return accepted;
+    if(JSON.stringify([...info.recipientKeyIds].sort())===JSON.stringify(current)){
+      await cipher.verifyReceipt(bytes,{id:saved.id,filename:metadata.filename},info);
+      return accepted;
+    }
     // The existing ID is positively accepted for another key set. Keep it intact,
     // persist a stable replacement BEFORE upload, and reconcile it on the next loop.
     await persist({id:replacementId(saved.id,current),createdAt:new Date(now()).toISOString()});

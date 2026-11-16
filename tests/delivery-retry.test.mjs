@@ -62,7 +62,7 @@ test('a lost acceptance response is reconciled for the same recipients without r
  await assert.rejects(()=>sendPhoneFile(f.filename,{...f.options(),fetchImpl:async(url,init)=>{const r=await fetch(url,init);if(init.method==='POST'){posts++;assert.equal(r.status,201);await r.json();throw Error('lost accepted response');}return r;}}),/lost accepted/);
  const pending=await f.ledger(),before=Buffer.from(f.files.get(pending.id+'.bin'));
  const current=f.options().cipher;
- const result=await sendPhoneFile(f.filename,{...f.options(),cipher:{recipientIds:()=>current.recipientIds(),encrypt(){assert.fail('accepted transfer must not re-encrypt');}},fetchImpl:async(url,init)=>{if(init.method==='POST')posts++;return fetch(url,init);}});
+ const result=await sendPhoneFile(f.filename,{...f.options(),cipher:{recipientIds:()=>current.recipientIds(),verifyReceipt:(...args)=>current.verifyReceipt(...args),encrypt(){assert.fail('accepted transfer must not re-encrypt');}},fetchImpl:async(url,init)=>{if(init.method==='POST')posts++;return fetch(url,init);}});
  assert.equal(result.id,pending.id);assert.equal(result.duplicate,true);assert.equal(posts,1);assert.deepEqual(f.files.get(result.id+'.bin'),before);
  for(const token of ['',PHONE,AGENT,GATEWAY])assert.equal((await f.status(result.id,token)).status,401);
 });
@@ -162,4 +162,29 @@ test('concurrent retries converge on one replacement when the old recipient uplo
  const [a,b]=await Promise.all([first,second]);assert.equal(a.id,b.id);assert.notEqual(a.id,original.id);assert.equal(f.files.size,2);
  assert.deepEqual(openEnvelope(f.files.get(a.id+'.bin'),[key],{id:a.id,filename:'fixture.txt',direction:'pc-phone'}),f.plain);
  assert.equal((await f.ledger()).id,a.id);
+});
+
+for(const orphan of [false,true])test(`a changed ciphertext byte cannot produce a successful ${orphan?'recovered orphan':'duplicate'} receipt`,async t=>{
+ const f=await fixture(t,{supabase:true});
+ const sent=await sendPhoneFile(f.filename,f.options()),stored=sent.id+'.bin',original=Buffer.from(f.files.get(stored));
+ const envelope=inspectEnvelope(original),data=Buffer.from(envelope.data,'base64');data[0]^=1;envelope.data=data.toString('base64');
+ const damaged=Buffer.concat([Buffer.from('DIANA-E2EE-1\n'),Buffer.from(JSON.stringify(envelope))]);
+ f.files.set(stored,damaged);
+ assert.throws(()=>openEnvelope(damaged,[f.firstKey],{id:sent.id,filename:'fixture.txt',direction:'pc-phone'}));
+ if(orphan)f.db.prepare('DELETE FROM jobs WHERE id=?').run(sent.id);
+ let posts=0;
+ await assert.rejects(()=>sendPhoneFile(f.filename,{...f.options(),fetchImpl:async(url,init)=>{if(init.method==='POST')posts++;return fetch(url,init);}}),/암호문/);
+ assert.equal(posts,0);assert.equal((await f.ledger()).id,sent.id);assert.deepEqual(f.files.get(stored),damaged);
+ f.files.set(stored,original);
+ const recovered=await sendPhoneFile(f.filename,f.options());assert.equal(recovered.id,sent.id);assert.equal(recovered.duplicate,true);
+});
+
+test('a first POST response must identify the exact ciphertext retained by this PC',async t=>{
+ const f=await fixture(t);let id;
+ await assert.rejects(()=>sendPhoneFile(f.filename,{...f.options(),fetchImpl:async(url,init)=>{
+   const response=await fetch(url,init);if(init.method!=='POST')return response;
+   const data=await response.json();id=data.job.id;data.ciphertext.sha256='0'.repeat(64);return Response.json(data);
+ }}),/암호문/);
+ assert.equal((await f.ledger()).id,id);
+ assert.equal((await sendPhoneFile(f.filename,f.options())).id,id);
 });
