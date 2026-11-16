@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { request as httpRequest } from 'node:http';
 import { randomUUID,createHash } from 'node:crypto';
 import { mkdir,mkdtemp,rm,writeFile } from 'node:fs/promises';
 import { resolve,join } from 'node:path';
@@ -23,6 +24,28 @@ async function fixture(t){
 }
 function newJob(extra={}){return {requestId:randomUUID(),query:'가람상사 최종본',recipient:'review@example.com',...extra};}
 
+async function deferredWake(t,f,id){
+  const marker=randomUUID();let ready,request;
+  const started=new Promise(resolve=>{ready=resolve;});
+  const listener=req=>{
+    if(req.headers['x-test-deferred']!==marker)return;
+    f.server.removeListener('request',listener);
+    req.once('readable',()=>setImmediate(ready));
+  };
+  f.server.on('request',listener);
+  const result=new Promise((resolve,reject)=>{
+    request=httpRequest(f.base+'/api/gateway/wake/'+id,{method:'POST',headers:{Authorization:'Bearer '+GATEWAY,'Content-Type':'application/json','X-Test-Deferred':marker}},res=>{
+      const chunks=[];res.on('data',chunk=>chunks.push(chunk));
+      res.on('end',()=>{try{resolve({status:res.statusCode,data:JSON.parse(Buffer.concat(chunks))});}catch(e){reject(e);}});
+    });
+    request.on('error',reject);request.write('{');
+  });
+  result.catch(()=>{});
+  t.after(()=>{f.server.removeListener('request',listener);request.destroy();});
+  await started;
+  return {finish:status=>{request.end(JSON.stringify({status}).slice(1));return result;}};
+}
+
 test('role tokens are separate; cross-origin requests cannot operate a PC',async t=>{
   const f=await fixture(t);
   assert.equal((await f.request('/api/jobs',{token:AGENT})).status,401);
@@ -42,6 +65,31 @@ test('wake gateway sees only device/job identifiers and signal acknowledgement n
   const wake=await f.request('/api/gateway/wake',{token:GATEWAY});assert.deepEqual(Object.keys(wake.data.job).sort(),['deviceId','id']);
   await f.request(`/api/gateway/wake/${body.requestId}`,{method:'POST',token:GATEWAY,body:{status:'signaled'}});
   assert.equal((await f.request('/api/jobs')).data.jobs[0].state,'waiting_pc');
+});
+for(const state of ['searching','failed'])test('delayed wake acknowledgement preserves '+state+' and current agent events',{timeout:10000},async t=>{
+  const f=await fixture(t),body=newJob();
+  await f.request('/api/jobs',{method:'POST',body});
+  const pending=await deferredWake(t,f,body.requestId);
+  await f.request('/api/agent/next',{token:AGENT});
+  if(state==='failed')await f.request('/api/agent/jobs/'+body.requestId+'/candidates',{method:'POST',token:AGENT,body:{mode:'lexical',candidates:[]}});
+  const before=(await f.request('/api/jobs')).data.jobs[0];
+  assert.equal(before.state,state);
+  assert.equal((await pending.finish('signaled')).status,200);
+  const after=(await f.request('/api/jobs')).data.jobs[0];
+  assert.equal(after.state,state);assert.equal(after.wakeStatus,'signaled');
+  assert.deepEqual(after.events.slice(0,-1),before.events);
+  assert.equal(after.mode,before.mode);assert.deepEqual(after.candidates,before.candidates);
+  if(state==='failed')assert.equal((await f.request('/api/agent/next',{token:AGENT})).data.job,null);
+});
+test('delayed duplicate wake acknowledgement keeps the first recorded result',{timeout:10000},async t=>{
+  const f=await fixture(t),body=newJob();
+  await f.request('/api/jobs',{method:'POST',body});
+  const pending=await deferredWake(t,f,body.requestId);
+  assert.equal((await f.request('/api/gateway/wake/'+body.requestId,{method:'POST',token:GATEWAY,body:{status:'signaled'}})).status,200);
+  const before=(await f.request('/api/jobs')).data.jobs[0];
+  const duplicate=await pending.finish('failed');
+  assert.equal(duplicate.status,200);assert.equal(duplicate.data.duplicate,true);
+  assert.deepEqual((await f.request('/api/jobs')).data.jobs[0],before);
 });
 test('lost PC claim response can be recovered without changing the job ID',async t=>{
   const f=await fixture(t);const body=newJob();await f.request('/api/jobs',{method:'POST',body});
