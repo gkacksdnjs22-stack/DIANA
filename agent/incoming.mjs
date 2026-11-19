@@ -1,3 +1,5 @@
+const MAX_WIRE=15*1024*1024;
+import {fileCipher} from './file-cipher.mjs';
 import path from 'node:path';
 import { constants } from 'node:fs';
 import { lstat, link, mkdir, open, realpath, unlink } from 'node:fs/promises';
@@ -117,7 +119,7 @@ async function publishFile(target, metadata, buffer, signal) {
 }
 
 /** Receive only authenticated file bytes into a fixed child of DOCUMENT_ROOT. */
-export async function receiveIncomingOnce({ config, fetchImpl = fetch, signal } = {}) {
+export async function receiveIncomingOnce({ config, fetchImpl = fetch, signal, decryptFile } = {}) {
   const { response, requestSignal } = await request(config, '/api/agent/uploads/next', { fetchImpl, signal });
   // The PC can be upgraded before the server without interrupting existing jobs.
   if (response.status === 404) { await response.body?.cancel().catch(() => {}); return { idle: true, unsupported: true }; }
@@ -127,6 +129,7 @@ export async function receiveIncomingOnce({ config, fetchImpl = fetch, signal } 
   const upload = next.upload;
   if (!isUploadId(upload.id) || upload.deviceId !== config.deviceId) throw new Error('이 PC의 휴대폰 수신 요청이 아닙니다.');
   const metadata = validateUploadMetadata(upload);
+  decryptFile??=(bytes,meta)=>fileCipher({stateDir:config.stateDir||path.resolve(import.meta.dirname,'../.local')}).decrypt(bytes,meta);
   const prefix = `/api/agent/uploads/${upload.id}`;
   let target;
   try {
@@ -144,8 +147,9 @@ export async function receiveIncomingOnce({ config, fetchImpl = fetch, signal } 
         throw error;
       }
       let buffer;
-      try { buffer = await boundedBody(download.response, MAX_UPLOAD_BYTES, download.requestSignal); }
+      try { buffer = await boundedBody(download.response, MAX_WIRE, download.requestSignal); }
       catch (error) { if (download.requestSignal.aborted || error.name === 'TypeError') error.retryIncoming = true; throw error; }
+      buffer=await decryptFile(buffer,{id:upload.id,filename:metadata.filename,sha256:metadata.sha256,bytes:metadata.bytes});
       if (buffer.length !== metadata.bytes || sha256(buffer) !== metadata.sha256) throw safeFailure();
       await publishFile(target, metadata, buffer, signal);
     }

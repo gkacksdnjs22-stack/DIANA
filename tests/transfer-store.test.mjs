@@ -148,7 +148,7 @@ test('the first control API upload reaches Storage upload after a new-format mis
     { method: 'POST', name, status: 200, json: { Key: `diana-transfers/${name}`, Id: randomUUID() } },
     { method: 'GET', name, bytes: CONTENT },
   ]);
-  server = createControlServer({ ...TOKENS, transfers: store });
+  server = createControlServer({allowLegacyPlaintextTransfers:true, ...TOKENS, transfers: store });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const base = `http://127.0.0.1:${server.address().port}`;

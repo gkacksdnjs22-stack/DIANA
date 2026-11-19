@@ -1,3 +1,5 @@
+import {approvedRequest as approveRequest} from './helpers/phone-pair.mjs';
+const approvedRequest=(request,options)=>approveRequest(request,options,AGENT);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
@@ -21,7 +23,7 @@ function memoryStore() {
 async function fixture(t, options = {}) {
   let time = Date.parse('2026-10-23T05:00:00Z');
   const transfers = options.transfers || memoryStore();
-  const server = createControlServer({ userToken:OWNER, agentToken:AGENT, gatewayToken:GATEWAY, transfers, now:() => time, ...options });
+  const server = createControlServer({allowLegacyPlaintextTransfers:true, userToken:OWNER, agentToken:AGENT, gatewayToken:GATEWAY, transfers, now:() => time, ...options });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -35,7 +37,7 @@ async function fixture(t, options = {}) {
   };
   const pair = async () => {
     const code = (await request('/api/phone/pair-code', { method:'POST' })).data.code;
-    const paired = await request('/api/phone/pair', { method:'POST', token:'', body:{ code, deviceName:'갤럭시 전달 테스트' } });
+    const paired = await approvedRequest(request, { method:'POST', token:'', body:{ code, deviceName:'갤럭시 전달 테스트' } });
     assert.equal(paired.status, 201); return paired.data.phoneToken;
   };
   return { base, transfers, deliver, request, pair, now:() => time, advance:ms => { time += ms; } };

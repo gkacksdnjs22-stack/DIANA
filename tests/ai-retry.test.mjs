@@ -4,7 +4,8 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { requestStructuredResponse } from '../agent/ai-provider.mjs';
-import { runOvernight } from '../agent/overnight.mjs';
+import {runOvernight as realRunOvernight} from '../agent/overnight.mjs';
+const runOvernight=(job,options)=>realRunOvernight(job,{...options,encryptFile:async b=>b});
 import { scanDocuments } from '../agent/documents.mjs';
 
 const SECRET = 'mock-groq-private-key-do-not-print';

@@ -120,7 +120,7 @@ final class UploadSender {
         File[] files = directory(context).listFiles(); if (files == null) return;
         for (File file : files) {
             String name = file.getName();
-            if (name.matches("[a-f0-9-]{36}\\.(bin|part)") && file.isFile() && !file.delete())
+            if (name.matches("[a-f0-9-]{36}\\.(bin|part|e2ee|e2ee.bak|e2ee.new)") && file.isFile() && !file.delete())
                 throw new UploadException("앱의 전송 임시 파일을 정리하지 못했습니다. 잠시 후 다시 시도해 주세요.");
         }
     }
@@ -181,14 +181,22 @@ final class UploadSender {
                 try (InputStream input = new FileInputStream(source)) { verified = copyAndHash(input, null); }
                 if (verified.bytes != pending.bytes || !verified.sha256.equals(pending.sha256))
                     throw new UploadException("전송 준비 파일의 무결성을 확인하지 못했습니다. 대기를 취소하고 다시 선택해 주세요.");
+                if(!session.has("fileKey"))throw new UploadException("암호화 연결이 필요합니다. 기기를 다시 연결하세요.");
+                AtomicFile encrypted=new AtomicFile(new File(directory(context),pending.id+".e2ee"));byte[] wire;
+                try(InputStream input=encrypted.openRead()){wire=E2ee.read(input);}
+                catch(FileNotFoundException missing){
+                    byte[] plain;try(InputStream input=new FileInputStream(source)){plain=E2ee.read(input);}
+                    if(plain.length!=pending.bytes||!E2ee.hash(plain).equals(pending.sha256))throw new IOException();
+                    wire=E2ee.seal(plain,session.getString("fileKey"),pending.id,pending.filename,"phone-pc");
+                    FileOutputStream out=null;try{out=encrypted.startWrite();out.write(wire);encrypted.finishWrite(out);out=null;}finally{if(out!=null)encrypted.failWrite(out);}
+                }
+                byte[] checked=E2ee.open(wire,session.getString("fileKey"),pending.id,pending.filename,"phone-pc");
+                if(checked.length!=pending.bytes||!E2ee.hash(checked).equals(pending.sha256))throw new IOException();
                 connection = Api.connect(session.getString("baseUrl"), "/api/uploads/" + pending.id, session.getString("phoneToken"), "POST");
                 connection.setDoOutput(true); connection.setRequestProperty("Content-Type", "application/octet-stream");
                 connection.setRequestProperty("X-File-Name", encodedFilename(pending.filename));
-                connection.setRequestProperty("X-File-SHA256", pending.sha256); connection.setFixedLengthStreamingMode(pending.bytes);
-                try (InputStream input = new FileInputStream(source); OutputStream output = connection.getOutputStream()) {
-                    Copied sent = copyAndHash(input, output);
-                    if (sent.bytes != pending.bytes || !sent.sha256.equals(pending.sha256)) throw new IOException();
-                }
+                connection.setRequestProperty("X-File-SHA256", pending.sha256); connection.setFixedLengthStreamingMode(wire.length);
+                try(OutputStream output=connection.getOutputStream()){output.write(wire);}
                 int status = connection.getResponseCode();
                 if (status != 200 && status != 201) {
                     if (status == 401 || status == 403) throw new Api.ApiException(status);
@@ -206,7 +214,7 @@ final class UploadSender {
                     !pending.filename.equals(request.getString("filename")) || !pending.sha256.equals(request.getString("sha256")) ||
                     pending.bytes != request.getLong("bytes")) throw new IOException();
                 metadata(context).delete();
-                source.delete(); // An orphan is also removed before preparing the next file.
+                encrypted.delete();source.delete(); // An orphan is also removed before preparing the next file.
                 return job;
             } catch (Exception error) {
                 if (error instanceof UploadException || error instanceof Api.ApiException) throw error;

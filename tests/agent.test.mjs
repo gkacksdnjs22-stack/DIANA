@@ -6,7 +6,10 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { createRequire } from 'node:module';
 import { scanDocuments, resolveSafeDocument, validateAttachment, sha256, MAX_DOCUMENT_BYTES, MAX_TEXT_CHARS } from '../agent/documents.mjs';
 import { searchDocuments } from '../agent/search.mjs';
-import { readAgentConfig, runOnce, runAgent } from '../agent/run.mjs';
+import {readAgentConfig,runOnce as realRunOnce,runAgent as realRunAgent} from '../agent/run.mjs';
+const identityCipher={async encrypt(b){return b;},async decrypt(b){return b;}};
+const runOnce=opts=>realRunOnce({...opts,cipher:identityCipher});
+const runAgent=opts=>realRunAgent({...opts,cipher:identityCipher});
 
 const root = path.resolve(import.meta.dirname, '..');
 

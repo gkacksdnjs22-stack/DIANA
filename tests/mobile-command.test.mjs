@@ -1,3 +1,5 @@
+import {approvedRequest as approveRequest} from './helpers/phone-pair.mjs';
+const approvedRequest=(request,options)=>approveRequest(request,options,tokens.agentToken);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
@@ -5,7 +7,9 @@ import { randomUUID, createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { createControlServer } from '../lib/control.mjs';
-import { runOnce } from '../agent/run.mjs';
+import {runOnce as secureRunOnce} from '../agent/run.mjs';
+const testCipher={async encrypt(b){return b;},async decrypt(b){return b;}};
+const runOnce=opts=>secureRunOnce({...opts,cipher:testCipher});
 
 const tokens = { userToken: 'u'.repeat(40), agentToken: 'a'.repeat(40), gatewayToken: 'g'.repeat(40) };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -16,7 +20,7 @@ async function fixture(t) {
   const dir = await mkdtemp(join(parent, 'test-mobile-command-'));
   const documents = join(dir, 'documents');
   await mkdir(documents);
-  const server = createControlServer({ ...tokens, transferDir: join(dir, 'relay') });
+  const server = createControlServer({allowLegacyPlaintextTransfers:true, ...tokens, transferDir: join(dir, 'relay') });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -35,7 +39,7 @@ async function fixture(t) {
     return { status: response.status, data: await response.json() };
   }
   const code = (await request('/api/phone/pair-code', { method: 'POST' })).data.code;
-  const pair = await request('/api/phone/pair', { method: 'POST', token: '', body: { code, deviceName: 'Command test phone' } });
+  const pair = await approvedRequest(request, { method: 'POST', token: '', body: { code, deviceName: 'Command test phone' } });
   assert.equal(pair.status, 201);
   return {
     base, dir, documents, request,

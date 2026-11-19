@@ -11,6 +11,9 @@ import {desktopVersion,desktopVersionInfo} from '../financial-desktop/version.mj
 import {nativeVersionSource,renderDesktopReadme} from './desktop-version-generation.mjs';
 import {checkDesktopSources,checkDesktopBundle} from './check-desktop-version.mjs';
 export const desktopSources = Object.freeze([
+  'lib/pair-approval.mjs',
+  'lib/e2ee.mjs',
+  'agent/secure-keys.mjs',
   'personal-ai/documents/parser.mjs',
   'personal-ai/documents/worker.mjs',
   'financial-desktop/paired-storage.mjs',

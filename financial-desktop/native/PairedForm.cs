@@ -97,7 +97,7 @@ namespace Diana.Desktop {
   public PairedForm(string directory,string test){root=directory;fixture=test;Text=BuildVersion.MainTitle;try{Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);}catch{}Width=1100;Height=780;MinimumSize=new Size(640,500);
    Font=new Font("맑은 고딕",10);BackColor=Canvas;ForeColor=Ink;StartPosition=FormStartPosition.CenterScreen;
    body=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoScroll=true,FlowDirection=FlowDirection.TopDown,WrapContents=false,Padding=new Padding(22)};Controls.Add(body);CreateRail();body.ClientSizeChanged+=delegate{FitPage();};
-   timer.Tick+=async delegate{if(!busy&&!polling&&screen=="work"){polling=true;try{await RefreshWork();}catch(Exception e){if(note!=null)note.Text=e.Message;}finally{polling=false;}}};
+   timer.Tick+=async delegate{if(!busy&&!polling&&token!=null&&(screen=="work"||screen=="settings"||screen=="archive"||screen=="review")){polling=true;try{await ConfirmPairing();if(screen=="work")await RefreshWork();}catch(Exception e){if(note!=null)note.Text=e.Message;}finally{polling=false;}}};
    Shown+=async delegate{await Perform(StartWithRecovery);};FormClosing+=delegate{closing=true;timer.Stop();StopHost();};}
   static Dictionary<string,object> D(params object[] args){var d=new Dictionary<string,object>();for(int i=0;i<args.Length;i+=2)d[(string)args[i]]=args[i+1];return d;}
   static string S(Dictionary<string,object> d,string k){return d.ContainsKey(k)&&d[k]!=null?d[k].ToString():"";}
@@ -160,6 +160,24 @@ namespace Diana.Desktop {
    ButtonAt(bar,"파일 첨부",async delegate{using(var f=new OpenFileDialog{Filter="모든 파일 (*.*)|*.*|문서 (*.txt;*.md;*.json;*.pptx;*.docx)|*.txt;*.md;*.json;*.pptx;*.docx",FilterIndex=1,CheckFileExists=true,RestoreDirectory=true}){if(f.ShowDialog()!=DialogResult.OK)return;if(new FileInfo(f.FileName).Length>8000000)throw new IOException("첨부 한도를 넘었습니다.");var b=File.ReadAllBytes(f.FileName);using(var sha=SHA256.Create())await Job("action","desk-upload","name",Path.GetFileName(f.FileName),"base64",Convert.ToBase64String(b),"sha256",BitConverter.ToString(sha.ComputeHash(b)).Replace("-","").ToLowerInvariant());}});
    items=new FlowLayoutPanel{AutoSize=true,FlowDirection=FlowDirection.TopDown,WrapContents=false};items.Margin=Padding.Empty;body.Controls.Add(items);FitPage();timer.Start();}
   async Task RefreshWork(){var v=await Api(D("op","state"));RenderWork(v);}
+  async Task ConfirmPairing(){
+   var result=await Api(D("op","pair-pending"));
+   foreach(var entry in Rows(result,"pending")){
+    if(closing)return;
+    DateTime expires;if(!DateTime.TryParse(S(entry,"expiresAt"),null,System.Globalization.DateTimeStyles.RoundtripKind,out expires)||expires.ToUniversalTime()<=DateTime.UtcNow)continue;
+    bool approved=false;
+    using(var dialog=new Form{Text="새 휴대폰 연결 승인",Width=460,Height=240,StartPosition=FormStartPosition.CenterParent,FormBorderStyle=FormBorderStyle.FixedDialog,MinimizeBox=false,MaximizeBox=false})
+    using(var deadline=new Timer{Interval=500}){
+     var text=new Label{Text="새 기기 ‘"+S(entry,"deviceName")+"’가 연결을 요청했습니다.\n\n방금 직접 연결한 휴대폰인지 확인하세요.\n기기 이름은 요청자가 보낸 정보입니다.",Dock=DockStyle.Fill,Padding=new Padding(20),UseMnemonic=false};
+     var buttons=new FlowLayoutPanel{Dock=DockStyle.Bottom,Height=54,FlowDirection=FlowDirection.RightToLeft};
+     var reject=new Button{Text="거절",DialogResult=DialogResult.Cancel,Width=90};var accept=new Button{Text="승인",DialogResult=DialogResult.OK,Width=90};
+     buttons.Controls.Add(reject);buttons.Controls.Add(accept);dialog.Controls.Add(text);dialog.Controls.Add(buttons);dialog.CancelButton=reject;dialog.AcceptButton=reject;
+     deadline.Tick+=delegate{if(closing||DateTime.UtcNow>=expires.ToUniversalTime()){dialog.DialogResult=DialogResult.Cancel;dialog.Close();}};deadline.Start();
+     approved=dialog.ShowDialog(this)==DialogResult.OK&&DateTime.UtcNow<expires.ToUniversalTime();
+    }
+    if(!closing)await Api(D("op","pair-approve","id",S(entry,"id"),"approve",approved));
+   }
+  }
   async Task ShowPdfPreview(string id,string nonce){
    var first=await Api(D("op","phone-preview","id",id,"page",1));
    int pages;

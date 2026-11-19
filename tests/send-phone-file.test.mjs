@@ -1,10 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash,randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, open, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
-import { sendPhoneFile } from '../scripts/send-phone-file.mjs';
+import {sendPhoneFile as secureSend,persistDeliveryRecord} from '../scripts/send-phone-file.mjs';
+// These legacy file/ledger fixtures model an unaccepted delivery; real acceptance is covered in delivery-retry.test.mjs.
+const fixtureKid='1'.repeat(64);
+const sendPhoneFile=(file,opts)=>secureSend(file,{...opts,fetchImpl:(url,init)=>init.method==='GET'?Promise.resolve(json({job:null,storageChecked:true})):opts.fetchImpl(url,init),cipher:{async encrypt(b){return b;},async recipientIds(){return[fixtureKid];},async verifyReceipt(b,_meta,receipt){assert.equal(hash(b),receipt.sha256);}}});
 import { isUploadId, MAX_UPLOAD_BYTES } from '../lib/upload-contract.mjs';
+import {setTimeout as delay} from 'node:timers/promises';
 
 const testsRoot = path.resolve(import.meta.dirname);
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -30,7 +34,7 @@ async function fixture(t) {
 
 function accepted(url, options, overrides = {}) {
   const id = new URL(url).pathname.split('/').at(-1);
-  return { job: { id, kind: 'delivery', state: 'download_ready', artifact: {
+  return {ciphertext:{sha256:hash(options.body),recipientKeyIds:[fixtureKid]}, job: { id, kind: 'delivery', state: 'download_ready', artifact: {
     filename: decodeURIComponent(options.headers['X-File-Name']), sha256: options.headers['X-File-SHA256'], bytes: options.body.length,
   }, ...overrides } };
 }
@@ -40,6 +44,35 @@ async function ledgerEntries(stateDir) {
   assert(names.every(name => name.endsWith('.json')), 'Successful ledger writes leave no temporary files.');
   return Promise.all(names.map(async name => ({ name, value: JSON.parse(await readFile(path.join(stateDir, name), 'utf8')) })));
 }
+
+for(const code of ['EPERM','EBUSY'])test('ledger '+code+' adopts a concurrent matching ID and cleans its temporary file',async t=>{
+ const {stateDir}=await fixture(t);await mkdir(stateDir);const ledger=path.join(stateDir,'record.json'),time=Date.now();
+ const next={id:randomUUID(),createdAt:new Date(time).toISOString()},winner={...next,createdAt:new Date(time-10).toISOString()};
+ let calls=0;
+ const result=await persistDeliveryRecord(ledger,next,{now:()=>time,renameFile:async()=>{calls++;await writeFile(ledger,JSON.stringify(winner));throw Object.assign(Error('synthetic sharing violation'),{code});}});
+ assert.deepEqual(result,winner);assert.equal(calls,1);assert.deepEqual(JSON.parse(await readFile(ledger,'utf8')),winner);assert.deepEqual(await readdir(stateDir),['record.json']);
+});
+
+test('ledger sharing failure waits for a matching writer without replacing the earlier ID',async t=>{
+ const {stateDir}=await fixture(t);await mkdir(stateDir);const ledger=path.join(stateDir,'record.json'),time=Date.now();
+ const next={id:randomUUID(),createdAt:new Date(time).toISOString()},previous={...next,id:randomUUID()};await writeFile(ledger,JSON.stringify(previous));
+ let published;
+ const result=await persistDeliveryRecord(ledger,next,{now:()=>time,renameFile:async()=>{
+   published=delay(35).then(()=>writeFile(ledger,JSON.stringify(next)));throw Object.assign(Error('synthetic sharing violation'),{code:'EPERM'});
+ }});
+ await published;assert.deepEqual(result,next);assert.deepEqual(JSON.parse(await readFile(ledger,'utf8')),next);assert.deepEqual(await readdir(stateDir),['record.json']);
+});
+
+for(const scenario of ['different ID','expired','malformed','missing','non-sharing error'])test('ledger replacement does not hide '+scenario,async t=>{
+ const {stateDir}=await fixture(t);await mkdir(stateDir);const ledger=path.join(stateDir,'record.json'),time=Date.now(),next={id:randomUUID(),createdAt:new Date(time).toISOString()};
+ const winner=scenario==='different ID'?{...next,id:randomUUID()}:scenario==='expired'?{...next,createdAt:new Date(time-24*3600_000).toISOString()}:next;
+ const stored=scenario==='malformed'?'broken json':JSON.stringify(winner);
+ if(scenario!=='missing')await writeFile(ledger,stored);
+ const error=Object.assign(Error('synthetic replacement failure'),{code:scenario==='non-sharing error'?'ENOSPC':'EPERM'});
+ await assert.rejects(()=>persistDeliveryRecord(ledger,next,{now:()=>time,renameFile:async()=>{throw error;}}),e=>e===error);
+ assert.deepEqual(await readdir(stateDir),scenario==='missing'?[]:['record.json']);
+ if(scenario!=='missing')assert.equal(await readFile(ledger,'utf8'),stored);
+});
 
 test('explicit phone delivery sends exact bytes and authenticated metadata without changing the local file', async t => {
   const { filename, stateDir } = await fixture(t);

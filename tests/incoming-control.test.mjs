@@ -1,3 +1,5 @@
+import {approvedRequest as approveRequest} from './helpers/phone-pair.mjs';
+const approvedRequest=(request,options)=>approveRequest(request,options,AGENT);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
@@ -21,7 +23,7 @@ function memoryStore() {
 async function fixture(t, options = {}) {
   const transfers = options.transfers || memoryStore();
   let time = Date.parse('2026-10-23T04:00:00Z');
-  const server = createControlServer({ userToken:USER, agentToken:AGENT, gatewayToken:GATEWAY, transfers, now:() => time, ...options });
+  const server = createControlServer({allowLegacyPlaintextTransfers:true, userToken:USER, agentToken:AGENT, gatewayToken:GATEWAY, transfers, now:() => time, ...options });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const base = `http://127.0.0.1:${server.address().port}`;
   t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
@@ -68,7 +70,7 @@ test('owner upload is inert, exact binary is relayed, and only verified PC recei
 test('paired phone may upload but revoked credentials and unrelated role tokens cannot', async t => {
   const f = await fixture(t);
   const code = (await f.request('/api/phone/pair-code', { method:'POST' })).data.code;
-  const pairing = await f.request('/api/phone/pair', { method:'POST', token:'', body:{ code, deviceName:'업로드 테스트폰' } });
+  const pairing = await approvedRequest(f.request, { method:'POST', token:'', body:{ code, deviceName:'업로드 테스트폰' } });
   assert.equal(pairing.status, 201); const token = pairing.data.phoneToken;
   assert.equal((await f.upload({ token })).status, 201);
   const devices = (await f.request('/api/phone/devices')).data.devices;
